@@ -418,6 +418,46 @@ git add crates/duet-core/src/path.rs
 git commit -m "feat(core): parse and display paths"
 ```
 
+- [ ] **Step 6: Make the parser strict (amendment, added during execution)**
+
+Edge-case probing during review found the parser above too lenient in two ways that
+matter, because `Path::parse` runs on paths arriving from Flutter and JavaScript guests over
+IPC — a trust boundary. A lenient parser turns a client typo into a valid-but-wrong path
+whose subscription silently never fires.
+
+- `parse("foo]")` returned `Ok(Key("foo]"))` — the key scanner never stopped at `]`.
+- `parse("foo[3]extra")` returned `Ok`, but `Display` rendered it `foo[3].extra`, breaking
+  the parse↔display round-trip invariant.
+
+Add a variant to `PathParseError`:
+
+```rust
+    /// A character appeared where the grammar does not allow it, such as a
+    /// stray `]` or text immediately following a closing bracket.
+    UnexpectedChar { at: usize, ch: char },
+```
+
+Two rules: the key scanner must also stop at `]` and report `UnexpectedChar`; and after a
+closing `]` the only legal next characters are `.`, `[`, or end-of-input.
+
+Use `s[at..].chars().next()` to obtain the `char`, so multi-byte characters are reported
+whole rather than as a partial UTF-8 byte.
+
+Tests to add: `rejects_stray_closing_bracket`, `rejects_text_immediately_after_index`,
+`allows_legal_characters_after_index`, `reports_multibyte_char_after_index_correctly`.
+
+Behaviour that must NOT regress: `"foo[]"` → `InvalidIndex("")`; `"a..b"` →
+`EmptySegment(2)`; `"[0]"` → `Ok` (leading index stays legal); `"foo["` →
+`UnclosedIndex(3)`; `"foo[-1]"` → `InvalidIndex("-1")`; `"café.zoom"` → `Ok`; `"a[0][1].b"`
+→ `Ok` and round-trips.
+
+Task 3 therefore ends at **14 tests**, not 10. Every later task's cumulative count shifts by
++4.
+
+```bash
+git commit -m "fix(core): reject stray brackets and text after an index"
+```
+
 ---
 
 ## Task 4: Prefix matching
@@ -502,7 +542,7 @@ Add to the `impl Path` block:
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p duet-core`
-Expected: PASS — 16 passed.
+Expected: PASS — 20 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -664,7 +704,7 @@ pub use value::Value;
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p duet-core`
-Expected: PASS — 22 passed.
+Expected: PASS — 26 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -826,7 +866,7 @@ pub use value::{SetError, Value};
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p duet-core`
-Expected: PASS — 29 passed.
+Expected: PASS — 33 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1006,7 +1046,7 @@ warns, leave it; the next task resolves it.
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p duet-core`
-Expected: PASS — 34 passed.
+Expected: PASS — 38 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1187,7 +1227,7 @@ pub use store::{Notification, Patch, Store, SubscriberId, SubscriptionId};
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p duet-core`
-Expected: PASS — 41 passed.
+Expected: PASS — 45 passed.
 
 - [ ] **Step 5: Verify there are no warnings**
 
@@ -1431,7 +1471,7 @@ pub use value::{SetError, Value};
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p duet-core`
-Expected: PASS — 51 passed.
+Expected: PASS — 55 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1690,7 +1730,7 @@ pub use value::{SetError, Value};
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p duet-core`
-Expected: PASS — 60 passed.
+Expected: PASS — 64 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1818,7 +1858,7 @@ pub use value::{SetError, Value};
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p duet-core`
-Expected: PASS — 60 unit tests and 2 integration tests.
+Expected: PASS — 64 unit tests and 2 integration tests.
 
 - [ ] **Step 5: Commit**
 
@@ -1900,7 +1940,7 @@ git commit -m "ci: add duet-core test and coverage gate"
 
 ## Done criteria
 
-- [ ] `cargo test -p duet-core` passes — 60 unit, 2 integration
+- [ ] `cargo test -p duet-core` passes — 64 unit, 2 integration
 - [ ] `cargo llvm-cov -p duet-core --fail-under-lines 90` exits 0
 - [ ] `cargo clippy -p duet-core --all-targets -- -D warnings` is clean
 - [ ] `crates/duet-core/Cargo.toml` still has an empty `[dependencies]`
