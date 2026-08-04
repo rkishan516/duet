@@ -26,9 +26,11 @@
 #![forbid(unsafe_code)]
 
 pub mod action;
+pub mod event;
 pub mod id;
 
 pub use action::SurfaceAction;
+pub use event::HostEvent;
 pub use id::{SurfaceId, SurfaceIdAllocator};
 
 /// These bounds are load-bearing: a host will tick the supervisor from its
@@ -39,4 +41,5 @@ const _: () = {
     assert_send_sync::<SurfaceId>();
     assert_send_sync::<SurfaceAction>();
     assert_send_sync::<SurfaceIdAllocator>();
+    assert_send_sync::<HostEvent>();
 };
