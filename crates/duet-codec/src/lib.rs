@@ -28,6 +28,7 @@
 mod base64;
 pub mod error;
 mod value;
+mod wire;
 
 pub use error::CodecError;
 
@@ -45,4 +46,34 @@ pub fn encode_value(value: &duet_core::Value) -> serde_json::Value {
 /// sends.
 pub fn decode_value(json: &serde_json::Value) -> Result<duet_core::Value, CodecError> {
     value::decode_value(json)
+}
+
+/// Encodes a [`duet_core::Patch`].
+pub fn encode_patch(patch: &duet_core::Patch) -> serde_json::Value {
+    wire::encode_patch(patch)
+}
+
+/// Decodes a [`duet_core::Patch`].
+///
+/// # Errors
+///
+/// A [`CodecError`] describing the first structural problem found.
+pub fn decode_patch(json: &serde_json::Value) -> Result<duet_core::Patch, CodecError> {
+    wire::decode_patch(json)
+}
+
+/// Encodes a [`duet_core::Notification`].
+pub fn encode_notification(note: &duet_core::Notification) -> serde_json::Value {
+    wire::encode_notification(note)
+}
+
+/// Decodes a [`duet_core::Notification`].
+///
+/// # Errors
+///
+/// A [`CodecError`] describing the first structural problem found.
+pub fn decode_notification(
+    json: &serde_json::Value,
+) -> Result<duet_core::Notification, CodecError> {
+    wire::decode_notification(json)
 }
