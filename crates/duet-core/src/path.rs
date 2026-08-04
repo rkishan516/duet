@@ -21,16 +21,16 @@ impl Path {
     ///
     /// This performs no validation: [`Display`](std::fmt::Display) renders
     /// each `Segment::Key` verbatim, so the result round-trips through
-    /// [`Path::parse`] only if every key avoids `.`, `[`, and `]`. Paths
-    /// built by `parse` always satisfy this; hand-built paths must ensure it
-    /// themselves. Debug builds assert it.
+    /// [`Path::parse`] only if every key is non-empty and avoids `.`, `[`,
+    /// and `]`. Paths built by `parse` always satisfy this; hand-built paths
+    /// must ensure it themselves. Debug builds assert it.
     pub fn from_segments(segments: Vec<Segment>) -> Self {
         debug_assert!(
             segments.iter().all(|segment| match segment {
-                Segment::Key(k) => !k.contains(['.', '[', ']']),
+                Segment::Key(k) => !k.is_empty() && !k.contains(['.', '[', ']']),
                 Segment::Index(_) => true,
             }),
-            "Segment::Key must not contain '.', '[', or ']', or Display will not round-trip through parse"
+            "Segment::Key must be non-empty and must not contain '.', '[', or ']', or Display will not round-trip through parse"
         );
         Path(segments)
     }
@@ -67,7 +67,7 @@ impl Path {
     ///
     /// Returns [`PathParseError`] when `s` does not match the grammar above:
     /// - [`PathParseError::EmptySegment`] — a `.` was at the start of the
-    ///   string, or one `.` immediately followed another `.` or a `[`.
+    ///   string, or one `.` immediately followed another `.`.
     /// - [`PathParseError::TrailingDot`] — the string ended immediately
     ///   after a `.`.
     /// - [`PathParseError::UnclosedIndex`] — a `[` had no matching `]`.
@@ -126,6 +126,9 @@ impl Path {
 /// Returns the segment and the byte offset just past the closing `]`, after
 /// checking that whatever follows the bracket is legal.
 fn scan_index(s: &str, at: usize) -> Result<(Segment, usize), PathParseError> {
+    debug_assert!(s.is_char_boundary(at));
+    debug_assert_eq!(s.as_bytes().get(at), Some(&b'['));
+
     let bytes = s.as_bytes();
     let start = at + 1;
     let end = s[start..]
@@ -162,6 +165,9 @@ fn scan_index(s: &str, at: usize) -> Result<(Segment, usize), PathParseError> {
 /// characters other than `.`, `[`, or `]`. Returns the segment and the byte
 /// offset just past the last character consumed.
 fn scan_key(s: &str, at: usize) -> Result<(Segment, usize), PathParseError> {
+    debug_assert!(s.is_char_boundary(at));
+    debug_assert_ne!(s.as_bytes().get(at), Some(&b'['));
+
     let bytes = s.as_bytes();
     let mut end = at;
     while end < bytes.len() && bytes[end] != b'.' && bytes[end] != b'[' && bytes[end] != b']' {
@@ -185,9 +191,9 @@ fn scan_key(s: &str, at: usize) -> Result<(Segment, usize), PathParseError> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PathParseError {
-    /// A key was expected starting at this byte offset, but the grammar
-    /// found a `.` (or the end of input) there instead — e.g. a leading
-    /// `.`, or two `.` in a row.
+    /// A key was expected at this byte offset, but a `.` was found there
+    /// instead — either at the very start of the input, or immediately
+    /// after another `.`.
     EmptySegment(usize),
     /// The `[` at this byte offset was never matched by a closing `]`.
     UnclosedIndex(usize),
@@ -196,8 +202,9 @@ pub enum PathParseError {
     InvalidIndex { at: usize, raw: String },
     /// The path ended immediately after a `.`, with no key following it.
     TrailingDot,
-    /// A character appeared where the grammar does not allow it, such as a
-    /// stray `]` or text immediately following a closing bracket.
+    /// A character appeared where the grammar does not allow it: a stray
+    /// `]`, a `[` immediately following a `.`, or text immediately after a
+    /// closing `]` that is not `.` or `[`.
     UnexpectedChar { at: usize, ch: char },
 }
 
@@ -211,9 +218,19 @@ impl std::fmt::Display for PathParseError {
                 write!(f, "unclosed '[' at byte offset {at}")
             }
             PathParseError::InvalidIndex { at, raw } => {
+                // `raw` echoes guest-supplied input and is unbounded; cap
+                // what we render so a pathological input (e.g. a[<1 MB of
+                // digits>]) can't produce a huge message that gets relayed
+                // back to the guest or written to host logs. The full value
+                // is still available via `Debug` or the struct field.
+                let char_count = raw.chars().count();
+                let mut display_raw: String = raw.chars().take(32).collect();
+                if char_count > 32 {
+                    display_raw.push('…');
+                }
                 write!(
                     f,
-                    "invalid index {raw:?} in brackets opened at byte offset {at}: \
+                    "invalid index {display_raw:?} in brackets opened at byte offset {at}: \
                      expected a canonical non-negative decimal integer"
                 )
             }
@@ -268,6 +285,18 @@ mod tests {
         let p = Path::from_segments(segments.clone());
         assert!(!p.is_root());
         assert_eq!(p.segments(), segments.as_slice());
+    }
+
+    #[test]
+    #[should_panic(expected = "must not contain")]
+    fn from_segments_rejects_dotted_key() {
+        Path::from_segments(vec![Segment::Key("a.b".to_string())]);
+    }
+
+    #[test]
+    #[should_panic(expected = "must not contain")]
+    fn from_segments_rejects_empty_key() {
+        Path::from_segments(vec![Segment::Key(String::new())]);
     }
 
     #[test]
@@ -432,6 +461,91 @@ mod tests {
     }
 
     #[test]
+    fn rejects_index_larger_than_usize() {
+        // "18446744073709551616" is all digits with no leading zero, so it
+        // passes the canonical-digits check; the only way it can still fail
+        // is the `parse::<usize>()` overflowing (it is 2^64, one past
+        // u64::MAX / usize::MAX on a 64-bit target). This pins that the
+        // overflow arm is genuinely reachable.
+        assert_eq!(
+            Path::parse("a[18446744073709551616]"),
+            Err(PathParseError::InvalidIndex {
+                at: 1,
+                raw: "18446744073709551616".to_string()
+            })
+        );
+        // The largest value that does fit must still be accepted.
+        assert!(Path::parse("a[18446744073709551615]").is_ok());
+    }
+
+    #[test]
+    fn path_parse_error_messages_are_informative() {
+        assert_eq!(
+            PathParseError::EmptySegment(4).to_string(),
+            "expected a key at byte offset 4, found none"
+        );
+        assert_eq!(
+            PathParseError::UnclosedIndex(7).to_string(),
+            "unclosed '[' at byte offset 7"
+        );
+        assert_eq!(
+            PathParseError::InvalidIndex {
+                at: 2,
+                raw: "bar".to_string()
+            }
+            .to_string(),
+            "invalid index \"bar\" in brackets opened at byte offset 2: \
+             expected a canonical non-negative decimal integer"
+        );
+        assert_eq!(
+            PathParseError::TrailingDot.to_string(),
+            "path ends with a trailing '.' with no key following it"
+        );
+        assert_eq!(
+            PathParseError::UnexpectedChar { at: 5, ch: ']' }.to_string(),
+            "unexpected character ']' at byte offset 5"
+        );
+    }
+
+    #[test]
+    fn invalid_index_display_is_bounded_but_struct_field_is_not() {
+        let long_raw = "x".repeat(100);
+        let input = format!("a[{long_raw}]");
+        let err = Path::parse(&input).unwrap_err();
+
+        let PathParseError::InvalidIndex { at, raw } = &err else {
+            panic!("expected InvalidIndex, got {err:?}");
+        };
+        assert_eq!(*at, 1);
+        // The struct field must retain the full, untruncated value.
+        assert_eq!(raw.len(), 100);
+
+        // The rendered message must be bounded to 32 chars of `raw` plus an
+        // ellipsis marker, not all 100. Isolate the quoted `raw` echo
+        // specifically, rather than counting 'x' over the whole message —
+        // words like "index" and "expected" contain 'x' too.
+        let rendered = err.to_string();
+        let quote_start = rendered.find('"').expect("message quotes the raw value") + 1;
+        let quote_end = quote_start
+            + rendered[quote_start..]
+                .find('"')
+                .expect("closing quote present");
+        let quoted = &rendered[quote_start..quote_end];
+        assert_eq!(
+            quoted.chars().filter(|&c| c == 'x').count(),
+            32,
+            "quoted raw value should carry exactly 32 of the original 100 'x's: {quoted:?}"
+        );
+        assert!(
+            quoted.ends_with('…'),
+            "truncated output should carry an ellipsis marker: {quoted:?}"
+        );
+        // Exactly 32 'x's plus one ellipsis char, regardless of `raw`'s
+        // actual length (100 here, but the bound holds for any length).
+        assert_eq!(quoted.chars().count(), 33);
+    }
+
+    #[test]
     fn parses_multibyte_key() {
         let p = Path::parse("café.zoom").unwrap();
         assert_eq!(
@@ -448,15 +562,25 @@ mod tests {
     /// exactly that input. This is the invariant the strict grammar exists to
     /// guarantee; a hole here means a client path can silently become a
     /// different path.
+    ///
+    /// Enumerates every string of length 0..=5 over a 7-char alphabet
+    /// (`'1'` is included so a valid multi-digit index like `[10]` is
+    /// actually reachable and exercised, not just single-digit and
+    /// rejected multi-`0` indices).
     #[test]
     fn round_trip_is_total_over_short_inputs() {
-        const ALPHABET: [char; 6] = ['a', '.', '[', ']', '0', 'é'];
+        const ALPHABET: [char; 7] = ['a', '.', '[', ']', '0', '1', 'é'];
         let mut accepted = 0usize;
 
-        for len in 0..=4 {
-            let mut indices = vec![0usize; len];
-            loop {
-                let candidate: String = indices.iter().map(|&i| ALPHABET[i]).collect();
+        for len in 0..=5 {
+            for mut code in 0..ALPHABET.len().pow(len as u32) {
+                let candidate: String = (0..len)
+                    .map(|_| {
+                        let c = ALPHABET[code % ALPHABET.len()];
+                        code /= ALPHABET.len();
+                        c
+                    })
+                    .collect();
                 if let Ok(path) = Path::parse(&candidate) {
                     accepted += 1;
                     assert_eq!(
@@ -466,34 +590,17 @@ mod tests {
                         path.segments()
                     );
                 }
-
-                if len == 0 {
-                    break;
-                }
-                let mut pos = len;
-                loop {
-                    if pos == 0 {
-                        break;
-                    }
-                    pos -= 1;
-                    indices[pos] += 1;
-                    if indices[pos] < ALPHABET.len() {
-                        break;
-                    }
-                    indices[pos] = 0;
-                    if pos == 0 {
-                        break;
-                    }
-                }
-                if indices.iter().all(|&i| i == 0) {
-                    break;
-                }
             }
         }
 
-        assert!(
-            accepted > 50,
-            "expected a meaningful number of accepted inputs, got {accepted}"
+        // Pinned to the exact count so a regression that silently narrows
+        // the accepted language (e.g. rejecting two-thirds of valid inputs)
+        // cannot pass by accident. If this number changes, the accepted
+        // language changed — update it deliberately, with an explanation.
+        assert_eq!(
+            accepted, 2405,
+            "accepted count changed; the language `parse` accepts changed \
+             (see the comment above this assertion)"
         );
     }
 }
