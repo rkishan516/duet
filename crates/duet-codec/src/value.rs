@@ -258,6 +258,7 @@ mod tests {
             r#"{"t":"i","v":"nope"}"#,                  // not a decimal integer
             r#"{"t":"i","v":"999999999999999999999"}"#, // overflows i64
             r#"{"t":"f","v":"huge"}"#,                  // unrecognised float sentinel
+            r#"{"t":"f","v":true}"#,                    // float payload neither number nor string
             r#"{"t":"b","v":"!!!"}"#,                   // invalid base64
             r#"{"t":"bool","v":"yes"}"#,                // wrong payload type
             r#"{"t":"l","v":{}}"#,                      // List payload must be an array

@@ -77,3 +77,47 @@ pub fn decode_notification(
 ) -> Result<duet_core::Notification, CodecError> {
     wire::decode_notification(json)
 }
+
+#[cfg(test)]
+mod tests {
+    //! `value.rs` and `wire.rs` unit-test the encoding logic directly through
+    //! their `pub(crate)` functions. These tests exist only to prove the thin
+    //! public wrappers above actually delegate to them — every crate consumer
+    //! goes through this module, not through `value`/`wire` directly.
+    use super::*;
+    use duet_core::{Notification, Patch, Path, SubscriberId, SubscriptionId, Value};
+
+    #[test]
+    fn public_patch_api_round_trips() {
+        let patch = Patch {
+            path: Path::parse("editor.zoom").expect("valid path"),
+            value: Value::Int(3),
+        };
+        let encoded = encode_patch(&patch);
+        assert_eq!(decode_patch(&encoded).expect("decodes"), patch);
+    }
+
+    #[test]
+    fn public_notification_api_round_trips() {
+        let note = Notification {
+            subscriber: SubscriberId(1),
+            subscription: SubscriptionId(2),
+            patch: Patch {
+                path: Path::root(),
+                value: Value::Bool(true),
+            },
+        };
+        let encoded = encode_notification(&note);
+        assert_eq!(decode_notification(&encoded).expect("decodes"), note);
+    }
+
+    #[test]
+    fn public_decode_functions_surface_codec_errors() {
+        let bad = serde_json::json!({});
+        assert!(matches!(decode_patch(&bad), Err(CodecError::BadShape(_))));
+        assert!(matches!(
+            decode_notification(&bad),
+            Err(CodecError::BadShape(_))
+        ));
+    }
+}

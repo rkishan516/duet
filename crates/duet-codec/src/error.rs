@@ -60,19 +60,13 @@ mod tests {
     #[test]
     fn bad_shape_displays_actionably() {
         let rendered = CodecError::BadShape("missing \"t\"".to_string()).to_string();
-        assert!(
-            rendered.contains("\"t\""),
-            "should surface the detail, got: {rendered}"
-        );
+        assert!(rendered.contains("\"t\""), "got: {rendered}");
     }
 
     #[test]
     fn unknown_tag_names_the_tag() {
         let rendered = CodecError::UnknownTag("q".to_string()).to_string();
-        assert!(
-            rendered.contains('q'),
-            "should name the offending tag, got: {rendered}"
-        );
+        assert!(rendered.contains('q'), "got: {rendered}");
     }
 
     #[test]
@@ -80,25 +74,47 @@ mod tests {
         // This crate parses untrusted guest input. An unbounded echo means a
         // 1 MB tag produces a 1 MB log line.
         let huge = "z".repeat(10_000);
-        let rendered = CodecError::UnknownTag(huge.clone()).to_string();
-        assert!(
-            rendered.len() < 200,
-            "guest-supplied text must be truncated in Display, got {} chars",
-            rendered.len()
-        );
-        assert_eq!(
-            match CodecError::UnknownTag(huge.clone()) {
-                CodecError::UnknownTag(t) => t.len(),
-                other => panic!("expected UnknownTag, got {other:?}"),
-            },
-            10_000,
-            "the struct field itself must keep the full value for Debug and tests"
-        );
+        let source = CodecError::UnknownTag(huge.clone());
+        let rendered = source.to_string();
+        assert!(rendered.len() < 200, "got {} chars", rendered.len());
+
+        // The struct field itself must keep the full value for Debug and
+        // tests, even though Display truncates it. `if let` without an else
+        // arm keeps this total: there is no failure branch to leave dead.
+        let mut field_len = None;
+        if let CodecError::UnknownTag(t) = &source {
+            field_len = Some(t.len());
+        }
+        assert_eq!(field_len, Some(10_000));
     }
 
     #[test]
     fn codec_error_is_a_std_error() {
         fn assert_error<E: std::error::Error>() {}
         assert_error::<CodecError>();
+    }
+
+    #[test]
+    fn every_variant_names_its_kind_in_display() {
+        // Each match arm in Display renders a distinct, identifiable prefix.
+        // Pinning all six here (bad_shape_displays_actionably and
+        // unknown_tag_names_the_tag above cover BadShape and UnknownTag with
+        // more targeted assertions) closes the remaining four.
+        assert_eq!(
+            CodecError::BadInt("nope".to_string()).to_string(),
+            "invalid integer payload \"nope\""
+        );
+        assert_eq!(
+            CodecError::BadFloat("huge".to_string()).to_string(),
+            "invalid float payload \"huge\""
+        );
+        assert_eq!(
+            CodecError::BadBase64("!!!".to_string()).to_string(),
+            "invalid base64 payload: !!!"
+        );
+        assert_eq!(
+            CodecError::BadPath("foo]".to_string()).to_string(),
+            "invalid path: foo]"
+        );
     }
 }
