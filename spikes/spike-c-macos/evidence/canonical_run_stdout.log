@@ -1,0 +1,102 @@
+[t+  0.000s] Spike C starting: hot reload via frontend_server + Dart VM service
+[t+  0.002s] App.framework path: /Users/kishan/dev/rkishan516/tauri-flutter/spikes/spike_app/build/macos/Build/Products/Debug/App.framework
+[t+  0.002s] main.dart path: /Users/kishan/dev/rkishan516/tauri-flutter/spikes/spike_app/lib/main.dart
+[t+  0.110s] spawning frontend_server: /Users/kishan/dev/rkishan516/flutterDC/bin/cache/dart-sdk/bin/dartaotruntime /Users/kishan/dev/rkishan516/flutterDC/bin/cache/dart-sdk/bin/snapshots/frontend_server_aot.dart.snapshot --sdk-root /Users/kishan/dev/rkishan516/flutterDC/bin/cache/artifacts/engine/common/flutter_patched_sdk/ --incremental --track-widget-creation --experimental-emit-debug-metadata --target=flutter --no-print-incremental-dependencies --packages /Users/kishan/dev/rkishan516/tauri-flutter/spikes/spike_app/.dart_tool/package_config.json --output-dill /tmp/spike-c-frontend-server-85233/out.dill
+[t+  3.905s] initial baseline compile -> ok=true elapsed=3.794758167s diagnostics=[]
+[t+  3.905s] baseline compile accepted; frontend_server ready for incremental recompiles
+[t+  3.905s] === booting Flutter engine (from the app bundle's existing kernel_blob.bin) ===
+2026-08-04 17:45:26.990 spike-c-macos[85233:23296261] Running with merged UI and platform thread. Experimental.
+[engine-stdout] flutter: The Dart VM service is listening on http://127.0.0.1:55706/deYkJsuLg7k=/
+[t+  4.036s] engine booted (allowHeadlessExecution=true, runWithEntrypoint returned true)
+[t+  4.036s] VM service base URL: http://127.0.0.1:55706/deYkJsuLg7k=/
+[t+  4.098s] Flutter view created and parented into tao window
+[t+  4.098s] registered native handler for duet/spike_c 'frameMarker' calls
+[t+  4.098s] connecting to VM service websocket: ws://127.0.0.1:55706/deYkJsuLg7k=/ws
+[t+  4.148s] getVM response: {"id":1,"jsonrpc":"2.0","result":{"_currentMemory":64749568,"_currentRSS":167608320,"_embedder":"Flutter","_features":"release no-asan no-msan no-tsan no-shared_data asserts use_field_guards use_osr branch_coverage coverage no-code_comments no-dwarf_stack_traces arm64 macos no-compressed-pointers","_maxRSS":167608320,"_profilerMode":"Dart","architectureBits":64,"hostCPU":"Apple M1 Max","isolateGroups":[{"id":"isolateGroups/8733207304029343","isSystemIsolateGroup":false,"name":"main.dart","number":"8733207304029343","type":"@IsolateGroup"}],"isolates":[{"id":"isolates/7546815380299399","isSystemIsolate":false,"isolateGroupId":"isolateGroups/8733207304029343","name":"main","number":"7546815380299399","type":"@Isolate"}],"name":"vm","operatingSystem":"macos","pid":85233,"startTime":1785845726992,"systemIsolateGroups":[{"id":"isolateGroups/5668059137991890","isSystemIsolateGroup":true,"name":"vm-service","number":"5668059137991890","type":"@IsolateGroup"}],"systemIsolates":[{"id":"isolates/5987148546511107","isSystemIsolate":true,"isolateGroupId":"isolateGroups/5668059137991890","name":"vm-service","number":"5987148546511107","type":"@Isolate"}],"targetCPU":"arm64","type":"VM","version":"3.13.0-133.0.dev (dev) (Fri May 22 17:03:29 2026 -0700) on \"macos_arm64\""}}
+[t+  4.148s] isolate id: isolates/7546815380299399
+[t+  4.669s] priming: tapCount=0/3, sent 3 more 'increment' call(s) (total attempts sent so far: 3)
+[t+  4.769s] tapCount primed to 3 (target 3) - Dart heap state is non-zero, proceeding
+[spike-c] snapshot: wrote evidence/before_reload.png (success=true, bytes=83179)
+[t+  4.786s] reload-driver thread spawned
+[t+  4.786s][reload-thread] starting reload loop: 10 iterations, per-iteration wait budget 6s
+[t+  4.809s][reload-thread] iter 0: recompile -> ok=true elapsed=21.835958ms diagnostics=[]
+[t+  4.874s][reload-thread] iter 0: reloadSources response = {"id":2,"jsonrpc":"2.0","result":{"details":{"finalLibraryCount":753,"loadedLibraryCount":1,"receivedClassesCount":8,"receivedLibrariesBytes":22912,"receivedLibraryCount":2,"receivedProceduresCount":2,"savedLibraryCount":752,"shapeChangeMappings":[]},"success":true,"type":"ReloadReport"}}
+[t+  4.951s][reload-thread] iter 0: ext.flutter.reassemble response = {"id":3,"jsonrpc":"2.0","result":{"method":"ext.flutter.reassemble","type":"_extensionType"}}
+[t+  4.952s][reload-thread] iter 0: marker=MARKER_V2 observed=true latency=165.140166ms tap_count=Some(3)
+[t+  4.968s][reload-thread] iter 1: recompile -> ok=true elapsed=16.473542ms diagnostics=[]
+[t+  5.023s][reload-thread] iter 1: reloadSources response = {"id":4,"jsonrpc":"2.0","result":{"details":{"finalLibraryCount":753,"loadedLibraryCount":1,"receivedClassesCount":8,"receivedLibrariesBytes":22912,"receivedLibraryCount":2,"receivedProceduresCount":2,"savedLibraryCount":752,"shapeChangeMappings":[]},"success":true,"type":"ReloadReport"}}
+[t+  5.075s][reload-thread] iter 1: ext.flutter.reassemble response = {"id":5,"jsonrpc":"2.0","result":{"method":"ext.flutter.reassemble","type":"_extensionType"}}
+[t+  5.075s][reload-thread] iter 1: marker=MARKER_V3 observed=true latency=123.319583ms tap_count=Some(3)
+[t+  5.084s][reload-thread] iter 2: recompile -> ok=true elapsed=9.021625ms diagnostics=[]
+[t+  5.141s][reload-thread] iter 2: reloadSources response = {"id":6,"jsonrpc":"2.0","result":{"details":{"finalLibraryCount":753,"loadedLibraryCount":1,"receivedClassesCount":8,"receivedLibrariesBytes":22912,"receivedLibraryCount":2,"receivedProceduresCount":2,"savedLibraryCount":752,"shapeChangeMappings":[]},"success":true,"type":"ReloadReport"}}
+[t+  5.187s][reload-thread] iter 2: ext.flutter.reassemble response = {"id":7,"jsonrpc":"2.0","result":{"method":"ext.flutter.reassemble","type":"_extensionType"}}
+[t+  5.187s][reload-thread] iter 2: marker=MARKER_V4 observed=true latency=111.699916ms tap_count=Some(3)
+[t+  5.196s][reload-thread] iter 3: recompile -> ok=true elapsed=8.814042ms diagnostics=[]
+[t+  5.254s][reload-thread] iter 3: reloadSources response = {"id":8,"jsonrpc":"2.0","result":{"details":{"finalLibraryCount":753,"loadedLibraryCount":1,"receivedClassesCount":8,"receivedLibrariesBytes":22912,"receivedLibraryCount":2,"receivedProceduresCount":2,"savedLibraryCount":752,"shapeChangeMappings":[]},"success":true,"type":"ReloadReport"}}
+[t+  5.312s][reload-thread] iter 3: ext.flutter.reassemble response = {"id":9,"jsonrpc":"2.0","result":{"method":"ext.flutter.reassemble","type":"_extensionType"}}
+[t+  5.312s][reload-thread] iter 3: marker=MARKER_V5 observed=true latency=125.21225ms tap_count=Some(3)
+[t+  5.322s][reload-thread] iter 4: recompile -> ok=true elapsed=8.895084ms diagnostics=[]
+[t+  5.377s][reload-thread] iter 4: reloadSources response = {"id":10,"jsonrpc":"2.0","result":{"details":{"finalLibraryCount":753,"loadedLibraryCount":1,"receivedClassesCount":8,"receivedLibrariesBytes":22912,"receivedLibraryCount":2,"receivedProceduresCount":2,"savedLibraryCount":752,"shapeChangeMappings":[]},"success":true,"type":"ReloadReport"}}
+[t+  5.426s][reload-thread] iter 4: ext.flutter.reassemble response = {"id":11,"jsonrpc":"2.0","result":{"method":"ext.flutter.reassemble","type":"_extensionType"}}
+[t+  5.426s][reload-thread] iter 4: marker=MARKER_V6 observed=true latency=113.25825ms tap_count=Some(3)
+[t+  5.443s][reload-thread] iter 5: recompile -> ok=true elapsed=17.338833ms diagnostics=[]
+[t+  5.502s][reload-thread] iter 5: reloadSources response = {"id":12,"jsonrpc":"2.0","result":{"details":{"finalLibraryCount":753,"loadedLibraryCount":1,"receivedClassesCount":8,"receivedLibrariesBytes":22912,"receivedLibraryCount":2,"receivedProceduresCount":2,"savedLibraryCount":752,"shapeChangeMappings":[]},"success":true,"type":"ReloadReport"}}
+[t+  5.551s][reload-thread] iter 5: ext.flutter.reassemble response = {"id":13,"jsonrpc":"2.0","result":{"method":"ext.flutter.reassemble","type":"_extensionType"}}
+[t+  5.551s][reload-thread] iter 5: marker=MARKER_V7 observed=true latency=125.158125ms tap_count=Some(3)
+[t+  5.562s][reload-thread] iter 6: recompile -> ok=true elapsed=10.753084ms diagnostics=[]
+[t+  5.624s][reload-thread] iter 6: reloadSources response = {"id":14,"jsonrpc":"2.0","result":{"details":{"finalLibraryCount":753,"loadedLibraryCount":1,"receivedClassesCount":8,"receivedLibrariesBytes":22912,"receivedLibraryCount":2,"receivedProceduresCount":2,"savedLibraryCount":752,"shapeChangeMappings":[]},"success":true,"type":"ReloadReport"}}
+[t+  5.673s][reload-thread] iter 6: ext.flutter.reassemble response = {"id":15,"jsonrpc":"2.0","result":{"method":"ext.flutter.reassemble","type":"_extensionType"}}
+[t+  5.673s][reload-thread] iter 6: marker=MARKER_V8 observed=true latency=122.481708ms tap_count=Some(3)
+[t+  5.683s][reload-thread] iter 7: recompile -> ok=true elapsed=9.5645ms diagnostics=[]
+[t+  5.741s][reload-thread] iter 7: reloadSources response = {"id":16,"jsonrpc":"2.0","result":{"details":{"finalLibraryCount":753,"loadedLibraryCount":1,"receivedClassesCount":8,"receivedLibrariesBytes":22912,"receivedLibraryCount":2,"receivedProceduresCount":2,"savedLibraryCount":752,"shapeChangeMappings":[]},"success":true,"type":"ReloadReport"}}
+[t+  5.788s][reload-thread] iter 7: ext.flutter.reassemble response = {"id":17,"jsonrpc":"2.0","result":{"method":"ext.flutter.reassemble","type":"_extensionType"}}
+[t+  5.788s][reload-thread] iter 7: marker=MARKER_V9 observed=true latency=114.280292ms tap_count=Some(3)
+[t+  5.799s][reload-thread] iter 8: recompile -> ok=true elapsed=10.591417ms diagnostics=[]
+[t+  5.857s][reload-thread] iter 8: reloadSources response = {"id":18,"jsonrpc":"2.0","result":{"details":{"finalLibraryCount":753,"loadedLibraryCount":1,"receivedClassesCount":8,"receivedLibrariesBytes":22912,"receivedLibraryCount":2,"receivedProceduresCount":2,"savedLibraryCount":752,"shapeChangeMappings":[]},"success":true,"type":"ReloadReport"}}
+[t+  5.914s][reload-thread] iter 8: ext.flutter.reassemble response = {"id":19,"jsonrpc":"2.0","result":{"method":"ext.flutter.reassemble","type":"_extensionType"}}
+[t+  5.914s][reload-thread] iter 8: marker=MARKER_V10 observed=true latency=125.984375ms tap_count=Some(3)
+[t+  5.923s][reload-thread] iter 9: recompile -> ok=true elapsed=8.98625ms diagnostics=[]
+[t+  5.978s][reload-thread] iter 9: reloadSources response = {"id":20,"jsonrpc":"2.0","result":{"details":{"finalLibraryCount":753,"loadedLibraryCount":1,"receivedClassesCount":8,"receivedLibrariesBytes":22912,"receivedLibraryCount":2,"receivedProceduresCount":2,"savedLibraryCount":752,"shapeChangeMappings":[]},"success":true,"type":"ReloadReport"}}
+[t+  6.027s][reload-thread] iter 9: ext.flutter.reassemble response = {"id":21,"jsonrpc":"2.0","result":{"method":"ext.flutter.reassemble","type":"_extensionType"}}
+[t+  6.027s][reload-thread] iter 9: marker=MARKER_V11 observed=true latency=112.861042ms tap_count=Some(3)
+[t+  6.027s][reload-thread] reload loop finished, restoring main.dart to MARKER_V1 baseline
+[t+  6.135s] === reload loop complete, finalizing ===
+[spike-c] snapshot: wrote evidence/after_reload.png (success=true, bytes=83785)
+[t+  6.150s] === LATENCY SAMPLES (edit-file-write -> new-marker-observed-over-channel) ===
+[t+  6.150s] iter  0 marker=MARKER_V2  recompile_ok=true  observed=true  latency=   165.1ms tap_count=Some(3) (baseline=3)
+[t+  6.150s]   iter 0 reloadSources response: {"id":2,"jsonrpc":"2.0","result":{"details":{"finalLibraryCount":753,"loadedLibraryCount":1,"receivedClassesCount":8,"receivedLibrariesBytes":22912,"receivedLibraryCount":2,"receivedProceduresCount":2,"savedLibraryCount":752,"shapeChangeMappings":[]},"success":true,"type":"ReloadReport"}}
+[t+  6.150s]   iter 0 ext.flutter.reassemble response: {"id":3,"jsonrpc":"2.0","result":{"method":"ext.flutter.reassemble","type":"_extensionType"}}
+[t+  6.150s] iter  1 marker=MARKER_V3  recompile_ok=true  observed=true  latency=   123.3ms tap_count=Some(3) (baseline=3)
+[t+  6.150s]   iter 1 reloadSources response: {"id":4,"jsonrpc":"2.0","result":{"details":{"finalLibraryCount":753,"loadedLibraryCount":1,"receivedClassesCount":8,"receivedLibrariesBytes":22912,"receivedLibraryCount":2,"receivedProceduresCount":2,"savedLibraryCount":752,"shapeChangeMappings":[]},"success":true,"type":"ReloadReport"}}
+[t+  6.150s]   iter 1 ext.flutter.reassemble response: {"id":5,"jsonrpc":"2.0","result":{"method":"ext.flutter.reassemble","type":"_extensionType"}}
+[t+  6.150s] iter  2 marker=MARKER_V4  recompile_ok=true  observed=true  latency=   111.7ms tap_count=Some(3) (baseline=3)
+[t+  6.150s]   iter 2 reloadSources response: {"id":6,"jsonrpc":"2.0","result":{"details":{"finalLibraryCount":753,"loadedLibraryCount":1,"receivedClassesCount":8,"receivedLibrariesBytes":22912,"receivedLibraryCount":2,"receivedProceduresCount":2,"savedLibraryCount":752,"shapeChangeMappings":[]},"success":true,"type":"ReloadReport"}}
+[t+  6.150s]   iter 2 ext.flutter.reassemble response: {"id":7,"jsonrpc":"2.0","result":{"method":"ext.flutter.reassemble","type":"_extensionType"}}
+[t+  6.150s] iter  3 marker=MARKER_V5  recompile_ok=true  observed=true  latency=   125.2ms tap_count=Some(3) (baseline=3)
+[t+  6.150s]   iter 3 reloadSources response: {"id":8,"jsonrpc":"2.0","result":{"details":{"finalLibraryCount":753,"loadedLibraryCount":1,"receivedClassesCount":8,"receivedLibrariesBytes":22912,"receivedLibraryCount":2,"receivedProceduresCount":2,"savedLibraryCount":752,"shapeChangeMappings":[]},"success":true,"type":"ReloadReport"}}
+[t+  6.150s]   iter 3 ext.flutter.reassemble response: {"id":9,"jsonrpc":"2.0","result":{"method":"ext.flutter.reassemble","type":"_extensionType"}}
+[t+  6.150s] iter  4 marker=MARKER_V6  recompile_ok=true  observed=true  latency=   113.3ms tap_count=Some(3) (baseline=3)
+[t+  6.150s]   iter 4 reloadSources response: {"id":10,"jsonrpc":"2.0","result":{"details":{"finalLibraryCount":753,"loadedLibraryCount":1,"receivedClassesCount":8,"receivedLibrariesBytes":22912,"receivedLibraryCount":2,"receivedProceduresCount":2,"savedLibraryCount":752,"shapeChangeMappings":[]},"success":true,"type":"ReloadReport"}}
+[t+  6.150s]   iter 4 ext.flutter.reassemble response: {"id":11,"jsonrpc":"2.0","result":{"method":"ext.flutter.reassemble","type":"_extensionType"}}
+[t+  6.150s] iter  5 marker=MARKER_V7  recompile_ok=true  observed=true  latency=   125.2ms tap_count=Some(3) (baseline=3)
+[t+  6.150s]   iter 5 reloadSources response: {"id":12,"jsonrpc":"2.0","result":{"details":{"finalLibraryCount":753,"loadedLibraryCount":1,"receivedClassesCount":8,"receivedLibrariesBytes":22912,"receivedLibraryCount":2,"receivedProceduresCount":2,"savedLibraryCount":752,"shapeChangeMappings":[]},"success":true,"type":"ReloadReport"}}
+[t+  6.150s]   iter 5 ext.flutter.reassemble response: {"id":13,"jsonrpc":"2.0","result":{"method":"ext.flutter.reassemble","type":"_extensionType"}}
+[t+  6.150s] iter  6 marker=MARKER_V8  recompile_ok=true  observed=true  latency=   122.5ms tap_count=Some(3) (baseline=3)
+[t+  6.150s]   iter 6 reloadSources response: {"id":14,"jsonrpc":"2.0","result":{"details":{"finalLibraryCount":753,"loadedLibraryCount":1,"receivedClassesCount":8,"receivedLibrariesBytes":22912,"receivedLibraryCount":2,"receivedProceduresCount":2,"savedLibraryCount":752,"shapeChangeMappings":[]},"success":true,"type":"ReloadReport"}}
+[t+  6.150s]   iter 6 ext.flutter.reassemble response: {"id":15,"jsonrpc":"2.0","result":{"method":"ext.flutter.reassemble","type":"_extensionType"}}
+[t+  6.150s] iter  7 marker=MARKER_V9  recompile_ok=true  observed=true  latency=   114.3ms tap_count=Some(3) (baseline=3)
+[t+  6.150s]   iter 7 reloadSources response: {"id":16,"jsonrpc":"2.0","result":{"details":{"finalLibraryCount":753,"loadedLibraryCount":1,"receivedClassesCount":8,"receivedLibrariesBytes":22912,"receivedLibraryCount":2,"receivedProceduresCount":2,"savedLibraryCount":752,"shapeChangeMappings":[]},"success":true,"type":"ReloadReport"}}
+[t+  6.150s]   iter 7 ext.flutter.reassemble response: {"id":17,"jsonrpc":"2.0","result":{"method":"ext.flutter.reassemble","type":"_extensionType"}}
+[t+  6.150s] iter  8 marker=MARKER_V10 recompile_ok=true  observed=true  latency=   126.0ms tap_count=Some(3) (baseline=3)
+[t+  6.150s]   iter 8 reloadSources response: {"id":18,"jsonrpc":"2.0","result":{"details":{"finalLibraryCount":753,"loadedLibraryCount":1,"receivedClassesCount":8,"receivedLibrariesBytes":22912,"receivedLibraryCount":2,"receivedProceduresCount":2,"savedLibraryCount":752,"shapeChangeMappings":[]},"success":true,"type":"ReloadReport"}}
+[t+  6.150s]   iter 8 ext.flutter.reassemble response: {"id":19,"jsonrpc":"2.0","result":{"method":"ext.flutter.reassemble","type":"_extensionType"}}
+[t+  6.150s] iter  9 marker=MARKER_V11 recompile_ok=true  observed=true  latency=   112.9ms tap_count=Some(3) (baseline=3)
+[t+  6.150s]   iter 9 reloadSources response: {"id":20,"jsonrpc":"2.0","result":{"details":{"finalLibraryCount":753,"loadedLibraryCount":1,"receivedClassesCount":8,"receivedLibrariesBytes":22912,"receivedLibraryCount":2,"receivedProceduresCount":2,"savedLibraryCount":752,"shapeChangeMappings":[]},"success":true,"type":"ReloadReport"}}
+[t+  6.150s]   iter 9 ext.flutter.reassemble response: {"id":21,"jsonrpc":"2.0","result":{"method":"ext.flutter.reassemble","type":"_extensionType"}}
+[t+  6.150s] === LATENCY SUMMARY: n=10 min=111.7ms median=123.3ms max=165.1ms mean=123.9ms ===
+[t+  6.150s] === 500ms parity threshold: MET (max sample was 165.1ms) ===
+[t+  6.151s] === DART HEAP STATE: baseline tapCount=3, survived all reloads unchanged = true (if true: this is genuine HOT RELOAD; if false: state was lost, this is HOT RESTART behavior) ===
+[t+  6.157s] final RSS: 269648 kB
+[t+  6.164s] shutDownEngine sent
+embedder.cc (3276): 'FlutterEngineOnVsync' returned 'kInvalidArguments'. Invalid engine handle.
+[t+  6.171s] LoopDestroyed - process exiting
