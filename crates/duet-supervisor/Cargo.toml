@@ -1,0 +1,11 @@
+[package]
+name = "duet-supervisor"
+description = "Decides when Duet surfaces start, suspend and are torn down"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+duet-core = { path = "../duet-core" }
