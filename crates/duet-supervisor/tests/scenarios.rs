@@ -1,22 +1,35 @@
 //! End-to-end lifecycle journeys, driven only through the public API.
 
 use duet_core::{Instant, Policy, SurfaceState};
-use duet_supervisor::{HostEvent, Supervisor, SurfaceAction};
+use duet_supervisor::{HostEvent, Supervisor, SurfaceAction, WindowId};
 
 #[test]
 fn a_surface_completes_a_full_open_use_close_teardown_journey() {
     let mut s = Supervisor::new();
     let id = s.register(Policy::OnLastWindowClosed { grace_ms: 5_000 });
     assert_eq!(s.state(id), Some(SurfaceState::Cold));
+    let window = WindowId::new(1);
 
     // The user opens a window.
-    s.handle(&HostEvent::WindowOpened(id));
-    s.handle(&HostEvent::WindowShown(id));
+    s.handle_at(
+        Instant(0),
+        HostEvent::WindowOpened {
+            surface: id,
+            window,
+        },
+    );
+    s.handle_at(
+        Instant(0),
+        HostEvent::WindowShown {
+            surface: id,
+            window,
+        },
+    );
     assert_eq!(s.tick(Instant(0)), vec![SurfaceAction::Start(id)]);
     assert_eq!(s.state(id), Some(SurfaceState::Starting));
 
     // The host brings it up.
-    s.handle(&HostEvent::Ready(id));
+    s.handle_at(Instant(0), HostEvent::Ready(id));
     assert_eq!(s.state(id), Some(SurfaceState::Live));
     assert_eq!(
         s.tick(Instant(1_000)),
@@ -25,7 +38,13 @@ fn a_surface_completes_a_full_open_use_close_teardown_journey() {
     );
 
     // The user closes the last window.
-    s.handle(&HostEvent::WindowClosed(id));
+    s.handle_at(
+        Instant(2_000),
+        HostEvent::WindowClosed {
+            surface: id,
+            window,
+        },
+    );
     assert_eq!(s.tick(Instant(2_000)), vec![SurfaceAction::Suspend(id)]);
 
     // Grace elapses.
@@ -44,14 +63,27 @@ fn repeated_close_and_reopen_within_grace_never_reaches_cold() {
     // The anti-thrash property, exercised the way a user actually behaves.
     let mut s = Supervisor::new();
     let id = s.register(Policy::OnLastWindowClosed { grace_ms: 5_000 });
+    let window = WindowId::new(1);
 
-    s.handle(&HostEvent::WindowOpened(id));
+    s.handle_at(
+        Instant(0),
+        HostEvent::WindowOpened {
+            surface: id,
+            window,
+        },
+    );
     s.tick(Instant(0));
-    s.handle(&HostEvent::Ready(id));
+    s.handle_at(Instant(0), HostEvent::Ready(id));
 
     let mut now = 1_000u64;
     for cycle in 0..5 {
-        s.handle(&HostEvent::WindowClosed(id));
+        s.handle_at(
+            Instant(now),
+            HostEvent::WindowClosed {
+                surface: id,
+                window,
+            },
+        );
         let actions = s.tick(Instant(now));
         assert_eq!(
             actions,
@@ -60,7 +92,13 @@ fn repeated_close_and_reopen_within_grace_never_reaches_cold() {
         );
 
         now += 1_000; // well inside the 5s grace
-        s.handle(&HostEvent::WindowOpened(id));
+        s.handle_at(
+            Instant(now),
+            HostEvent::WindowOpened {
+                surface: id,
+                window,
+            },
+        );
         let actions = s.tick(Instant(now));
         assert_eq!(
             actions,
@@ -71,13 +109,12 @@ fn repeated_close_and_reopen_within_grace_never_reaches_cold() {
             !actions[0].needs_new_renderer(),
             "cycle {cycle} must not require a fresh engine boot"
         );
-        assert_ne!(
+        assert_eq!(
             s.state(id),
-            Some(SurfaceState::Cold),
-            "cycle {cycle} must never reach Cold"
+            Some(SurfaceState::Live),
+            "cycle {cycle} must return straight to Live, never pass through Cold"
         );
 
-        s.handle(&HostEvent::Ready(id));
         now += 1_000;
     }
 }
@@ -89,9 +126,16 @@ fn two_surfaces_with_different_policies_are_independent() {
     let mut s = Supervisor::new();
     let flutter = s.register(Policy::OnLastWindowClosed { grace_ms: 1_000 });
     let webview = s.register(Policy::Never);
+    let window = WindowId::new(1);
 
     for id in [flutter, webview] {
-        s.handle(&HostEvent::WindowOpened(id));
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowOpened {
+                surface: id,
+                window,
+            },
+        );
     }
     let actions = s.tick(Instant(0));
     assert_eq!(
@@ -99,12 +143,18 @@ fn two_surfaces_with_different_policies_are_independent() {
         vec![SurfaceAction::Start(flutter), SurfaceAction::Start(webview)]
     );
     for id in [flutter, webview] {
-        s.handle(&HostEvent::Ready(id));
+        s.handle_at(Instant(0), HostEvent::Ready(id));
     }
 
     // Close both windows. Only the policy-governed surface reacts.
     for id in [flutter, webview] {
-        s.handle(&HostEvent::WindowClosed(id));
+        s.handle_at(
+            Instant(100),
+            HostEvent::WindowClosed {
+                surface: id,
+                window,
+            },
+        );
     }
     assert_eq!(s.tick(Instant(100)), vec![SurfaceAction::Suspend(flutter)]);
     assert_eq!(
@@ -122,10 +172,20 @@ fn two_surfaces_with_different_policies_are_independent() {
 fn a_crashed_surface_stays_failed_until_retried_then_recovers() {
     let mut s = Supervisor::new();
     let id = s.register(Policy::OnLastWindowClosed { grace_ms: 1_000 });
+    let window = WindowId::new(1);
 
-    s.handle(&HostEvent::WindowOpened(id));
+    s.handle_at(
+        Instant(0),
+        HostEvent::WindowOpened {
+            surface: id,
+            window,
+        },
+    );
     s.tick(Instant(0));
-    s.handle(&HostEvent::Failed(id, "renderer crashed".to_string()));
+    s.handle_at(
+        Instant(0),
+        HostEvent::Failed(id, "renderer crashed".to_string()),
+    );
     assert_eq!(
         s.state(id),
         Some(SurfaceState::Failed("renderer crashed".to_string()))
@@ -140,9 +200,9 @@ fn a_crashed_surface_stays_failed_until_retried_then_recovers() {
         );
     }
 
-    s.handle(&HostEvent::Retry(id));
+    s.handle_at(Instant(50_000), HostEvent::Retry(id));
     assert_eq!(s.state(id), Some(SurfaceState::Starting));
-    s.handle(&HostEvent::Ready(id));
+    s.handle_at(Instant(50_100), HostEvent::Ready(id));
     assert_eq!(s.state(id), Some(SurfaceState::Live));
 }
 
@@ -151,17 +211,87 @@ fn a_torn_down_surface_starts_again_when_a_window_reopens() {
     // Resume-from-Cold: the whole point of keeping state in the host.
     let mut s = Supervisor::new();
     let id = s.register(Policy::OnLastWindowClosed { grace_ms: 0 });
+    let window = WindowId::new(1);
 
-    s.handle(&HostEvent::WindowOpened(id));
+    s.handle_at(
+        Instant(0),
+        HostEvent::WindowOpened {
+            surface: id,
+            window,
+        },
+    );
     s.tick(Instant(0));
-    s.handle(&HostEvent::Ready(id));
+    s.handle_at(Instant(0), HostEvent::Ready(id));
 
-    s.handle(&HostEvent::WindowClosed(id));
+    s.handle_at(
+        Instant(10),
+        HostEvent::WindowClosed {
+            surface: id,
+            window,
+        },
+    );
     assert_eq!(s.tick(Instant(10)), vec![SurfaceAction::Suspend(id)]);
     assert_eq!(s.tick(Instant(11)), vec![SurfaceAction::Teardown(id)]);
     assert_eq!(s.state(id), Some(SurfaceState::Cold));
 
-    s.handle(&HostEvent::WindowOpened(id));
+    s.handle_at(
+        Instant(12),
+        HostEvent::WindowOpened {
+            surface: id,
+            window,
+        },
+    );
     assert_eq!(s.tick(Instant(12)), vec![SurfaceAction::Start(id)]);
     assert_eq!(s.state(id), Some(SurfaceState::Starting));
+}
+
+#[test]
+fn on_hidden_and_idle_timeout_policies_reach_teardown_without_oscillating() {
+    // C1 regression coverage at the integration level, through the public
+    // API only: a surface whose window stays open the entire time (merely
+    // hidden, for OnHidden; merely idle, for IdleTimeout) must still reach
+    // Teardown rather than resuming and re-suspending forever.
+    // `open_windows > 0` alone is not the resume condition for either of
+    // these policies, only for `OnLastWindowClosed`.
+    for policy in [
+        Policy::OnHidden { grace_ms: 1_000 },
+        Policy::IdleTimeout { after_ms: 1_000 },
+    ] {
+        let mut s = Supervisor::new();
+        let id = s.register(policy.clone());
+        let window = WindowId::new(1);
+
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowOpened {
+                surface: id,
+                window,
+            },
+        );
+        assert_eq!(
+            s.tick(Instant(0)),
+            vec![SurfaceAction::Start(id)],
+            "policy {policy:?}"
+        );
+        s.handle_at(Instant(0), HostEvent::Ready(id));
+
+        // The window is opened but never shown, and no further interaction
+        // is ever reported, so both policies suspend at t=1000.
+        assert_eq!(
+            s.tick(Instant(1_000)),
+            vec![SurfaceAction::Suspend(id)],
+            "policy {policy:?}"
+        );
+
+        // The window stays open throughout. By t=2000 both policies' grace
+        // has elapsed (OnHidden's 1000ms grace measured from when
+        // Suspending began; IdleTimeout carries none once Suspending) and
+        // teardown must have fired, never bounced back to Live.
+        assert_eq!(
+            s.tick(Instant(2_000)),
+            vec![SurfaceAction::Teardown(id)],
+            "policy {policy:?}"
+        );
+        assert_eq!(s.state(id), Some(SurfaceState::Cold), "policy {policy:?}");
+    }
 }

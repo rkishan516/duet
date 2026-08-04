@@ -13,20 +13,29 @@ pub enum SurfaceAction {
     /// Bring the surface up from nothing: create its engine or webview and
     /// attach a view.
     ///
-    /// Spike A measured this at roughly 180 ms for the Flutter side. The host
-    /// reports completion with `HostEvent::Ready`, or failure with
-    /// `HostEvent::Failed`.
+    /// Spike A measured this at roughly 180 ms for the Flutter side (debug
+    /// build, warm filesystem cache — a release-build, cold-cache figure to
+    /// tune against is deferred to Phase 3). The host reports completion
+    /// with `HostEvent::Ready`, or failure with `HostEvent::Failed`.
     Start(SurfaceId),
     /// Reattach a view to a renderer that is still alive.
     ///
     /// Emitted when a window reopens during the grace period, before the
     /// surface reached [`SurfaceAction::Teardown`]. Distinct from
     /// [`SurfaceAction::Start`] because the work is completely different and
-    /// far cheaper — the renderer was never destroyed, so there is no engine to
-    /// boot. Avoiding that ~180 ms boot is the entire reason the grace period
+    /// far cheaper — the renderer was never destroyed, so there is no engine
+    /// to boot. Avoiding that boot is the entire reason the grace period
     /// exists.
     ///
-    /// As with `Start`, the host reports completion with `HostEvent::Ready`.
+    /// Unlike `Start`, this transition is **immediate**: applying `Resume`
+    /// moves the surface straight from `Suspending` to `Live`, so the host
+    /// does not report completion with `HostEvent::Ready` for it — doing so
+    /// would not apply to a `Live` surface and is silently absorbed. One
+    /// consequence: the supervisor considers the surface `Live` before the
+    /// host has actually finished reattaching the view, so a tick landing in
+    /// that gap could ask to suspend a surface that is still mid-reattach.
+    /// This crate does not add machinery for that gap — it is recorded here
+    /// so the host knows it exists.
     Resume(SurfaceId),
     /// Begin the grace period: detach the view but keep the renderer alive.
     ///
@@ -42,7 +51,9 @@ pub enum SurfaceAction {
     /// The host must **also drop the surface's store subscriptions**. The
     /// supervisor holds no store handle, so it cannot do this itself, and a
     /// missed drop leaves the store delivering notifications to a renderer that
-    /// no longer exists.
+    /// no longer exists. This crate does not link a [`SurfaceId`] to whatever
+    /// subscriber identity the store uses, either — the host must maintain
+    /// that mapping itself.
     Teardown(SurfaceId),
 }
 
@@ -83,13 +94,16 @@ mod tests {
 
     #[test]
     fn actions_name_the_surface_they_target() {
-        assert_eq!(SurfaceAction::Start(SurfaceId(3)).surface(), SurfaceId(3));
-        assert_eq!(SurfaceAction::Resume(SurfaceId(6)).surface(), SurfaceId(6));
-        assert_eq!(SurfaceAction::Suspend(SurfaceId(4)).surface(), SurfaceId(4));
-        assert_eq!(
-            SurfaceAction::Teardown(SurfaceId(5)).surface(),
-            SurfaceId(5)
+        let (a, b, c, d) = (
+            SurfaceId::for_test(3),
+            SurfaceId::for_test(6),
+            SurfaceId::for_test(4),
+            SurfaceId::for_test(5),
         );
+        assert_eq!(SurfaceAction::Start(a).surface(), a);
+        assert_eq!(SurfaceAction::Resume(b).surface(), b);
+        assert_eq!(SurfaceAction::Suspend(c).surface(), c);
+        assert_eq!(SurfaceAction::Teardown(d).surface(), d);
     }
 
     #[test]
@@ -97,10 +111,11 @@ mod tests {
         // Spike A measured that detaching a view reclaims nothing (223 MB
         // before and after); only shutting the engine down does (104 MB).
         // This predicate exists so a host can log or meter the distinction.
-        assert!(!SurfaceAction::Start(SurfaceId(1)).reclaims_memory());
-        assert!(!SurfaceAction::Resume(SurfaceId(1)).reclaims_memory());
-        assert!(!SurfaceAction::Suspend(SurfaceId(1)).reclaims_memory());
-        assert!(SurfaceAction::Teardown(SurfaceId(1)).reclaims_memory());
+        let id = SurfaceId::for_test(1);
+        assert!(!SurfaceAction::Start(id).reclaims_memory());
+        assert!(!SurfaceAction::Resume(id).reclaims_memory());
+        assert!(!SurfaceAction::Suspend(id).reclaims_memory());
+        assert!(SurfaceAction::Teardown(id).reclaims_memory());
     }
 
     #[test]
@@ -109,11 +124,9 @@ mod tests {
         // renderer that is still alive is near-instant. A host that could not
         // tell them apart would either boot an engine it already has, or try to
         // reattach to one that no longer exists.
-        assert_ne!(
-            SurfaceAction::Start(SurfaceId(1)),
-            SurfaceAction::Resume(SurfaceId(1))
-        );
-        assert!(SurfaceAction::Start(SurfaceId(1)).needs_new_renderer());
-        assert!(!SurfaceAction::Resume(SurfaceId(1)).needs_new_renderer());
+        let id = SurfaceId::for_test(1);
+        assert_ne!(SurfaceAction::Start(id), SurfaceAction::Resume(id));
+        assert!(SurfaceAction::Start(id).needs_new_renderer());
+        assert!(!SurfaceAction::Resume(id).needs_new_renderer());
     }
 }

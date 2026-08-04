@@ -19,8 +19,11 @@
 //! holds 223 MB, detaching the view still holds 223 MB, and only shutting the
 //! engine down drops it to 104 MB. So [`SurfaceAction::Teardown`] is what
 //! delivers the framework's headline claim, and the `Suspending` grace period
-//! exists purely to avoid paying a ~180 ms engine boot when a user closes and
-//! immediately reopens a window.
+//! exists purely to avoid paying a full engine boot when a user closes and
+//! immediately reopens a window — Spike A measured that boot at roughly
+//! 180 ms, on a debug build with a warm filesystem cache. That figure is not
+//! settled: the number to tune the grace period against is a release-build
+//! measurement on a cold cache, which Phase 3 is expected to take.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -32,7 +35,7 @@ pub mod supervisor;
 
 pub use action::SurfaceAction;
 pub use event::HostEvent;
-pub use id::{SurfaceId, SurfaceIdAllocator};
+pub use id::{SurfaceId, SurfaceIdAllocator, WindowId};
 pub use supervisor::Supervisor;
 
 /// These bounds are load-bearing: a host will tick the supervisor from its
@@ -41,6 +44,7 @@ pub use supervisor::Supervisor;
 const _: () = {
     const fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<SurfaceId>();
+    assert_send_sync::<WindowId>();
     assert_send_sync::<SurfaceAction>();
     assert_send_sync::<SurfaceIdAllocator>();
     assert_send_sync::<HostEvent>();

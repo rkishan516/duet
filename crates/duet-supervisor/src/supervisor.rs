@@ -8,53 +8,66 @@ use duet_core::{
 
 use crate::action::SurfaceAction;
 use crate::event::HostEvent;
-use crate::id::{SurfaceId, SurfaceIdAllocator};
+use crate::id::{SurfaceId, SurfaceIdAllocator, WindowId};
 
 /// Everything the supervisor tracks for one surface.
 #[derive(Debug, Clone)]
 struct Entry {
     policy: Policy,
     state: SurfaceState,
-    open_windows: usize,
-    visible_windows: usize,
+    // Every window currently open for this surface, keyed by identity, with
+    // whether it is currently visible. Tracked by identity rather than
+    // counted: a bare counter cannot tell whether the window being closed
+    // was the one that was visible, which is exactly the bug this design
+    // avoids -- see `HostEvent`'s doc comment.
+    windows: BTreeMap<WindowId, bool>,
     last_interaction: Instant,
+}
+
+impl Entry {
+    /// How many windows are open.
+    fn open_windows(&self) -> usize {
+        self.windows.len()
+    }
+
+    /// How many open windows are visible. Always `<= open_windows` by
+    /// construction: a window can only appear here at all if it is a key in
+    /// `windows`, i.e. already open.
+    fn visible_windows(&self) -> usize {
+        self.windows.values().filter(|&&visible| visible).count()
+    }
 }
 
 /// Tracks every surface and decides what should happen to it.
 ///
-/// Register each surface once, feed it [`HostEvent`]s as the world changes, and
-/// call [`Supervisor::tick`] to get back the [`crate::SurfaceAction`]s to perform.
+/// Register each surface once, feed it [`HostEvent`]s as the world changes
+/// with [`Supervisor::handle_at`], and call [`Supervisor::tick`] to get back
+/// the [`crate::SurfaceAction`]s to perform. [`Supervisor::request_suspend`]
+/// and [`Supervisor::request_resume`] cover manual overrides that bypass
+/// policy entirely.
 ///
 /// Time is caller-supplied throughout: the supervisor never reads a clock, which
 /// is what makes every time-dependent behaviour deterministic in tests.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Supervisor {
     surfaces: BTreeMap<SurfaceId, Entry>,
     ids: SurfaceIdAllocator,
-    now: Instant,
-}
-
-impl Default for Supervisor {
-    /// Same as [`Supervisor::new`]. `duet_core::Instant` does not implement
-    /// `Default`, so this is written by hand rather than derived.
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl Supervisor {
-    /// Creates an empty supervisor whose clock starts at zero.
+    /// Creates an empty supervisor.
     pub fn new() -> Self {
-        Supervisor {
-            surfaces: BTreeMap::new(),
-            ids: SurfaceIdAllocator::new(),
-            now: Instant(0),
-        }
+        Self::default()
     }
 
     /// Registers a surface with its teardown policy, returning its id.
     ///
-    /// The surface begins `Cold` with no windows.
+    /// The surface begins `Cold` with no windows and no recorded
+    /// interaction. The initial interaction instant is inert regardless of
+    /// its value: policy only ever consults it while `Live`, and every path
+    /// that makes a surface `Live` -- `Ready`, the automatic resume inside
+    /// [`Supervisor::tick`], and [`Supervisor::request_resume`] -- refreshes
+    /// it first.
     pub fn register(&mut self, policy: Policy) -> SurfaceId {
         let id = self.ids.next();
         self.surfaces.insert(
@@ -62,12 +75,19 @@ impl Supervisor {
             Entry {
                 policy,
                 state: SurfaceState::Cold,
-                open_windows: 0,
-                visible_windows: 0,
-                last_interaction: self.now,
+                windows: BTreeMap::new(),
+                last_interaction: Instant(0),
             },
         );
         id
+    }
+
+    /// Removes a surface. Returns `true` if it was registered.
+    ///
+    /// Without this, a surface the host has permanently discarded would be
+    /// evaluated on every future [`Supervisor::tick`] forever.
+    pub fn unregister(&mut self, id: SurfaceId) -> bool {
+        self.surfaces.remove(&id).is_some()
     }
 
     /// The surface's current lifecycle state, or `None` if it is not registered.
@@ -77,12 +97,12 @@ impl Supervisor {
 
     /// How many of the surface's windows are open, or `None` if unregistered.
     pub fn open_windows(&self, id: SurfaceId) -> Option<usize> {
-        self.surfaces.get(&id).map(|e| e.open_windows)
+        self.surfaces.get(&id).map(Entry::open_windows)
     }
 
     /// How many of the surface's windows are visible, or `None` if unregistered.
     pub fn visible_windows(&self, id: SurfaceId) -> Option<usize> {
-        self.surfaces.get(&id).map(|e| e.visible_windows)
+        self.surfaces.get(&id).map(Entry::visible_windows)
     }
 
     /// When the surface was last interacted with, or `None` if unregistered.
@@ -90,63 +110,103 @@ impl Supervisor {
         self.surfaces.get(&id).map(|e| e.last_interaction)
     }
 
-    /// Sets the supervisor's notion of now without evaluating any policy.
-    ///
-    /// [`Supervisor::tick`] does this for you; this exists so a host can
-    /// timestamp incoming events that arrive between ticks.
-    pub fn set_now(&mut self, now: Instant) {
-        self.now = now;
-    }
-
-    /// Applies a host event.
+    /// Applies a host event at the given instant.
     ///
     /// Events naming an unregistered surface are ignored: a host may report a
     /// window closing after its surface has already been dropped, and that is
-    /// not an error worth propagating.
-    pub fn handle(&mut self, event: &HostEvent) {
-        let now = self.now;
+    /// not an error worth propagating. The same goes for a window event
+    /// naming a window this surface never opened, or has already closed.
+    ///
+    /// `now` is a parameter here rather than tracked internally and set by a
+    /// separate call. An earlier version split this into `set_now` plus
+    /// `handle`, and forgetting the `set_now` call silently timestamped the
+    /// event with whatever `now` a previous `tick` happened to leave behind --
+    /// the same `at`-corruption trap `Decision::into_event` exists to close,
+    /// reintroduced one layer up. Requiring `now` on every call closes it the
+    /// same way.
+    pub fn handle_at(&mut self, now: Instant, event: HostEvent) {
         let Some(entry) = self.surfaces.get_mut(&event.surface()) else {
             return;
         };
 
         match event {
-            HostEvent::WindowOpened(_) => entry.open_windows += 1,
-            HostEvent::WindowClosed(_) => {
-                // Saturating rather than panicking: a host may report a close
-                // it never reported an open for, during a startup race or after
-                // a crash, and a buggy host must not take the supervisor down.
-                entry.open_windows = entry.open_windows.saturating_sub(1);
-                // A closed window cannot still be visible.
-                entry.visible_windows = entry.visible_windows.saturating_sub(1);
+            HostEvent::WindowOpened { window, .. } => {
+                entry.windows.insert(window, false);
             }
-            HostEvent::WindowShown(_) => entry.visible_windows += 1,
-            HostEvent::WindowHidden(_) => {
-                entry.visible_windows = entry.visible_windows.saturating_sub(1);
+            HostEvent::WindowClosed { window, .. } => {
+                entry.windows.remove(&window);
+            }
+            HostEvent::WindowShown { window, .. } => {
+                // A window that was never opened cannot become visible.
+                // Ignoring it here is what keeps `visible_windows <=
+                // open_windows` true by construction, not by convention.
+                if let Some(visible) = entry.windows.get_mut(&window) {
+                    *visible = true;
+                }
+            }
+            HostEvent::WindowHidden { window, .. } => {
+                if let Some(visible) = entry.windows.get_mut(&window) {
+                    *visible = false;
+                }
             }
             HostEvent::Interacted(_) => entry.last_interaction = now,
-            HostEvent::Ready(_) => apply(entry, &LifecycleEvent::Ready),
-            HostEvent::Failed(_, why) => apply(entry, &LifecycleEvent::Fail(why.clone())),
+            HostEvent::Ready(_) => {
+                apply(entry, &LifecycleEvent::Ready);
+                refresh_if_live(entry, now);
+            }
+            HostEvent::Failed(_, why) => apply(entry, &LifecycleEvent::Fail(why)),
             HostEvent::Retry(_) => apply(entry, &LifecycleEvent::Retry),
         }
     }
 
-    /// Advances the clock, evaluates every surface's policy, and returns the
-    /// actions the host must perform.
+    /// Evaluates every surface's policy and returns the actions the host
+    /// must perform.
     ///
     /// Actions come back in `SurfaceId` order, which makes tests and logs
-    /// reproducible. Applying them is the host's job — see
+    /// reproducible. Applying them is the host's job -- see
     /// [`SurfaceAction::Teardown`] for an obligation the supervisor cannot
     /// discharge itself.
     pub fn tick(&mut self, now: Instant) -> Vec<SurfaceAction> {
-        self.now = now;
         let mut actions = Vec::new();
-
         for (id, entry) in &mut self.surfaces {
             if let Some(action) = decide(*id, entry, now) {
                 actions.push(action);
             }
         }
         actions
+    }
+
+    /// Suspends a surface immediately, bypassing policy.
+    ///
+    /// Design spec §5.2: manual suspend is always available and always
+    /// overrides policy, including [`Policy::Never`]. Returns the action to
+    /// perform, or `None` if the surface is unregistered or not currently
+    /// `Live` -- suspending only ever applies to a live surface, so there is
+    /// nothing to do from any other state.
+    pub fn request_suspend(&mut self, id: SurfaceId, now: Instant) -> Option<SurfaceAction> {
+        let entry = self.surfaces.get_mut(&id)?;
+        if entry.state != SurfaceState::Live {
+            return None;
+        }
+        apply(entry, &LifecycleEvent::Suspend { at: now });
+        Some(SurfaceAction::Suspend(id))
+    }
+
+    /// Resumes a surface immediately, bypassing policy.
+    ///
+    /// Design spec §5.2: manual resume is always available and always
+    /// overrides policy. Returns the action to perform, or `None` if the
+    /// surface is unregistered or not currently `Suspending` -- resuming only
+    /// cancels a pending suspension, so there is nothing to do from any
+    /// other state.
+    pub fn request_resume(&mut self, id: SurfaceId, now: Instant) -> Option<SurfaceAction> {
+        let entry = self.surfaces.get_mut(&id)?;
+        if !matches!(entry.state, SurfaceState::Suspending { .. }) {
+            return None;
+        }
+        apply(entry, &LifecycleEvent::Resume);
+        refresh_if_live(entry, now);
+        Some(SurfaceAction::Resume(id))
     }
 }
 
@@ -163,32 +223,71 @@ fn apply(entry: &mut Entry, event: &LifecycleEvent) {
     }
 }
 
+/// Refreshes the idle clock whenever a surface has just become `Live`.
+///
+/// Applied after `Ready`, after the automatic resume inside [`decide`], and
+/// after [`Supervisor::request_resume`]. Without this, a surface that has
+/// just finished booting or reattaching is already "idle" under
+/// [`Policy::IdleTimeout`] if any time has passed since it was registered (or
+/// since it was last interacted with, for a resumed one) -- and can be
+/// suspended on its very first tick, having never received any input.
+fn refresh_if_live(entry: &mut Entry, now: Instant) {
+    if entry.state == SurfaceState::Live {
+        entry.last_interaction = now;
+    }
+}
+
+/// Whether a `Suspending` surface with an open window should resume, rather
+/// than let its policy govern the pending teardown.
+///
+/// Probes the policy as though the surface were already `Live`, and resumes
+/// only when the policy would not immediately re-suspend it. Deriving this
+/// from [`evaluate`] rather than re-stating each policy's suspend condition
+/// is what keeps the two in step: an earlier version used `open_windows > 0`
+/// directly, which happens to be the right answer for
+/// [`Policy::OnLastWindowClosed`] (whose suspend condition *is*
+/// `open_windows == 0`) and is unrelated to the other policies. A
+/// [`Policy::OnHidden`] or [`Policy::IdleTimeout`] surface with an open
+/// window would resume under that condition and immediately re-qualify for
+/// suspension, oscillating between `Live` and `Suspending` forever without
+/// ever reaching `Cold`.
+fn would_resume(entry: &Entry, now: Instant) -> bool {
+    if entry.open_windows() == 0 {
+        return false;
+    }
+    let probe = PolicyInput {
+        state: SurfaceState::Live,
+        open_windows: entry.open_windows(),
+        visible_windows: entry.visible_windows(),
+        last_interaction: entry.last_interaction,
+        now,
+    };
+    evaluate(&entry.policy, &probe) != Decision::Suspend
+}
+
 /// Decides what should happen to one surface, applying the resulting
 /// transition. Returns `None` when nothing should change.
 fn decide(id: SurfaceId, entry: &mut Entry, now: Instant) -> Option<SurfaceAction> {
     // A surface with a window but no renderer needs one, whatever the policy
     // says — policy governs teardown, not startup.
-    let wants_renderer = entry.open_windows > 0;
-    match entry.state {
-        SurfaceState::Cold if wants_renderer => {
-            apply(entry, &LifecycleEvent::Start);
-            return Some(SurfaceAction::Start(id));
-        }
-        SurfaceState::Suspending { .. } if wants_renderer => {
-            // Resume cancels the pending teardown without reaching Cold. The
-            // renderer was never destroyed, so this is a view reattach rather
-            // than an engine boot — hence `Resume`, not `Start`. Avoiding that
-            // ~180 ms boot is the entire reason the grace period exists.
-            apply(entry, &LifecycleEvent::Resume);
-            return Some(SurfaceAction::Resume(id));
-        }
-        _ => {}
+    if entry.state == SurfaceState::Cold && entry.open_windows() > 0 {
+        apply(entry, &LifecycleEvent::Start);
+        return Some(SurfaceAction::Start(id));
+    }
+
+    if matches!(entry.state, SurfaceState::Suspending { .. }) && would_resume(entry, now) {
+        // Resume cancels the pending teardown without reaching Cold. The
+        // renderer was never destroyed, so this is a view reattach rather
+        // than an engine boot — hence `Resume`, not `Start`.
+        apply(entry, &LifecycleEvent::Resume);
+        refresh_if_live(entry, now);
+        return Some(SurfaceAction::Resume(id));
     }
 
     let input = PolicyInput {
         state: entry.state.clone(),
-        open_windows: entry.open_windows,
-        visible_windows: entry.visible_windows,
+        open_windows: entry.open_windows(),
+        visible_windows: entry.visible_windows(),
         last_interaction: entry.last_interaction,
         now,
     };
@@ -197,8 +296,9 @@ fn decide(id: SurfaceId, entry: &mut Entry, now: Instant) -> Option<SurfaceActio
     // same `now` that produced the decision; constructing the event by hand
     // here would silently corrupt the grace computation.
     let decision = evaluate(&entry.policy, &input);
-    let event = decision.into_event(now)?;
-    apply(entry, &event);
+    if let Some(event) = decision.into_event(now) {
+        apply(entry, &event);
+    }
 
     match decision {
         Decision::NoChange => None,
@@ -222,6 +322,7 @@ impl Supervisor {
 mod tests {
     use super::*;
     use crate::event::HostEvent;
+    use crate::id::WindowId;
     use duet_core::{Instant, Policy, SurfaceState};
 
     fn sup() -> (Supervisor, SurfaceId) {
@@ -247,15 +348,42 @@ mod tests {
     #[test]
     fn an_unregistered_surface_has_no_state() {
         let (s, _) = sup();
-        assert_eq!(s.state(SurfaceId(999)), None);
+        assert_eq!(s.state(SurfaceId::for_test(999)), None);
+    }
+
+    #[test]
+    fn default_supervisor_starts_empty_like_new() {
+        let mut s = Supervisor::default();
+        let id = s.register(Policy::Never);
+        assert_eq!(s.state(id), Some(SurfaceState::Cold));
+        assert_eq!(s.open_windows(id), Some(0));
     }
 
     #[test]
     fn window_counts_track_open_and_visible_separately() {
         let (mut s, id) = sup();
-        s.handle(&HostEvent::WindowOpened(id));
-        s.handle(&HostEvent::WindowOpened(id));
-        s.handle(&HostEvent::WindowShown(id));
+        let (w1, w2) = (WindowId::new(1), WindowId::new(2));
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowOpened {
+                surface: id,
+                window: w1,
+            },
+        );
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowOpened {
+                surface: id,
+                window: w2,
+            },
+        );
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowShown {
+                surface: id,
+                window: w1,
+            },
+        );
         assert_eq!(s.open_windows(id), Some(2));
         assert_eq!(s.visible_windows(id), Some(1));
     }
@@ -263,19 +391,57 @@ mod tests {
     #[test]
     fn hiding_reduces_visible_but_not_open() {
         let (mut s, id) = sup();
-        s.handle(&HostEvent::WindowOpened(id));
-        s.handle(&HostEvent::WindowShown(id));
-        s.handle(&HostEvent::WindowHidden(id));
+        let w = WindowId::new(1);
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowOpened {
+                surface: id,
+                window: w,
+            },
+        );
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowShown {
+                surface: id,
+                window: w,
+            },
+        );
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowHidden {
+                surface: id,
+                window: w,
+            },
+        );
         assert_eq!(s.open_windows(id), Some(1), "hiding must not close");
         assert_eq!(s.visible_windows(id), Some(0));
     }
 
     #[test]
-    fn closing_a_visible_window_reduces_both() {
+    fn closing_the_only_open_window_reduces_both_counts() {
         let (mut s, id) = sup();
-        s.handle(&HostEvent::WindowOpened(id));
-        s.handle(&HostEvent::WindowShown(id));
-        s.handle(&HostEvent::WindowClosed(id));
+        let w = WindowId::new(1);
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowOpened {
+                surface: id,
+                window: w,
+            },
+        );
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowShown {
+                surface: id,
+                window: w,
+            },
+        );
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowClosed {
+                surface: id,
+                window: w,
+            },
+        );
         assert_eq!(s.open_windows(id), Some(0));
         assert_eq!(
             s.visible_windows(id),
@@ -285,29 +451,202 @@ mod tests {
     }
 
     #[test]
-    fn counts_never_go_negative_on_unbalanced_events() {
-        // A host may report a close it never reported an open for — during
-        // startup races, or after a crash. Saturating rather than panicking
-        // keeps a buggy host from taking the supervisor down.
+    fn closing_one_of_two_open_windows_does_not_suspend() {
+        // Distinguishes "no windows open" from "a window closed" -- a
+        // single-window fixture cannot express this, since it can't tell
+        // "count went to zero" apart from "count went to one".
         let (mut s, id) = sup();
-        s.handle(&HostEvent::WindowClosed(id));
-        s.handle(&HostEvent::WindowHidden(id));
+        s.force_state(id, SurfaceState::Live);
+        let (w1, w2) = (WindowId::new(1), WindowId::new(2));
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowOpened {
+                surface: id,
+                window: w1,
+            },
+        );
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowOpened {
+                surface: id,
+                window: w2,
+            },
+        );
+        assert_eq!(s.open_windows(id), Some(2));
+
+        s.handle_at(
+            Instant(100),
+            HostEvent::WindowClosed {
+                surface: id,
+                window: w1,
+            },
+        );
+        assert_eq!(
+            s.open_windows(id),
+            Some(1),
+            "closing one window must leave the other counted"
+        );
+        assert_eq!(
+            s.tick(Instant(200)),
+            vec![],
+            "one window is still open; the surface must not suspend"
+        );
+        assert_eq!(s.state(id), Some(SurfaceState::Live));
+    }
+
+    #[test]
+    fn events_for_unknown_windows_are_ignored() {
+        // A host may report a close, or a hide, for a window it never
+        // reported opening -- during a startup race, or after a crash. Both
+        // must be silently ignored rather than panicking.
+        let (mut s, id) = sup();
+        let w = WindowId::new(1);
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowClosed {
+                surface: id,
+                window: w,
+            },
+        );
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowHidden {
+                surface: id,
+                window: w,
+            },
+        );
         assert_eq!(s.open_windows(id), Some(0));
         assert_eq!(s.visible_windows(id), Some(0));
     }
 
     #[test]
+    fn showing_or_hiding_an_unopened_window_is_ignored() {
+        let (mut s, id) = sup();
+        let w = WindowId::new(7);
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowShown {
+                surface: id,
+                window: w,
+            },
+        );
+        assert_eq!(
+            s.visible_windows(id),
+            Some(0),
+            "a window that was never opened cannot become visible"
+        );
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowHidden {
+                surface: id,
+                window: w,
+            },
+        );
+        assert_eq!(s.visible_windows(id), Some(0));
+        assert_eq!(
+            s.open_windows(id),
+            Some(0),
+            "neither event should have opened the window as a side effect"
+        );
+    }
+
+    #[test]
+    fn visible_windows_never_exceeds_open_windows_across_event_sequences() {
+        // duet_core::PolicyInput::visible_windows documents `<=
+        // open_windows` as an invariant. This drives every kind of window
+        // event across several windows -- including repeats and events for
+        // windows already closed or never opened -- and checks the
+        // invariant after every single step, not just at the end.
+        let (mut s, id) = sup();
+        let windows: Vec<WindowId> = (0..3).map(WindowId::new).collect();
+        let events = [
+            HostEvent::WindowOpened {
+                surface: id,
+                window: windows[0],
+            },
+            HostEvent::WindowShown {
+                surface: id,
+                window: windows[0],
+            },
+            HostEvent::WindowOpened {
+                surface: id,
+                window: windows[1],
+            },
+            HostEvent::WindowShown {
+                surface: id,
+                window: windows[1],
+            },
+            HostEvent::WindowHidden {
+                surface: id,
+                window: windows[0],
+            },
+            HostEvent::WindowClosed {
+                surface: id,
+                window: windows[0],
+            },
+            HostEvent::WindowClosed {
+                surface: id,
+                window: windows[0],
+            }, // repeat
+            HostEvent::WindowHidden {
+                surface: id,
+                window: windows[0],
+            }, // stale
+            HostEvent::WindowShown {
+                surface: id,
+                window: windows[2],
+            }, // never opened
+            HostEvent::WindowOpened {
+                surface: id,
+                window: windows[2],
+            },
+            HostEvent::WindowShown {
+                surface: id,
+                window: windows[2],
+            },
+            HostEvent::WindowClosed {
+                surface: id,
+                window: windows[1],
+            },
+            HostEvent::WindowClosed {
+                surface: id,
+                window: windows[2],
+            },
+        ];
+
+        for (i, event) in events.into_iter().enumerate() {
+            s.handle_at(Instant(i as u64), event);
+            let open = s.open_windows(id).expect("surface stays registered");
+            let visible = s.visible_windows(id).expect("surface stays registered");
+            assert!(
+                visible <= open,
+                "step {i}: visible ({visible}) exceeded open ({open})"
+            );
+        }
+    }
+
+    #[test]
     fn events_for_unknown_surfaces_are_ignored() {
-        let (mut s, _) = sup();
-        s.handle(&HostEvent::WindowOpened(SurfaceId(999)));
-        assert_eq!(s.state(SurfaceId(999)), None);
+        let (mut s, id) = sup();
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowOpened {
+                surface: SurfaceId::for_test(999),
+                window: WindowId::new(1),
+            },
+        );
+        assert_eq!(s.state(SurfaceId::for_test(999)), None);
+        assert_eq!(
+            s.open_windows(id),
+            Some(0),
+            "an event for an unknown surface must not disturb a registered one"
+        );
     }
 
     #[test]
     fn interaction_updates_the_idle_clock() {
         let (mut s, id) = sup();
-        s.set_now(Instant(1_000));
-        s.handle(&HostEvent::Interacted(id));
+        s.handle_at(Instant(1_000), HostEvent::Interacted(id));
         assert_eq!(s.last_interaction(id), Some(Instant(1_000)));
     }
 
@@ -315,14 +654,17 @@ mod tests {
     fn ready_moves_a_starting_surface_to_live() {
         let (mut s, id) = sup();
         s.force_state(id, SurfaceState::Starting);
-        s.handle(&HostEvent::Ready(id));
+        s.handle_at(Instant(0), HostEvent::Ready(id));
         assert_eq!(s.state(id), Some(SurfaceState::Live));
     }
 
     #[test]
     fn failure_is_recorded_with_its_reason() {
         let (mut s, id) = sup();
-        s.handle(&HostEvent::Failed(id, "renderer crashed".to_string()));
+        s.handle_at(
+            Instant(0),
+            HostEvent::Failed(id, "renderer crashed".to_string()),
+        );
         assert_eq!(
             s.state(id),
             Some(SurfaceState::Failed("renderer crashed".to_string()))
@@ -335,7 +677,7 @@ mod tests {
         // rejects it; the supervisor must absorb that rather than panic or
         // corrupt its own state.
         let (mut s, id) = sup();
-        s.handle(&HostEvent::Ready(id));
+        s.handle_at(Instant(0), HostEvent::Ready(id));
         assert_eq!(
             s.state(id),
             Some(SurfaceState::Cold),
@@ -362,7 +704,13 @@ mod tests {
     fn a_live_surface_with_an_open_window_is_left_alone() {
         let (mut s, id) = sup();
         s.force_state(id, SurfaceState::Live);
-        s.handle(&HostEvent::WindowOpened(id));
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowOpened {
+                surface: id,
+                window: WindowId::new(1),
+            },
+        );
         assert_eq!(s.tick(Instant(1_000)), vec![]);
         assert_eq!(s.state(id), Some(SurfaceState::Live));
     }
@@ -385,30 +733,42 @@ mod tests {
     #[test]
     fn reopening_during_grace_cancels_teardown_without_reaching_cold() {
         // The anti-thrash property. Spike A measured a cold engine boot at
-        // ~180 ms; the grace period exists to avoid paying it.
+        // roughly 180 ms; the grace period exists to avoid paying it.
         let (mut s, id) = sup();
         s.force_state(id, SurfaceState::Live);
         s.tick(Instant(1_000));
         assert!(matches!(s.state(id), Some(SurfaceState::Suspending { .. })));
 
-        s.handle(&HostEvent::WindowOpened(id));
+        s.handle_at(
+            Instant(2_000),
+            HostEvent::WindowOpened {
+                surface: id,
+                window: WindowId::new(1),
+            },
+        );
         let actions = s.tick(Instant(2_000));
         assert_eq!(
             actions,
             vec![SurfaceAction::Resume(id)],
             "a renderer that was only suspended must be reattached, not rebooted"
         );
-        assert_ne!(
+        assert_eq!(
             s.state(id),
-            Some(SurfaceState::Cold),
-            "the surface must never reach Cold during the grace window"
+            Some(SurfaceState::Live),
+            "the surface must return to Live, never pass through Cold"
         );
     }
 
     #[test]
     fn a_cold_surface_with_a_window_is_started() {
         let (mut s, id) = sup();
-        s.handle(&HostEvent::WindowOpened(id));
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowOpened {
+                surface: id,
+                window: WindowId::new(1),
+            },
+        );
         assert_eq!(s.tick(Instant(0)), vec![SurfaceAction::Start(id)]);
         assert_eq!(s.state(id), Some(SurfaceState::Starting));
     }
@@ -416,7 +776,13 @@ mod tests {
     #[test]
     fn a_starting_surface_is_not_started_again() {
         let (mut s, id) = sup();
-        s.handle(&HostEvent::WindowOpened(id));
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowOpened {
+                surface: id,
+                window: WindowId::new(1),
+            },
+        );
         assert_eq!(s.tick(Instant(0)), vec![SurfaceAction::Start(id)]);
         assert_eq!(
             s.tick(Instant(100)),
@@ -428,11 +794,17 @@ mod tests {
     #[test]
     fn a_failed_surface_is_left_alone_until_retried() {
         let (mut s, id) = sup();
-        s.handle(&HostEvent::WindowOpened(id));
-        s.handle(&HostEvent::Failed(id, "boom".to_string()));
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowOpened {
+                surface: id,
+                window: WindowId::new(1),
+            },
+        );
+        s.handle_at(Instant(0), HostEvent::Failed(id, "boom".to_string()));
         assert_eq!(s.tick(Instant(1_000)), vec![]);
 
-        s.handle(&HostEvent::Retry(id));
+        s.handle_at(Instant(1_000), HostEvent::Retry(id));
         assert_eq!(s.state(id), Some(SurfaceState::Starting));
     }
 
@@ -441,31 +813,101 @@ mod tests {
         let mut s = Supervisor::new();
         let id = s.register(Policy::Never);
         s.force_state(id, SurfaceState::Live);
-        assert_eq!(s.tick(Instant(u64::MAX)), vec![]);
+        for now in [0u64, 1_000, 1_000_000, u64::MAX] {
+            assert_eq!(
+                s.tick(Instant(now)),
+                vec![],
+                "Never must stay inert at t={now}"
+            );
+        }
         assert_eq!(s.state(id), Some(SurfaceState::Live));
     }
 
     #[test]
-    fn on_hidden_policy_suspends_a_visible_count_of_zero() {
+    fn on_hidden_policy_reaches_teardown_without_oscillating() {
         let mut s = Supervisor::new();
         let id = s.register(Policy::OnHidden { grace_ms: 1_000 });
         s.force_state(id, SurfaceState::Live);
-        s.handle(&HostEvent::WindowOpened(id));
-        // Open but never shown: visible == 0.
+        let w = WindowId::new(1);
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowOpened {
+                surface: id,
+                window: w,
+            },
+        );
+        // Open but never shown: visible == 0, so OnHidden suspends at once.
         assert_eq!(s.tick(Instant(0)), vec![SurfaceAction::Suspend(id)]);
+
+        // The window stays open (merely hidden) through the entire grace
+        // period. The bug this test pins: the old `open_windows > 0` resume
+        // condition would have resumed the surface on every one of these
+        // ticks, since it never checked visibility at all -- the fix must
+        // not.
+        assert_eq!(s.tick(Instant(500)), vec![], "grace has not elapsed");
+        assert_eq!(s.tick(Instant(999)), vec![], "one ms before grace elapses");
+        assert_eq!(s.tick(Instant(1_000)), vec![SurfaceAction::Teardown(id)]);
+        assert_eq!(s.state(id), Some(SurfaceState::Cold));
+
+        // Close the window now so a later tick cannot auto-restart the
+        // surface from Cold (a window still open after teardown legitimately
+        // needs a fresh `Start` — see `a_cold_surface_with_a_window_is_started`
+        // — which is unrelated to the oscillation property under test here).
+        s.handle_at(
+            Instant(1_000),
+            HostEvent::WindowClosed {
+                surface: id,
+                window: w,
+            },
+        );
+        assert_eq!(s.tick(Instant(2_000)), vec![]);
+        assert_eq!(s.tick(Instant(10_000)), vec![]);
+        assert_eq!(s.tick(Instant(100_000)), vec![]);
+        assert_eq!(s.state(id), Some(SurfaceState::Cold));
     }
 
     #[test]
-    fn idle_timeout_suspends_only_after_the_interval() {
+    fn idle_timeout_reaches_teardown_without_oscillating() {
         let mut s = Supervisor::new();
         let id = s.register(Policy::IdleTimeout { after_ms: 1_000 });
         s.force_state(id, SurfaceState::Live);
-        s.handle(&HostEvent::WindowOpened(id));
-        s.set_now(Instant(0));
-        s.handle(&HostEvent::Interacted(id));
+        let w = WindowId::new(1);
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowOpened {
+                surface: id,
+                window: w,
+            },
+        );
+        s.handle_at(Instant(0), HostEvent::Interacted(id));
 
-        assert_eq!(s.tick(Instant(999)), vec![]);
+        assert_eq!(
+            s.tick(Instant(999)),
+            vec![],
+            "one ms before the idle interval elapses"
+        );
         assert_eq!(s.tick(Instant(1_000)), vec![SurfaceAction::Suspend(id)]);
+
+        // The window is still open here. The bug this test pins: the old
+        // `open_windows > 0` resume condition would have resumed the
+        // surface immediately, regardless of idle time -- the fix must not.
+        // IdleTimeout carries no separate grace once Suspending (duet-core:
+        // the idle interval already served as the grace period), so
+        // teardown follows on the very next tick.
+        assert_eq!(s.tick(Instant(1_000)), vec![SurfaceAction::Teardown(id)]);
+        assert_eq!(s.state(id), Some(SurfaceState::Cold));
+
+        s.handle_at(
+            Instant(1_000),
+            HostEvent::WindowClosed {
+                surface: id,
+                window: w,
+            },
+        );
+        assert_eq!(s.tick(Instant(2_000)), vec![]);
+        assert_eq!(s.tick(Instant(10_000)), vec![]);
+        assert_eq!(s.tick(Instant(100_000)), vec![]);
+        assert_eq!(s.state(id), Some(SurfaceState::Cold));
     }
 
     #[test]
@@ -473,19 +915,125 @@ mod tests {
         let mut s = Supervisor::new();
         let id = s.register(Policy::IdleTimeout { after_ms: 1_000 });
         s.force_state(id, SurfaceState::Live);
-        s.handle(&HostEvent::WindowOpened(id));
-        s.set_now(Instant(0));
-        s.handle(&HostEvent::Interacted(id));
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowOpened {
+                surface: id,
+                window: WindowId::new(1),
+            },
+        );
+        s.handle_at(Instant(0), HostEvent::Interacted(id));
 
         assert_eq!(s.tick(Instant(900)), vec![]);
-        s.set_now(Instant(900));
-        s.handle(&HostEvent::Interacted(id));
+        s.handle_at(Instant(900), HostEvent::Interacted(id));
         assert_eq!(
             s.tick(Instant(1_500)),
             vec![],
             "the later interaction must push the deadline out"
         );
         assert_eq!(s.tick(Instant(1_900)), vec![SurfaceAction::Suspend(id)]);
+    }
+
+    #[test]
+    fn a_freshly_started_surface_is_not_immediately_idle() {
+        // Mutation testing found that stamping `last_interaction` at
+        // registration time and never refreshing it survived the suite: no
+        // test registered at a non-zero `now`. The real gap was worse than
+        // the mutant -- `last_interaction` was never refreshed when a
+        // surface actually became Live, so a surface that had just finished
+        // booting could already be "idle" if any time had passed since
+        // registration, and get suspended having never received input.
+        let mut s = Supervisor::new();
+        let id = s.register(Policy::IdleTimeout { after_ms: 1_000 });
+        // Register long after zero, then bring the surface up.
+        let w = WindowId::new(1);
+        s.handle_at(
+            Instant(10_000),
+            HostEvent::WindowOpened {
+                surface: id,
+                window: w,
+            },
+        );
+        assert_eq!(s.tick(Instant(10_000)), vec![SurfaceAction::Start(id)]);
+        s.handle_at(Instant(10_100), HostEvent::Ready(id));
+        assert_eq!(
+            s.tick(Instant(10_500)),
+            vec![],
+            "a surface that just became Live must not count as idle"
+        );
+    }
+
+    #[test]
+    fn manual_suspend_and_resume_override_every_policy_including_never() {
+        for policy in [
+            Policy::Never,
+            Policy::OnLastWindowClosed { grace_ms: 5_000 },
+            Policy::OnHidden { grace_ms: 5_000 },
+            Policy::IdleTimeout { after_ms: 5_000 },
+        ] {
+            let mut s = Supervisor::new();
+            let id = s.register(policy.clone());
+            s.force_state(id, SurfaceState::Live);
+
+            assert_eq!(
+                s.request_suspend(id, Instant(0)),
+                Some(SurfaceAction::Suspend(id)),
+                "policy {policy:?} must not block a manual suspend"
+            );
+            assert_eq!(
+                s.state(id),
+                Some(SurfaceState::Suspending { since: Instant(0) })
+            );
+
+            assert_eq!(
+                s.request_resume(id, Instant(1)),
+                Some(SurfaceAction::Resume(id)),
+                "policy {policy:?} must not block a manual resume"
+            );
+            assert_eq!(s.state(id), Some(SurfaceState::Live));
+        }
+    }
+
+    #[test]
+    fn manual_suspend_is_a_no_op_outside_live() {
+        let (mut s, id) = sup();
+        assert_eq!(s.state(id), Some(SurfaceState::Cold));
+        assert_eq!(s.request_suspend(id, Instant(0)), None);
+        assert_eq!(s.state(id), Some(SurfaceState::Cold));
+    }
+
+    #[test]
+    fn manual_resume_is_a_no_op_outside_suspending() {
+        let (mut s, id) = sup();
+        s.force_state(id, SurfaceState::Live);
+        assert_eq!(s.request_resume(id, Instant(0)), None);
+        assert_eq!(s.state(id), Some(SurfaceState::Live));
+    }
+
+    #[test]
+    fn manual_suspend_and_resume_on_an_unregistered_surface_are_no_ops() {
+        let mut s = Supervisor::new();
+        let id = SurfaceId::for_test(999);
+        assert_eq!(s.request_suspend(id, Instant(0)), None);
+        assert_eq!(s.request_resume(id, Instant(0)), None);
+    }
+
+    #[test]
+    fn unregister_removes_a_surface() {
+        let (mut s, id) = sup();
+        assert!(s.unregister(id));
+        assert_eq!(s.state(id), None);
+        // Removing it again is a no-op, reported honestly.
+        assert!(!s.unregister(id));
+    }
+
+    #[test]
+    fn an_unregistered_surface_is_never_ticked_again() {
+        let (mut s, id) = sup();
+        s.force_state(id, SurfaceState::Live);
+        s.unregister(id);
+        // If it were still tracked, this tick would emit Suspend.
+        assert_eq!(s.tick(Instant(1_000)), vec![]);
     }
 
     #[test]
@@ -519,17 +1067,5 @@ mod tests {
         let actions = s.tick(Instant(0));
         let targets: Vec<SurfaceId> = actions.iter().map(|a| a.surface()).collect();
         assert_eq!(targets, ids, "actions must come back in id order");
-    }
-
-    #[test]
-    fn tick_advances_the_clock() {
-        let (mut s, id) = sup();
-        s.tick(Instant(4_242));
-        s.handle(&HostEvent::Interacted(id));
-        assert_eq!(
-            s.last_interaction(id),
-            Some(Instant(4_242)),
-            "an event handled after a tick must use that tick's time"
-        );
     }
 }
