@@ -451,11 +451,51 @@ Behaviour that must NOT regress: `"foo[]"` → `InvalidIndex("")`; `"a..b"` →
 `UnclosedIndex(3)`; `"foo[-1]"` → `InvalidIndex("-1")`; `"café.zoom"` → `Ok`; `"a[0][1].b"`
 → `Ok` and round-trips.
 
-Task 3 therefore ends at **14 tests**, not 10. Every later task's cumulative count shifts by
-+4.
-
 ```bash
 git commit -m "fix(core): reject stray brackets and text after an index"
+```
+
+- [ ] **Step 7: Close the remaining grammar holes (second amendment)**
+
+A deeper review found Step 6 insufficient. The parse↔Display round-trip still failed on
+**36 of 2748** accepted short inputs, from two causes:
+
+- **`parse("a.[0]")` was accepted.** The `expect_key` flag is documented as enforcing "a key
+  must follow a dot" but was never checked, and its `= true` initialiser was dead code — the
+  loop body unconditionally assigns `false`, and the empty-string early return guarantees at
+  least one iteration. Initialise it to `false` so it means "a dot was just consumed", then
+  reject `[` when it is set. A leading `[0]` stays legal.
+- **`usize::from_str` accepts `[007]` and `[+3]`.** Require canonical decimal: non-empty, all
+  ASCII digits, no leading zero unless the literal is exactly `0`. Reject rather than
+  normalise — silent normalisation would leave the round-trip broken.
+
+Also in this step:
+
+- `InvalidIndex` becomes `{ at: usize, raw: String }`. It was the only variant without a
+  position, so `a[1].b[2].c[x]` gave a guest no way to locate the bad bracket.
+- `PathParseError` gains `Display` and `std::error::Error` impls and `#[non_exhaustive]`.
+  These errors cross an IPC boundary to non-Rust guests, so something must render them, and
+  the enum has now changed twice while it still has no external consumers.
+- `parse` splits into private `scan_key` and `scan_index` helpers to stay under the 50-line
+  guideline.
+- `parse` docs gain an `# Errors` section stating that **all offsets are byte offsets**,
+  which will not align with JavaScript UTF-16 or Dart string indices — a real hazard at the
+  IPC boundary — plus the accepted key character set (any run excluding `.`, `[`, `]`;
+  whitespace included; not trimmed).
+- `from_segments` documents that it performs no validation, with a `debug_assert!` that no
+  key contains `.`, `[`, or `]`.
+
+**The key addition is `round_trip_is_total_over_short_inputs`**, which exhaustively
+enumerates every string of length 0..=4 over `['a', '.', '[', ']', '0', 'é']` and asserts
+that each accepted input renders back to itself. This is a property test rather than an
+example test: it would have caught all 36 counterexamples at once, and it guards the
+invariant permanently. Verify it fails before the grammar fixes and passes after.
+
+Task 3 therefore ends at **23 tests**, not 10. Every later task's cumulative count shifts by
++13.
+
+```bash
+git commit -m "fix(core): close path grammar holes and add error positions"
 ```
 
 ---
@@ -542,7 +582,7 @@ Add to the `impl Path` block:
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p duet-core`
-Expected: PASS — 20 passed.
+Expected: PASS — 29 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -704,7 +744,7 @@ pub use value::Value;
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p duet-core`
-Expected: PASS — 26 passed.
+Expected: PASS — 35 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -866,7 +906,7 @@ pub use value::{SetError, Value};
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p duet-core`
-Expected: PASS — 33 passed.
+Expected: PASS — 42 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1046,7 +1086,7 @@ warns, leave it; the next task resolves it.
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p duet-core`
-Expected: PASS — 38 passed.
+Expected: PASS — 47 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1227,7 +1267,7 @@ pub use store::{Notification, Patch, Store, SubscriberId, SubscriptionId};
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p duet-core`
-Expected: PASS — 45 passed.
+Expected: PASS — 54 passed.
 
 - [ ] **Step 5: Verify there are no warnings**
 
@@ -1471,7 +1511,7 @@ pub use value::{SetError, Value};
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p duet-core`
-Expected: PASS — 55 passed.
+Expected: PASS — 64 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1730,7 +1770,7 @@ pub use value::{SetError, Value};
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p duet-core`
-Expected: PASS — 64 passed.
+Expected: PASS — 73 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1858,7 +1898,7 @@ pub use value::{SetError, Value};
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p duet-core`
-Expected: PASS — 64 unit tests and 2 integration tests.
+Expected: PASS — 73 unit tests and 2 integration tests.
 
 - [ ] **Step 5: Commit**
 
@@ -1940,7 +1980,7 @@ git commit -m "ci: add duet-core test and coverage gate"
 
 ## Done criteria
 
-- [ ] `cargo test -p duet-core` passes — 64 unit, 2 integration
+- [ ] `cargo test -p duet-core` passes — 73 unit, 2 integration
 - [ ] `cargo llvm-cov -p duet-core --fail-under-lines 90` exits 0
 - [ ] `cargo clippy -p duet-core --all-targets -- -D warnings` is clean
 - [ ] `crates/duet-core/Cargo.toml` still has an empty `[dependencies]`
