@@ -24,8 +24,10 @@
 #![deny(missing_docs)]
 
 pub mod error;
+pub mod sink;
 
 pub use error::RuntimeError;
+pub use sink::{NullSink, RecordingSink, Sink, SinkError};
 
 /// These bounds are load-bearing: the core thread owns the `Store` and receives
 /// values from other threads. Asserted here so a change that breaks them fails
