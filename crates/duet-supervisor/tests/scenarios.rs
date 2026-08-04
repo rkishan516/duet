@@ -1,7 +1,7 @@
 //! End-to-end lifecycle journeys, driven only through the public API.
 
 use duet_core::{Instant, Policy, SurfaceState};
-use duet_supervisor::{HostEvent, Supervisor, SurfaceAction, WindowId};
+use duet_supervisor::{HostEvent, Supervisor, SurfaceAction, SurfaceId, WindowId};
 
 #[test]
 fn a_surface_completes_a_full_open_use_close_teardown_journey() {
@@ -245,53 +245,106 @@ fn a_torn_down_surface_starts_again_when_a_window_reopens() {
     assert_eq!(s.state(id), Some(SurfaceState::Starting));
 }
 
+/// Runs a realistic host loop through the public API only: tick, and report
+/// `Ready` whenever told to bring the surface up. Returns every action
+/// emitted, across the whole run, in order.
+///
+/// A correct implementation settles. An oscillating one emits actions
+/// forever, which no test that stops after the first action would catch —
+/// exactly how two earlier defects in `duet-supervisor` survived review.
+fn run_host_loop(s: &mut Supervisor, id: SurfaceId) -> Vec<SurfaceAction> {
+    let mut all = Vec::new();
+    for i in 0..40u64 {
+        let t = Instant(i * 100);
+        for action in s.tick(t) {
+            all.push(action);
+            if matches!(action, SurfaceAction::Start(_) | SurfaceAction::Resume(_)) {
+                s.handle_at(t, HostEvent::Ready(id));
+            }
+        }
+    }
+    all
+}
+
 #[test]
-fn on_hidden_and_idle_timeout_policies_reach_teardown_without_oscillating() {
-    // C1 regression coverage at the integration level, through the public
-    // API only: a surface whose window stays open the entire time (merely
-    // hidden, for OnHidden; merely idle, for IdleTimeout) must still reach
-    // Teardown rather than resuming and re-suspending forever.
-    // `open_windows > 0` alone is not the resume condition for either of
-    // these policies, only for `OnLastWindowClosed`.
+fn on_hidden_never_starts_a_surface_whose_window_is_only_ever_hidden() {
+    // C1's original defect (an oscillating resume) was fixed first; this is
+    // the twin defect the same review found next, once probed with a
+    // realistic host loop: the Cold arm used "has an open window" as
+    // sufficient reason to start, which for OnHidden with a window that is
+    // opened but never shown produced a real Start -> Suspend -> Teardown
+    // cycle, repeating forever, each one paying a real engine boot for a
+    // window nobody could see. A window that stays hidden the whole run
+    // must never be started at all.
+    let mut s = Supervisor::new();
+    let id = s.register(Policy::OnHidden { grace_ms: 1_000 });
+    s.handle_at(
+        Instant(0),
+        HostEvent::WindowOpened {
+            surface: id,
+            window: WindowId::new(1),
+        },
+    );
+
+    assert_eq!(run_host_loop(&mut s, id), vec![]);
+    assert_eq!(s.state(id), Some(SurfaceState::Cold));
+}
+
+#[test]
+fn idle_timeout_settles_after_one_cycle_with_no_further_interaction() {
+    // The IdleTimeout counterpart. Unlike OnHidden, a freshly registered
+    // surface is not yet idle at the instant of registration, so the first
+    // tick (which lands at that same instant) still starts it; from there it
+    // runs one natural Suspend/Teardown cycle and then -- the property under
+    // test -- never restarts, because the same Cold-arm guard now blocks a
+    // surface whose interaction has gone stale.
+    let mut s = Supervisor::new();
+    let id = s.register(Policy::IdleTimeout { after_ms: 1_000 });
+    s.handle_at(
+        Instant(0),
+        HostEvent::WindowOpened {
+            surface: id,
+            window: WindowId::new(1),
+        },
+    );
+
+    assert_eq!(
+        run_host_loop(&mut s, id),
+        vec![
+            SurfaceAction::Start(id),
+            SurfaceAction::Suspend(id),
+            SurfaceAction::Teardown(id),
+        ]
+    );
+    assert_eq!(s.state(id), Some(SurfaceState::Cold));
+}
+
+#[test]
+fn on_last_window_closed_and_never_start_once_and_stay_live_with_an_open_window() {
+    // The policies for which "has an open window" and "policy would not
+    // immediately re-suspend" happen to coincide -- OnLastWindowClosed's
+    // suspend condition literally is `open_windows == 0`, and Never's
+    // `evaluate` is always `NoChange`. Neither should be blocked from
+    // starting just because the fix now consults policy on the Cold arm too.
     for policy in [
-        Policy::OnHidden { grace_ms: 1_000 },
-        Policy::IdleTimeout { after_ms: 1_000 },
+        Policy::OnLastWindowClosed { grace_ms: 1_000 },
+        Policy::Never,
     ] {
         let mut s = Supervisor::new();
         let id = s.register(policy.clone());
-        let window = WindowId::new(1);
-
         s.handle_at(
             Instant(0),
             HostEvent::WindowOpened {
                 surface: id,
-                window,
+                window: WindowId::new(1),
             },
         );
+
         assert_eq!(
-            s.tick(Instant(0)),
+            run_host_loop(&mut s, id),
             vec![SurfaceAction::Start(id)],
-            "policy {policy:?}"
+            "policy {policy:?}: one boot, then stable at Live"
         );
-        s.handle_at(Instant(0), HostEvent::Ready(id));
-
-        // The window is opened but never shown, and no further interaction
-        // is ever reported, so both policies suspend at t=1000.
-        assert_eq!(
-            s.tick(Instant(1_000)),
-            vec![SurfaceAction::Suspend(id)],
-            "policy {policy:?}"
-        );
-
-        // The window stays open throughout. By t=2000 both policies' grace
-        // has elapsed (OnHidden's 1000ms grace measured from when
-        // Suspending began; IdleTimeout carries none once Suspending) and
-        // teardown must have fired, never bounced back to Live.
-        assert_eq!(
-            s.tick(Instant(2_000)),
-            vec![SurfaceAction::Teardown(id)],
-            "policy {policy:?}"
-        );
-        assert_eq!(s.state(id), Some(SurfaceState::Cold), "policy {policy:?}");
+        assert_eq!(s.state(id), Some(SurfaceState::Live), "policy {policy:?}");
     }
 }

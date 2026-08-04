@@ -237,20 +237,25 @@ fn refresh_if_live(entry: &mut Entry, now: Instant) {
     }
 }
 
-/// Whether a `Suspending` surface with an open window should resume, rather
-/// than let its policy govern the pending teardown.
+/// Whether the policy would leave the surface alone if it were `Live` right
+/// now — i.e. [`evaluate`] returns anything other than `Decision::Suspend`
+/// for it.
 ///
-/// Probes the policy as though the surface were already `Live`, and resumes
-/// only when the policy would not immediately re-suspend it. Deriving this
-/// from [`evaluate`] rather than re-stating each policy's suspend condition
-/// is what keeps the two in step: an earlier version used `open_windows > 0`
-/// directly, which happens to be the right answer for
-/// [`Policy::OnLastWindowClosed`] (whose suspend condition *is*
-/// `open_windows == 0`) and is unrelated to the other policies. A
-/// [`Policy::OnHidden`] or [`Policy::IdleTimeout`] surface with an open
-/// window would resume under that condition and immediately re-qualify for
-/// suspension, oscillating between `Live` and `Suspending` forever without
-/// ever reaching `Cold`.
+/// Used for two decisions in [`decide`], both of which need the same answer:
+/// whether a `Suspending` surface with an open window should resume, and
+/// whether a `Cold` surface with an open window should actually be started.
+/// Deriving both from [`evaluate`] rather than re-stating each policy's
+/// suspend condition is what keeps them in step. Two earlier versions each
+/// used `open_windows > 0` directly for one of the two decisions — correct
+/// for [`Policy::OnLastWindowClosed`], whose suspend condition *is*
+/// `open_windows == 0`, and wrong for [`Policy::OnHidden`] and
+/// [`Policy::IdleTimeout`], which are unrelated to that condition. Applied to
+/// the resume decision, that bug oscillated `Live`/`Suspending` forever
+/// without ever reaching `Cold`. Applied to the start decision, it instead
+/// booted the surface only to have policy immediately suspend and tear it
+/// down again — a full `Start`/`Suspend`/`Teardown` cycle, repeating forever,
+/// each one paying a real engine boot for a window nobody could see or that
+/// nobody was using.
 fn would_resume(entry: &Entry, now: Instant) -> bool {
     if entry.open_windows() == 0 {
         return false;
@@ -268,9 +273,17 @@ fn would_resume(entry: &Entry, now: Instant) -> bool {
 /// Decides what should happen to one surface, applying the resulting
 /// transition. Returns `None` when nothing should change.
 fn decide(id: SurfaceId, entry: &mut Entry, now: Instant) -> Option<SurfaceAction> {
-    // A surface with a window but no renderer needs one, whatever the policy
-    // says — policy governs teardown, not startup.
-    if entry.state == SurfaceState::Cold && entry.open_windows() > 0 {
+    // Bring a surface up only when the policy would not immediately suspend
+    // it again. "Has an open window" is NOT sufficient on its own: for
+    // OnHidden a window can be open and hidden, and for IdleTimeout open and
+    // idle -- starting either would immediately produce a
+    // Start/Suspend/Teardown loop, with a real engine boot per cycle.
+    // `would_resume` derives the condition from `evaluate` itself, so the
+    // two cannot drift apart. `refresh_if_live` is not needed here: `Start`
+    // only ever moves `Cold` to `Starting`, never to `Live`, and `Ready` --
+    // the event that actually makes the surface `Live` -- already refreshes
+    // the idle clock in `Supervisor::handle_at`.
+    if entry.state == SurfaceState::Cold && would_resume(entry, now) {
         apply(entry, &LifecycleEvent::Start);
         return Some(SurfaceAction::Start(id));
     }
@@ -329,6 +342,33 @@ mod tests {
         let mut s = Supervisor::new();
         let id = s.register(Policy::OnLastWindowClosed { grace_ms: 5_000 });
         (s, id)
+    }
+
+    /// Runs a realistic host loop: tick, and report `Ready` whenever told to
+    /// bring the surface up. Returns every action emitted, across the whole
+    /// run, in order.
+    ///
+    /// A correct implementation settles. An oscillating one emits actions
+    /// forever, which is invisible to any test that stops after the first
+    /// action -- exactly how two earlier defects in `decide` survived
+    /// review.
+    fn run_host_loop(
+        s: &mut Supervisor,
+        id: SurfaceId,
+        ticks: u64,
+        step: u64,
+    ) -> Vec<SurfaceAction> {
+        let mut all = Vec::new();
+        for i in 0..ticks {
+            let t = Instant(i * step);
+            for action in s.tick(t) {
+                all.push(action);
+                if matches!(action, SurfaceAction::Start(_) | SurfaceAction::Resume(_)) {
+                    s.handle_at(t, HostEvent::Ready(id));
+                }
+            }
+        }
+        all
     }
 
     #[test]
@@ -911,6 +951,179 @@ mod tests {
     }
 
     #[test]
+    fn host_loop_never_starts_a_cold_surface_whose_window_is_only_ever_hidden() {
+        // The Cold-start counterpart to C1: `decide`'s Cold arm used to treat
+        // "has an open window" as sufficient reason to start, regardless of
+        // policy. For OnHidden with a window that is opened but never shown,
+        // that produced a real Start -> Suspend -> Teardown cycle, repeating
+        // forever, each one paying a real engine boot for a window nobody
+        // could see. The fix: `would_resume` gates the Cold arm too, so a
+        // surface OnHidden would immediately re-suspend is never started in
+        // the first place. Pinned as zero actions across 40 ticks, not a
+        // loose upper bound, since a slow oscillation would satisfy a bound.
+        let mut s = Supervisor::new();
+        let id = s.register(Policy::OnHidden { grace_ms: 1_000 });
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowOpened {
+                surface: id,
+                window: WindowId::new(1),
+            },
+        );
+
+        let actions = run_host_loop(&mut s, id, 40, 100);
+        assert_eq!(
+            actions,
+            vec![],
+            "a surface OnHidden would immediately re-suspend must never be started"
+        );
+        assert_eq!(s.state(id), Some(SurfaceState::Cold));
+    }
+
+    #[test]
+    fn host_loop_settles_after_one_cycle_for_idle_timeout_with_no_further_interaction() {
+        // Companion to the OnHidden case above, for IdleTimeout. Unlike
+        // OnHidden, a freshly registered surface is not yet "idle" at the
+        // very instant of registration (`last_interaction` defaults to the
+        // same instant), so the first tick of the loop -- which lands at the
+        // same `t=0` -- still finds the surface eligible to start. From then
+        // on, with no further `Interacted` event, it runs its natural
+        // Suspend/Teardown course and then -- this is the property under
+        // test -- never restarts, because `would_resume` now also gates the
+        // Cold arm and the interaction stays stale forever after.
+        let mut s = Supervisor::new();
+        let id = s.register(Policy::IdleTimeout { after_ms: 1_000 });
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowOpened {
+                surface: id,
+                window: WindowId::new(1),
+            },
+        );
+
+        let actions = run_host_loop(&mut s, id, 40, 100);
+        assert_eq!(
+            actions,
+            vec![
+                SurfaceAction::Start(id),
+                SurfaceAction::Suspend(id),
+                SurfaceAction::Teardown(id),
+            ],
+            "exactly one Start/Suspend/Teardown cycle, then settled -- never a second cycle"
+        );
+        assert_eq!(s.state(id), Some(SurfaceState::Cold));
+    }
+
+    #[test]
+    fn idle_timeout_does_not_start_a_surface_whose_interaction_is_already_stale() {
+        // `run_host_loop` always ticks starting at t=0, which coincides with
+        // a fresh registration's default `last_interaction` and so can never
+        // exercise an *already*-stale interaction on the very first tick.
+        // This drives that case directly: the window opens at t=0, nothing
+        // ever interacts with it, and the first tick doesn't arrive until
+        // well past the idle interval.
+        let mut s = Supervisor::new();
+        let id = s.register(Policy::IdleTimeout { after_ms: 1_000 });
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowOpened {
+                surface: id,
+                window: WindowId::new(1),
+            },
+        );
+
+        assert_eq!(
+            s.tick(Instant(5_000)),
+            vec![],
+            "an already-idle surface must not be booted just to be immediately suspended"
+        );
+        assert_eq!(s.state(id), Some(SurfaceState::Cold));
+
+        s.handle_at(Instant(5_000), HostEvent::Interacted(id));
+        assert_eq!(
+            s.tick(Instant(5_000)),
+            vec![SurfaceAction::Start(id)],
+            "once interacted with, it is no longer stale and may start"
+        );
+    }
+
+    #[test]
+    fn host_loop_starts_once_and_settles_live_when_the_window_closed_policy_has_an_open_window() {
+        // OnLastWindowClosed's suspend condition (`open_windows == 0`) is the
+        // one case where "has an open window" and "policy would not
+        // immediately suspend" coincide, which is exactly what hid the
+        // original bug. With the window left open for the whole run, the
+        // surface must still come up -- policy governing startup does not
+        // mean the surface never starts, only that it isn't started when
+        // policy would immediately reverse the decision.
+        let mut s = Supervisor::new();
+        let id = s.register(Policy::OnLastWindowClosed { grace_ms: 1_000 });
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowOpened {
+                surface: id,
+                window: WindowId::new(1),
+            },
+        );
+
+        let actions = run_host_loop(&mut s, id, 40, 100);
+        assert_eq!(
+            actions,
+            vec![SurfaceAction::Start(id)],
+            "one boot, then stable at Live for the rest of the run"
+        );
+        assert_eq!(s.state(id), Some(SurfaceState::Live));
+    }
+
+    #[test]
+    fn host_loop_starts_once_and_settles_live_under_never() {
+        // Never's `evaluate` is always `NoChange`, so `would_resume` is
+        // trivially true whenever a window is open: there is no policy that
+        // could immediately re-suspend it, so the guard never blocks.
+        let mut s = Supervisor::new();
+        let id = s.register(Policy::Never);
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowOpened {
+                surface: id,
+                window: WindowId::new(1),
+            },
+        );
+
+        let actions = run_host_loop(&mut s, id, 40, 100);
+        assert_eq!(actions, vec![SurfaceAction::Start(id)]);
+        assert_eq!(s.state(id), Some(SurfaceState::Live));
+    }
+
+    #[test]
+    fn host_loop_starts_once_and_settles_live_when_on_hidden_window_is_shown() {
+        // The positive case: proves the Cold-arm guard does not over-block.
+        // A window that is open AND visible must still start normally under
+        // OnHidden.
+        let mut s = Supervisor::new();
+        let id = s.register(Policy::OnHidden { grace_ms: 1_000 });
+        let window = WindowId::new(1);
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowOpened {
+                surface: id,
+                window,
+            },
+        );
+        s.handle_at(
+            Instant(0),
+            HostEvent::WindowShown {
+                surface: id,
+                window,
+            },
+        );
+
+        let actions = run_host_loop(&mut s, id, 40, 100);
+        assert_eq!(actions, vec![SurfaceAction::Start(id)]);
+        assert_eq!(s.state(id), Some(SurfaceState::Live));
+    }
+
+    #[test]
     fn interaction_resets_the_idle_clock() {
         let mut s = Supervisor::new();
         let id = s.register(Policy::IdleTimeout { after_ms: 1_000 });
@@ -941,25 +1154,35 @@ mod tests {
         // test registered at a non-zero `now`. The real gap was worse than
         // the mutant -- `last_interaction` was never refreshed when a
         // surface actually became Live, so a surface that had just finished
-        // booting could already be "idle" if any time had passed since
-        // registration, and get suspended having never received input.
+        // booting could already be "idle" if a lot of wall-clock time passed
+        // while it was still `Starting`, and get suspended having never
+        // received input as `Live`.
+        //
+        // The window opens at t=0, coinciding with the fresh (default)
+        // interaction clock a registration leaves behind -- the Cold arm's
+        // own `would_resume` guard (fixed separately, for the cold-start
+        // oscillation) would otherwise block a stale-interaction surface
+        // from starting at all, which is a different property than the one
+        // this test pins.
         let mut s = Supervisor::new();
         let id = s.register(Policy::IdleTimeout { after_ms: 1_000 });
-        // Register long after zero, then bring the surface up.
         let w = WindowId::new(1);
         s.handle_at(
-            Instant(10_000),
+            Instant(0),
             HostEvent::WindowOpened {
                 surface: id,
                 window: w,
             },
         );
-        assert_eq!(s.tick(Instant(10_000)), vec![SurfaceAction::Start(id)]);
-        s.handle_at(Instant(10_100), HostEvent::Ready(id));
+        assert_eq!(s.tick(Instant(0)), vec![SurfaceAction::Start(id)]);
+
+        // The host takes almost the whole idle interval to finish booting.
+        s.handle_at(Instant(999), HostEvent::Ready(id));
         assert_eq!(
-            s.tick(Instant(10_500)),
+            s.tick(Instant(1_000)),
             vec![],
-            "a surface that just became Live must not count as idle"
+            "a surface that just became Live must not count as idle just \
+             because a long time passed while it was still Starting"
         );
     }
 
