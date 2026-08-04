@@ -3,6 +3,7 @@
 use duet_core::{Notification, Patch, Path, SubscriberId, SubscriptionId};
 use serde_json::{Map as JsonMap, Value as Json};
 
+use crate::canonical::is_canonical_unsigned_digits;
 use crate::error::CodecError;
 use crate::value::{decode_value, encode_value};
 
@@ -35,11 +36,17 @@ fn field<'a>(obj: &'a JsonMap<String, Json>, name: &str) -> Result<&'a Json, Cod
         .ok_or_else(|| CodecError::BadShape(format!("missing \"{name}\"")))
 }
 
-/// Reads a `u64` carried as a decimal string.
+/// Reads a `u64` carried as a canonical decimal string: no leading `+` and no
+/// leading zeros. Without this, `"7"` and `"007"` would decode to the same
+/// id and both re-encode as `"7"` — the same non-canonical-input hazard the
+/// base64 decoder and `duet-core`'s path parser (`[007]`) already reject.
 fn u64_field(obj: &JsonMap<String, Json>, name: &str) -> Result<u64, CodecError> {
     let s = field(obj, name)?
         .as_str()
         .ok_or_else(|| CodecError::BadShape(format!("\"{name}\" must be a decimal string")))?;
+    if !is_canonical_unsigned_digits(s) {
+        return Err(CodecError::BadInt(format!("\"{name}\": {s}")));
+    }
     s.parse::<u64>()
         .map_err(|_| CodecError::BadInt(format!("\"{name}\": {s}")))
 }
@@ -211,11 +218,28 @@ mod tests {
             r#"{"subscriber":"1"}"#,
             r#"{"subscriber":1,"subscription":"1","patch":{"path":"a","value":{"t":"n"}}}"#,
             r#"{"subscriber":"x","subscription":"1","patch":{"path":"a","value":{"t":"n"}}}"#,
+            // non-canonical ids: same hazard as non-canonical Int payloads.
+            r#"{"subscriber":"+1","subscription":"1","patch":{"path":"a","value":{"t":"n"}}}"#,
+            r#"{"subscriber":"007","subscription":"1","patch":{"path":"a","value":{"t":"n"}}}"#,
         ] {
             assert!(
                 decode_notification(&json(bad)).is_err(),
                 "{bad} must be rejected"
             );
         }
+    }
+
+    #[test]
+    fn canonical_zero_id_still_decodes() {
+        let note = Notification {
+            subscriber: SubscriberId(0),
+            subscription: SubscriptionId(0),
+            patch: Patch {
+                path: p("a"),
+                value: Value::Null,
+            },
+        };
+        let encoded = encode_notification(&note);
+        assert_eq!(decode_notification(&encoded).expect("decodes"), note);
     }
 }

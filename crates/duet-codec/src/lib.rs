@@ -18,14 +18,16 @@
 //! is the worst kind of bug this format could ship.
 //!
 //! Verbosity is an accepted cost. Payloads are small patches, guests never see
-//! the wire format directly (Phase 4 generates typed accessors over it), and the
-//! `Codec` trait exists so a compact binary encoding can replace this one
-//! without touching a public API.
+//! the wire format directly (Phase 4 generates typed accessors over it), and a
+//! compact binary encoding could replace this one later without changing the
+//! free-function API below — callers depend on functions, not a concrete
+//! codec type, so nothing here commits to a trait that does not exist yet.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
 mod base64;
+mod canonical;
 pub mod error;
 mod value;
 mod wire;

@@ -72,7 +72,11 @@ pub(crate) fn decode(s: &str) -> Result<Vec<u8>, CodecError> {
         if pad > 2 {
             return Err(CodecError::BadBase64(format!("{pad} padding characters")));
         }
-        // Padding must be a suffix: "Zg==" is legal, "Z=g=" is not.
+        // Padding must be a suffix: "Zg==" is legal, "Z=g=" is not. (`sextet`
+        // already rejects '=' as a data character via its wildcard arm, so
+        // this check is not load-bearing for that case — it exists to name
+        // the specific problem — misplaced padding — rather than falling
+        // through to the generic "not in the alphabet" error below.)
         if pad > 0 && quantum[4 - pad..].iter().any(|&c| c != b'=') {
             return Err(CodecError::BadBase64(
                 "padding must be at the end of the quantum".to_string(),
@@ -85,6 +89,21 @@ pub(crate) fn decode(s: &str) -> Result<Vec<u8>, CodecError> {
                 CodecError::BadBase64(format!("character {:?} is not in the alphabet", c as char))
             })?;
             acc = (acc << 6) | v;
+        }
+        // A padded quantum carries more sextet bits than output bytes: the
+        // (4-pad) sextets hold (4-pad)*6 bits for (3-pad) output bytes, i.e.
+        // (3-pad)*8 bits — a remainder of 2*pad low bits that canonical
+        // base64 requires to be zero. A non-zero remainder means the input
+        // encodes more information than the output bytes can hold, which
+        // this codec must reject rather than silently drop (four distinct
+        // strings would otherwise decode to the same bytes).
+        if pad > 0 {
+            let discarded = acc & ((1u32 << (2 * pad)) - 1);
+            if discarded != 0 {
+                return Err(CodecError::BadBase64(
+                    "non-canonical padding: discarded bits are not zero".to_string(),
+                ));
+            }
         }
         // Left-align the accumulated bits for the bytes we will emit.
         acc <<= 6 * pad;
@@ -163,6 +182,11 @@ mod tests {
             "=Zm9",       // leading padding
             "Zm=v",       // padding in the middle
             "こんにちは", // multi-byte UTF-8
+            "Zm9vYmF=",   // non-canonical: discarded bits of a 1-pad quantum are not zero
+            "Zm9vYmG=",   // same, different non-zero discarded bits
+            "Zh==",       // non-canonical: discarded bits of a 2-pad quantum are not zero
+            "====",       // four padding characters: pad > 2 (mutant M4)
+            "a===",       // pad > 2 with a leading data character
         ] {
             assert!(
                 decode(bad).is_err(),

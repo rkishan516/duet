@@ -21,6 +21,17 @@ fn corpus() -> Vec<Value> {
         Value::Float(f64::MIN),
         Value::Float(f64::MAX),
         Value::Float(f64::EPSILON),
+        // Full-precision floats whose 17-significant-digit decimal text does
+        // not round-trip through serde_json's *default* float parser (it is
+        // best-effort, not correctly-rounded). `0.0`/`1.5`/`MIN`/`MAX`/
+        // `EPSILON` above all happen to have short decimal forms that survive
+        // regardless, so none of them could have caught this — the corpus
+        // must include values that actually exercise the lossy path.
+        Value::Float(-1.7230175163494897e-48),
+        Value::Float(f64::from_bits(0x7F6C_280B_EAA8_E3E7)),
+        Value::Float(f64::from_bits(0xEC83_972C_97B6_678E)),
+        Value::Float(f64::from_bits(0x0CF9_1633_BE73_28C1)),
+        Value::Float(f64::from_bits(0xBFC9_E24F_766F_3ABF)),
         Value::Str(String::new()),
         Value::Str("hello".into()),
         Value::Str("café 🦀 \u{202e}".into()), // multi-byte, emoji, RTL override
@@ -55,7 +66,7 @@ fn corpus() -> Vec<Value> {
 #[test]
 fn every_value_round_trips_exactly() {
     let corpus = corpus();
-    assert_eq!(corpus.len(), 27, "corpus size changed; update deliberately");
+    assert_eq!(corpus.len(), 32, "corpus size changed; update deliberately");
 
     for original in &corpus {
         let encoded = encode_value(original);
@@ -99,6 +110,41 @@ fn nan_round_trips_through_text_as_nan() {
         Value::Float(f) => assert!(f.is_nan(), "expected NaN, got {f}"),
         other => panic!("NaN must remain a Float, got {other:?}"),
     }
+}
+
+#[test]
+fn every_float_survives_the_text_hop_bit_exactly() {
+    // serde_json's default float parser is best-effort, not correctly-rounded.
+    // The `float_roundtrip` feature in Cargo.toml is what makes this pass;
+    // without it roughly 30% of finite f64 values change bits here.
+    let mut state = 0x2545_F491_4F6C_DD1Du64;
+    let mut checked = 0usize;
+    for _ in 0..20_000 {
+        // xorshift64 — deterministic, no rand dependency.
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let f = f64::from_bits(state);
+        if !f.is_finite() {
+            continue;
+        }
+        let original = Value::Float(f);
+        let text = serde_json::to_string(&encode_value(&original)).expect("encodes");
+        let reparsed: serde_json::Value = serde_json::from_str(&text).expect("parses");
+        match decode_value(&reparsed).expect("decodes") {
+            Value::Float(back) => assert_eq!(
+                back.to_bits(),
+                f.to_bits(),
+                "float changed bits through the text hop: {f} -> {back} (text {text})"
+            ),
+            other => panic!("Float must stay a Float, got {other:?}"),
+        }
+        checked += 1;
+    }
+    assert!(
+        checked > 15_000,
+        "expected most samples to be finite, got {checked}"
+    );
 }
 
 #[test]
