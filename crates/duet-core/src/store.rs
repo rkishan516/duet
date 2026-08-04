@@ -74,7 +74,12 @@ pub struct Notification {
 /// either renderer be torn down and recreated without losing state: the
 /// guest simply resubscribes and receives a fresh snapshot (see
 /// [`Store::subscribe`]).
-#[derive(Debug, Clone)]
+///
+/// Deliberately not `Clone`: two clones would mint colliding
+/// [`SubscriptionId`]s from the same starting `next_id`, and
+/// [`Store::unsubscribe`]'s documentation relies on ids being unique within
+/// one `Store`. A clone would silently break that guarantee.
+#[derive(Debug)]
 pub struct Store {
     /// The state tree itself.
     root: Value,
@@ -126,6 +131,21 @@ impl Store {
     /// Subscribing to a path that does not currently exist is legal and
     /// returns `None` — the subscription is still registered, and a later
     /// write that creates the path will notify it normally.
+    ///
+    /// **The `Starting` gap:** a subscription is live the instant this call
+    /// returns, but the surface that just resubscribed may still be
+    /// [`SurfaceState::Starting`](crate::lifecycle::SurfaceState::Starting)
+    /// — not yet able to actually receive a delivered notification. A write
+    /// landing between the snapshot returned here and the surface reaching
+    /// `Live` produces a [`Notification`] addressed to a subscriber that
+    /// cannot consume it yet. The snapshot plus every subsequent
+    /// notification must be handled without a gap: a caller whose surface is
+    /// still `Starting` must **buffer** notifications that arrive in the
+    /// meantime rather than discard them, so nothing silently goes missing
+    /// between resubscribe and `Live`. This is safe by construction as long
+    /// as `subscribe` and [`Store::set`] run on the same thread — which
+    /// Phase 2's core-thread design guarantees — but nothing in the type
+    /// system enforces it, hence this note.
     pub fn subscribe(
         &mut self,
         subscriber: SubscriberId,
@@ -147,9 +167,9 @@ impl Store {
     /// Returns `true` if a subscription with this id was present and
     /// removed, `false` if no such subscription existed (already removed,
     /// or an id from a different `Store`).
-    pub fn unsubscribe(&mut self, id: &SubscriptionId) -> bool {
+    pub fn unsubscribe(&mut self, id: SubscriptionId) -> bool {
         let before = self.subscriptions.len();
-        self.subscriptions.retain(|s| &s.id != id);
+        self.subscriptions.retain(|s| s.id != id);
         self.subscriptions.len() != before
     }
 
@@ -333,11 +353,8 @@ mod tests {
     fn unsubscribe_removes_the_subscription() {
         let mut store = Store::new(sample());
         let (id, _) = store.subscribe(SubscriberId(1), Path::root());
-        assert!(store.unsubscribe(&id));
-        assert!(
-            !store.unsubscribe(&id),
-            "second removal should report false"
-        );
+        assert!(store.unsubscribe(id));
+        assert!(!store.unsubscribe(id), "second removal should report false");
     }
 
     #[test]
@@ -869,7 +886,7 @@ mod tests {
             "test premise requires these ids to differ"
         );
 
-        assert!(!store_a.unsubscribe(&id_from_b));
+        assert!(!store_a.unsubscribe(id_from_b));
 
         // `store_a`'s own subscription must still be intact.
         let notes = store_a.set(&p("editor.zoom"), Value::Float(2.0)).unwrap();
@@ -881,7 +898,7 @@ mod tests {
     fn subscription_ids_are_never_reused_after_unsubscribe() {
         let mut store = Store::new(sample());
         let (id1, _) = store.subscribe(SubscriberId(1), Path::root());
-        store.unsubscribe(&id1);
+        store.unsubscribe(id1);
         let (id2, _) = store.subscribe(SubscriberId(1), Path::root());
         assert_ne!(id1, id2);
     }

@@ -12,10 +12,28 @@ use crate::path::{Path, Segment};
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     /// The absence of a value.
+    ///
+    /// **The `Option` convention:** `Option::None` is represented as
+    /// `Value::Null`, never as an absent map key. There is no `remove`
+    /// operation on `Value` or `Store`, so "key absent" is unreachable once a
+    /// key has ever been inserted — Phase 4's generated initializers must
+    /// materialize every schema field (using `Value::Null` for a `None`),
+    /// which makes an absent key a schema violation rather than a
+    /// representable value, and the missing `remove` a non-issue rather than
+    /// a gap.
     Null,
     /// A boolean.
     Bool(bool),
     /// A signed 64-bit integer.
+    ///
+    /// Phase 2 ships JSON as the wire codec first, and JSON numbers are
+    /// IEEE-754 doubles in JavaScript. A JS guest can only exactly represent
+    /// integers up to 2^53; values above that silently lose precision
+    /// reaching the webview, while Dart's 64-bit `int` on the Flutter side
+    /// would still see the exact value, so the two guests could disagree
+    /// about the same stored `Int`. Generated codegen (Phase 4) must
+    /// range-check `u64`/`usize` source fields against 2^53 (or reject them
+    /// outright) rather than mapping them onto `Int` unchecked.
     Int(i64),
     /// A 64-bit floating point number.
     ///
@@ -27,6 +45,12 @@ pub enum Value {
     /// pins this rather than working around it. Code that later compares
     /// `Value`s for change detection (the `Store` task) must account for
     /// this.
+    ///
+    /// **Transport:** `NaN` and `±Infinity` have no representation in JSON.
+    /// Serializing one of these through Phase 2's JSON codec and reading it
+    /// back round-trips to `Value::Null`, silently changing the value's
+    /// variant, not just its magnitude. Application logic that can produce a
+    /// non-finite `Float` must account for this before it crosses the wire.
     Float(f64),
     /// A UTF-8 string.
     Str(String),
@@ -112,12 +136,10 @@ impl Value {
     ///   a `Map`, or any segment against a scalar (`Null`, `Bool`, `Int`,
     ///   `Float`, `Str`, `Bytes`).
     ///
-    /// [`SetError::MissingKey`] and [`SetError::TypeMismatch`] carry the
-    /// *full* path passed to `set`, not the partial path walked so far — a
-    /// guest process relaying the error over IPC needs the whole address to
-    /// locate the problem, not just the segment where the walk stopped.
-    /// [`SetError::IndexOutOfBounds`] is the exception: it carries only the
-    /// offending index, not a path (see that variant's doc comment).
+    /// Every variant carries the *full* path passed to `set`, not the
+    /// partial path walked so far — a guest process relaying the error over
+    /// IPC needs the whole address to locate the problem, not just the
+    /// segment where the walk stopped.
     pub fn set(&mut self, path: &Path, value: Value) -> Result<(), SetError> {
         let segments = path.segments();
         let Some((last, parents)) = segments.split_last() else {
@@ -132,7 +154,12 @@ impl Value {
                     .get_mut(k)
                     .ok_or_else(|| SetError::MissingKey(path.clone()))?,
                 (Value::List(l), Segment::Index(i)) => {
-                    l.get_mut(*i).ok_or(SetError::IndexOutOfBounds(*i))?
+                    let len = l.len();
+                    l.get_mut(*i).ok_or_else(|| SetError::IndexOutOfBounds {
+                        path: path.clone(),
+                        index: *i,
+                        len,
+                    })?
                 }
                 _ => return Err(SetError::TypeMismatch(path.clone())),
             };
@@ -153,7 +180,12 @@ impl Value {
                 Ok(())
             }
             (Value::List(l), Segment::Index(i)) => {
-                let slot = l.get_mut(*i).ok_or(SetError::IndexOutOfBounds(*i))?;
+                let len = l.len();
+                let slot = l.get_mut(*i).ok_or_else(|| SetError::IndexOutOfBounds {
+                    path: path.clone(),
+                    index: *i,
+                    len,
+                })?;
                 *slot = value;
                 Ok(())
             }
@@ -164,30 +196,29 @@ impl Value {
 
 /// Why a write ([`Value::set`]) could not be applied.
 ///
-/// [`SetError::MissingKey`] and [`SetError::TypeMismatch`] carry the full
-/// path originally passed to `set`, not a partial path, so a guest process
-/// relaying the error over IPC can locate the problem without reconstructing
-/// context this side of the boundary. [`SetError::IndexOutOfBounds`] does
-/// **not** carry a path — see its doc comment.
+/// Every variant carries the full path originally passed to `set`, not a
+/// partial path, so a guest process relaying the error over IPC can locate
+/// the problem without reconstructing context this side of the boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SetError {
     /// A map key on the path does not exist. Only possible for a key
     /// strictly before the final segment: the final segment of a map path is
     /// inserted rather than erroring, so a missing *final* key never
     /// produces this variant.
     MissingKey(Path),
-    /// A list index on the path — intermediate or final — is out of bounds
-    /// for the list it addresses. An index equal to `len()` counts as out of
-    /// bounds; `set` never appends.
+    /// A list index on the way to the target, or at it, is out of bounds.
     ///
-    /// Unlike the other two variants, this one carries only the offending
-    /// index, **not** the path that produced it: two different paths that
-    /// bottom out on the same out-of-bounds index (e.g. `a.b.c[9]` and
-    /// `flags[9]`) produce an identical, indistinguishable
-    /// `IndexOutOfBounds(9)`. A caller that needs the full address for a
-    /// guest-facing error message must pair this with the path it originally
-    /// passed to `set`.
-    IndexOutOfBounds(usize),
+    /// Carries the full path so a guest process can locate the problem, and the
+    /// list's length so the error is actionable without a follow-up read.
+    IndexOutOfBounds {
+        /// The full path originally passed to [`Value::set`].
+        path: Path,
+        /// The offending index — the one that was `>= len`.
+        index: usize,
+        /// The length of the list the offending index addressed.
+        len: usize,
+    },
     /// A segment addressed the wrong kind of node: a key segment against a
     /// `List`, an index segment against a `Map`, or any segment against a
     /// scalar variant.
@@ -198,7 +229,10 @@ impl std::fmt::Display for SetError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SetError::MissingKey(path) => write!(f, "no key exists at path \"{path}\""),
-            SetError::IndexOutOfBounds(i) => write!(f, "index {i} is out of bounds"),
+            SetError::IndexOutOfBounds { path, index, len } => write!(
+                f,
+                "index {index} is out of bounds at path \"{path}\" (length {len})"
+            ),
             SetError::TypeMismatch(path) => {
                 write!(f, "path \"{path}\" addresses the wrong kind of node")
             }
@@ -342,7 +376,11 @@ mod tests {
         let mut v = sample();
         assert_eq!(
             v.set(&p("documents[9]"), Value::Null),
-            Err(SetError::IndexOutOfBounds(9))
+            Err(SetError::IndexOutOfBounds {
+                path: p("documents[9]"),
+                index: 9,
+                len: 3,
+            })
         );
     }
 
@@ -359,24 +397,40 @@ mod tests {
     #[test]
     fn set_through_out_of_bounds_intermediate_index_errors() {
         let mut v = sample();
-        // The failing segment is intermediate, not final.
+        // The failing segment is intermediate, not final. The error still
+        // carries the *full* path passed to `set`, not just the offending
+        // segment.
         assert_eq!(
             v.set(&p("documents[9].title"), Value::Null),
-            Err(SetError::IndexOutOfBounds(9))
+            Err(SetError::IndexOutOfBounds {
+                path: p("documents[9].title"),
+                index: 9,
+                len: 3,
+            })
         );
     }
 
     #[test]
-    fn out_of_bounds_error_reports_the_offending_index_not_the_length() {
+    fn out_of_bounds_error_reports_the_offending_index_path_and_length() {
         let mut v = sample();
-        // Distinguishes a correct implementation from one reporting len().
+        // Distinguishes a correct implementation from one reporting len()
+        // as the index, and confirms the full path and list length are
+        // both carried, not just the index.
         assert_eq!(
             v.set(&p("documents[9]"), Value::Null),
-            Err(SetError::IndexOutOfBounds(9))
+            Err(SetError::IndexOutOfBounds {
+                path: p("documents[9]"),
+                index: 9,
+                len: 3,
+            })
         );
         assert_eq!(
             v.set(&p("documents[42]"), Value::Null),
-            Err(SetError::IndexOutOfBounds(42))
+            Err(SetError::IndexOutOfBounds {
+                path: p("documents[42]"),
+                index: 42,
+                len: 3,
+            })
         );
     }
 
@@ -563,7 +617,11 @@ mod tests {
         // past the end and must error, not silently grow the list.
         assert_eq!(
             v.set(&p("documents[3]"), Value::Null),
-            Err(SetError::IndexOutOfBounds(3))
+            Err(SetError::IndexOutOfBounds {
+                path: p("documents[3]"),
+                index: 3,
+                len: 3,
+            })
         );
         assert_eq!(v, sample(), "a rejected append must not mutate the list");
     }
@@ -629,5 +687,39 @@ mod tests {
         {
             assert_ne!(a, b, "IEEE 754 NaN is never equal to NaN, including itself");
         }
+    }
+
+    // (F) `SetError`'s `Display` messages, including `IndexOutOfBounds` now
+    // that it carries a path and a length alongside the index.
+
+    #[test]
+    fn set_error_messages_are_informative() {
+        assert_eq!(
+            SetError::MissingKey(p("nope.deeper")).to_string(),
+            "no key exists at path \"nope.deeper\""
+        );
+        assert_eq!(
+            SetError::IndexOutOfBounds {
+                path: p("documents[9]"),
+                index: 9,
+                len: 3,
+            }
+            .to_string(),
+            "index 9 is out of bounds at path \"documents[9]\" (length 3)"
+        );
+        assert_eq!(
+            SetError::TypeMismatch(p("editor[0]")).to_string(),
+            "path \"editor[0]\" addresses the wrong kind of node"
+        );
+    }
+
+    #[test]
+    fn set_error_implements_std_error() {
+        let err = SetError::IndexOutOfBounds {
+            path: p("documents[9]"),
+            index: 9,
+            len: 3,
+        };
+        let _: &dyn std::error::Error = &err;
     }
 }

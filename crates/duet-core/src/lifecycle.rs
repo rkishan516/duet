@@ -65,11 +65,65 @@ pub enum LifecycleEvent {
 
 /// Returned when an event does not apply to the current state.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct InvalidTransition {
     /// The state the surface was in when the event was applied.
     pub from: SurfaceState,
     /// The event that did not apply to `from`.
     pub event: LifecycleEvent,
+}
+
+impl std::fmt::Display for InvalidTransition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Both `SurfaceState::Failed` and `LifecycleEvent::Fail` carry an
+        // unbounded, guest-influenced reason string. Truncate what we render
+        // here exactly as `PathParseError::InvalidIndex`'s `Display` impl
+        // does (see `path.rs`), using `.chars().take(N)` (never a byte
+        // slice, to avoid splitting a multi-byte char) so a pathological
+        // reason can't produce a huge message relayed to a guest or written
+        // to host logs. The struct fields themselves keep the full strings;
+        // only `Display` is bounded.
+        write!(f, "event ")?;
+        fmt_bounded_event(&self.event, f)?;
+        write!(f, " does not apply to state ")?;
+        fmt_bounded_state(&self.from, f)
+    }
+}
+
+impl std::error::Error for InvalidTransition {}
+
+/// Truncates a reason string to 32 chars for display, appending an ellipsis
+/// marker if anything was cut. Mirrors `PathParseError::InvalidIndex`'s
+/// `Display` truncation (see `path.rs`).
+fn write_bounded_reason(reason: &str, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let char_count = reason.chars().count();
+    let mut truncated: String = reason.chars().take(32).collect();
+    if char_count > 32 {
+        truncated.push('…');
+    }
+    write!(f, "{truncated:?}")
+}
+
+fn fmt_bounded_state(state: &SurfaceState, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match state {
+        SurfaceState::Failed(reason) => {
+            write!(f, "Failed(")?;
+            write_bounded_reason(reason, f)?;
+            write!(f, ")")
+        }
+        other => write!(f, "{other:?}"),
+    }
+}
+
+fn fmt_bounded_event(event: &LifecycleEvent, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match event {
+        LifecycleEvent::Fail(reason) => {
+            write!(f, "Fail(")?;
+            write_bounded_reason(reason, f)?;
+            write!(f, ")")
+        }
+        other => write!(f, "{other:?}"),
+    }
 }
 
 /// Computes the next state. Pure — no side effects, no clock.
@@ -217,6 +271,75 @@ mod tests {
     #[test]
     fn retry_is_only_valid_from_failed() {
         assert!(transition(&SurfaceState::Live, &LifecycleEvent::Retry).is_err());
+    }
+
+    #[test]
+    fn invalid_transition_implements_display_and_error() {
+        let err = InvalidTransition {
+            from: SurfaceState::Live,
+            event: LifecycleEvent::Ready,
+        };
+        assert_eq!(err.to_string(), "event Ready does not apply to state Live");
+        let _: &dyn std::error::Error = &err;
+    }
+
+    /// Both `SurfaceState::Failed` and `LifecycleEvent::Fail` embed an
+    /// unbounded, guest-influenced reason string (the suite exercises
+    /// `"x".repeat(10_000)` elsewhere in this file). `Display` must bound
+    /// what it renders exactly as `PathParseError::InvalidIndex` does, while
+    /// the struct's fields -- reachable via `Debug` or direct field access
+    /// -- must retain the full, untruncated strings.
+    #[test]
+    fn invalid_transition_display_is_bounded_but_fields_are_not() {
+        let long_reason = "x".repeat(10_000);
+        let err = InvalidTransition {
+            from: SurfaceState::Failed(long_reason.clone()),
+            event: LifecycleEvent::Fail(long_reason.clone()),
+        };
+
+        // The struct fields must retain the full, untruncated value.
+        match &err.from {
+            SurfaceState::Failed(reason) => assert_eq!(reason.len(), 10_000),
+            other => panic!("expected Failed, got {other:?}"),
+        }
+        match &err.event {
+            LifecycleEvent::Fail(reason) => assert_eq!(reason.len(), 10_000),
+            other => panic!("expected Fail, got {other:?}"),
+        }
+
+        // The rendered `Display` output must be bounded: each embedded
+        // reason contributes at most 32 chars plus an ellipsis marker, not
+        // all 10,000. Count the 'x' runs inside each quoted reason rather
+        // than the whole message, since other words in the message contain
+        // 'x' too (e.g. none here, but this keeps the check precise).
+        let rendered = err.to_string();
+        let quoted: Vec<&str> = rendered.split('"').skip(1).step_by(2).collect();
+        assert_eq!(
+            quoted.len(),
+            2,
+            "expected exactly two quoted reasons in {rendered:?}"
+        );
+        for q in &quoted {
+            assert_eq!(
+                q.chars().filter(|&c| c == 'x').count(),
+                32,
+                "quoted reason should carry exactly 32 of the original 10,000 'x's: {q:?}"
+            );
+            assert!(
+                q.ends_with('…'),
+                "truncated output should carry an ellipsis marker: {q:?}"
+            );
+            assert_eq!(q.chars().count(), 33);
+        }
+
+        // Sanity bound: the whole rendered message must be small, nowhere
+        // near the 20,000+ chars it would be if both reasons were rendered
+        // in full.
+        assert!(
+            rendered.len() < 200,
+            "rendered message should be small, got {} bytes",
+            rendered.len()
+        );
     }
 
     /// Every `SurfaceState` variant crossed with every `LifecycleEvent`

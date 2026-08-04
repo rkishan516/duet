@@ -44,8 +44,9 @@ fn state_survives_teardown_and_is_restored_on_resume() {
         last_interaction: Instant(0),
         now: Instant(1_000),
     };
-    assert_eq!(evaluate(&policy, &input), Decision::Suspend);
-    state = transition(&state, &LifecycleEvent::Suspend { at: Instant(1_000) }).unwrap();
+    let decision = evaluate(&policy, &input);
+    assert_eq!(decision, Decision::Suspend);
+    state = transition(&state, &decision.into_event(Instant(1_000)).unwrap()).unwrap();
 
     // Grace elapses, surface is torn down and its subscriptions dropped.
     let input = PolicyInput {
@@ -53,8 +54,9 @@ fn state_survives_teardown_and_is_restored_on_resume() {
         now: Instant(6_000),
         ..input
     };
-    assert_eq!(evaluate(&policy, &input), Decision::Teardown);
-    state = transition(&state, &LifecycleEvent::GraceExpired).unwrap();
+    let decision = evaluate(&policy, &input);
+    assert_eq!(decision, Decision::Teardown);
+    state = transition(&state, &decision.into_event(Instant(6_000)).unwrap()).unwrap();
     assert_eq!(state, SurfaceState::Cold);
     assert_eq!(store.drop_subscriber(surface), 1);
 
@@ -125,10 +127,11 @@ fn independent_surfaces_survive_teardown_separately() {
         last_interaction: Instant(0),
         now: Instant(1_000),
     };
-    assert_eq!(evaluate(&policy, &input), Decision::Suspend);
+    let decision = evaluate(&policy, &input);
+    assert_eq!(decision, Decision::Suspend);
     flutter_state = transition(
         &flutter_state,
-        &LifecycleEvent::Suspend { at: Instant(1_000) },
+        &decision.into_event(Instant(1_000)).unwrap(),
     )
     .unwrap();
 
@@ -137,8 +140,13 @@ fn independent_surfaces_survive_teardown_separately() {
         now: Instant(6_000),
         ..input
     };
-    assert_eq!(evaluate(&policy, &input), Decision::Teardown);
-    flutter_state = transition(&flutter_state, &LifecycleEvent::GraceExpired).unwrap();
+    let decision = evaluate(&policy, &input);
+    assert_eq!(decision, Decision::Teardown);
+    flutter_state = transition(
+        &flutter_state,
+        &decision.into_event(Instant(6_000)).unwrap(),
+    )
+    .unwrap();
     assert_eq!(flutter_state, SurfaceState::Cold);
     assert_eq!(store.drop_subscriber(flutter), 1);
 
@@ -235,16 +243,18 @@ fn on_last_window_closed_drives_a_full_suspend_teardown_resume_cycle() {
         last_interaction: Instant(0),
         now: Instant(100),
     };
-    assert_eq!(evaluate(&policy, &input), Decision::Suspend);
-    state = transition(&state, &LifecycleEvent::Suspend { at: Instant(100) }).unwrap();
+    let decision = evaluate(&policy, &input);
+    assert_eq!(decision, Decision::Suspend);
+    state = transition(&state, &decision.into_event(Instant(100)).unwrap()).unwrap();
 
     let input = PolicyInput {
         state: state.clone(),
         now: Instant(3_100),
         ..input
     };
-    assert_eq!(evaluate(&policy, &input), Decision::Teardown);
-    state = transition(&state, &LifecycleEvent::GraceExpired).unwrap();
+    let decision = evaluate(&policy, &input);
+    assert_eq!(decision, Decision::Teardown);
+    state = transition(&state, &decision.into_event(Instant(3_100)).unwrap()).unwrap();
     assert_eq!(state, SurfaceState::Cold);
     assert_eq!(store.drop_subscriber(surface), 1);
 
@@ -274,16 +284,18 @@ fn on_hidden_drives_a_full_suspend_teardown_resume_cycle() {
         last_interaction: Instant(0),
         now: Instant(50),
     };
-    assert_eq!(evaluate(&policy, &input), Decision::Suspend);
-    state = transition(&state, &LifecycleEvent::Suspend { at: Instant(50) }).unwrap();
+    let decision = evaluate(&policy, &input);
+    assert_eq!(decision, Decision::Suspend);
+    state = transition(&state, &decision.into_event(Instant(50)).unwrap()).unwrap();
 
     let input = PolicyInput {
         state: state.clone(),
         now: Instant(2_050),
         ..input
     };
-    assert_eq!(evaluate(&policy, &input), Decision::Teardown);
-    state = transition(&state, &LifecycleEvent::GraceExpired).unwrap();
+    let decision = evaluate(&policy, &input);
+    assert_eq!(decision, Decision::Teardown);
+    state = transition(&state, &decision.into_event(Instant(2_050)).unwrap()).unwrap();
     assert_eq!(state, SurfaceState::Cold);
     assert_eq!(store.drop_subscriber(surface), 1);
 
@@ -312,8 +324,9 @@ fn idle_timeout_drives_a_full_suspend_teardown_resume_cycle() {
         last_interaction: Instant(0),
         now: Instant(1_000),
     };
-    assert_eq!(evaluate(&policy, &input), Decision::Suspend);
-    state = transition(&state, &LifecycleEvent::Suspend { at: Instant(1_000) }).unwrap();
+    let decision = evaluate(&policy, &input);
+    assert_eq!(decision, Decision::Suspend);
+    state = transition(&state, &decision.into_event(Instant(1_000)).unwrap()).unwrap();
 
     // Idle timeout has no separate grace period: the idle interval already
     // served as the grace, so teardown is immediate once Suspending.
@@ -322,8 +335,9 @@ fn idle_timeout_drives_a_full_suspend_teardown_resume_cycle() {
         now: Instant(1_000),
         ..input
     };
-    assert_eq!(evaluate(&policy, &input), Decision::Teardown);
-    state = transition(&state, &LifecycleEvent::GraceExpired).unwrap();
+    let decision = evaluate(&policy, &input);
+    assert_eq!(decision, Decision::Teardown);
+    state = transition(&state, &decision.into_event(Instant(1_000)).unwrap()).unwrap();
     assert_eq!(state, SurfaceState::Cold);
     assert_eq!(store.drop_subscriber(surface), 1);
 
@@ -413,8 +427,9 @@ fn repeated_close_reopen_within_grace_never_reaches_cold() {
             last_interaction: Instant(clock),
             now: Instant(clock),
         };
-        assert_eq!(evaluate(&policy, &close_input), Decision::Suspend);
-        state = transition(&state, &LifecycleEvent::Suspend { at: Instant(clock) }).unwrap();
+        let decision = evaluate(&policy, &close_input);
+        assert_eq!(decision, Decision::Suspend);
+        state = transition(&state, &decision.into_event(Instant(clock)).unwrap()).unwrap();
         assert!(matches!(state, SurfaceState::Suspending { .. }));
 
         // Reopen well inside the 5s grace window.

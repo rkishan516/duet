@@ -1,6 +1,6 @@
 //! Teardown policy evaluation.
 
-use crate::lifecycle::{Instant, SurfaceState};
+use crate::lifecycle::{Instant, LifecycleEvent, SurfaceState};
 
 /// When a surface's resources should be released.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,6 +67,24 @@ pub enum Decision {
     Suspend,
     /// Move `Suspending` -> `Cold`.
     Teardown,
+}
+
+impl Decision {
+    /// Converts a decision into the lifecycle event that enacts it.
+    ///
+    /// `now` must be the same instant passed to [`evaluate`] as
+    /// `PolicyInput::now`. Passing a different value silently corrupts the grace
+    /// computation, which is why this conversion exists rather than leaving each
+    /// caller to construct the event by hand.
+    ///
+    /// Returns `None` for [`Decision::NoChange`], which enacts nothing.
+    pub fn into_event(self, now: Instant) -> Option<LifecycleEvent> {
+        match self {
+            Decision::NoChange => None,
+            Decision::Suspend => Some(LifecycleEvent::Suspend { at: now }),
+            Decision::Teardown => Some(LifecycleEvent::GraceExpired),
+        }
+    }
 }
 
 /// Decides what should happen to a surface. Pure — no side effects, no
@@ -146,6 +164,30 @@ mod tests {
         assert_eq!(
             Policy::default(),
             Policy::OnLastWindowClosed { grace_ms: 5_000 }
+        );
+    }
+
+    #[test]
+    fn no_change_converts_to_no_event() {
+        assert_eq!(Decision::NoChange.into_event(Instant(1_234)), None);
+    }
+
+    #[test]
+    fn suspend_converts_to_suspend_event_at_now() {
+        assert_eq!(
+            Decision::Suspend.into_event(Instant(1_234)),
+            Some(LifecycleEvent::Suspend { at: Instant(1_234) })
+        );
+    }
+
+    #[test]
+    fn teardown_converts_to_grace_expired_event() {
+        // The non-obvious naming discontinuity this conversion exists to
+        // encode: `Decision::Teardown` maps to `LifecycleEvent::GraceExpired`,
+        // not to some `Teardown` event -- there isn't one.
+        assert_eq!(
+            Decision::Teardown.into_event(Instant(1_234)),
+            Some(LifecycleEvent::GraceExpired)
         );
     }
 

@@ -3,6 +3,7 @@ name = "duet-core"
 description = "Platform-free state store, lifecycle, and policy engine for Duet"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 

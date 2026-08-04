@@ -3,7 +3,9 @@
 /// One step in a path: either a map key or a list index.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Segment {
+    /// A string-keyed map lookup, e.g. the `editor` in `editor.zoom`.
     Key(String),
+    /// A list index lookup, e.g. the `3` in `documents[3]`.
     Index(usize),
 }
 
@@ -24,6 +26,15 @@ impl Path {
     /// [`Path::parse`] only if every key is non-empty and avoids `.`, `[`,
     /// and `]`. Paths built by `parse` always satisfy this; hand-built paths
     /// must ensure it themselves. Debug builds assert it.
+    ///
+    /// This is for **trusted construction only** — the validation above is a
+    /// `debug_assert!`, which is compiled out in release builds. A key
+    /// containing `.` supplied by a guest process (Flutter, JavaScript) will
+    /// panic a debug host, and in release will silently build a `Path` whose
+    /// `Display` round-trips to a *different* path than intended (one
+    /// segment in, two out on re-parse). Any path built from data arriving
+    /// over IPC from a guest must go through [`Path::parse`] instead, which
+    /// validates unconditionally in every build profile.
     pub fn from_segments(segments: Vec<Segment>) -> Self {
         debug_assert!(
             segments.iter().all(|segment| match segment {
@@ -215,14 +226,23 @@ pub enum PathParseError {
     /// The `[` at this byte offset was never matched by a closing `]`.
     UnclosedIndex(usize),
     /// A bracket contained something that is not a canonical decimal index.
-    /// `at` is the byte offset of the opening `[`.
-    InvalidIndex { at: usize, raw: String },
+    InvalidIndex {
+        /// The byte offset of the opening `[`.
+        at: usize,
+        /// The raw text found between the brackets, unparsed.
+        raw: String,
+    },
     /// The path ended immediately after a `.`, with no key following it.
     TrailingDot,
     /// A character appeared where the grammar does not allow it: a stray
     /// `]`, a `[` immediately following a `.`, or text immediately after a
     /// closing `]` that is not `.` or `[`.
-    UnexpectedChar { at: usize, ch: char },
+    UnexpectedChar {
+        /// The byte offset of the unexpected character.
+        at: usize,
+        /// The unexpected character itself.
+        ch: char,
+    },
 }
 
 impl std::fmt::Display for PathParseError {
