@@ -485,4 +485,75 @@ mod tests {
             "a write with no overlapping subscription must not call deliver at all"
         );
     }
+
+    #[test]
+    fn a_panicking_sink_does_not_hang_the_next_caller() {
+        // A sink whose `deliver` always panics, standing in for a
+        // catastrophically broken implementation. Rust prints the panic to
+        // stderr when the thread unwinds — that output is expected noise from
+        // this test, not a sign anything is wrong.
+        struct PanickingSink;
+        impl Sink for PanickingSink {
+            fn deliver(
+                &self,
+                _batch: Vec<duet_core::Notification>,
+            ) -> Result<(), crate::SinkError> {
+                panic!("intentional panic: proving a dead core thread surfaces as an error");
+            }
+        }
+
+        let rt = Runtime::spawn(sample(), PanickingSink);
+        let handle = rt.handle();
+        handle
+            .subscribe(duet_core::SubscriberId(1), p("editor.zoom"))
+            .expect("subscribe should succeed");
+
+        // The write itself already replied before delivery runs, so it
+        // succeeds even though the sink is about to panic and take the core
+        // thread down with it.
+        handle
+            .set(&p("editor.zoom"), Value::Float(2.0))
+            .expect("the write itself must succeed; the panic is inside delivery, which runs after the reply");
+
+        // `deliver` panics unconditionally, synchronously, before core_loop
+        // ever loops back to accept another command — so this next call is
+        // guaranteed to observe the core thread as gone, not to race it.
+        assert_eq!(
+            handle.get(&p("editor.zoom")),
+            Err(RuntimeError::CoreThreadGone),
+            "a caller after a panicking delivery must get an error, not hang forever"
+        );
+    }
+
+    #[test]
+    fn a_closed_sink_does_not_stop_the_core_thread() {
+        // A dead UI must not take the store down with it: deliver() reporting
+        // SinkError::Closed is the documented non-fatal case, distinct from a
+        // panic, and core_loop must keep serving requests afterwards.
+        struct ClosedSink;
+        impl Sink for ClosedSink {
+            fn deliver(
+                &self,
+                _batch: Vec<duet_core::Notification>,
+            ) -> Result<(), crate::SinkError> {
+                Err(crate::SinkError::Closed)
+            }
+        }
+
+        let rt = Runtime::spawn(sample(), ClosedSink);
+        let handle = rt.handle();
+        handle
+            .subscribe(duet_core::SubscriberId(1), p("editor.zoom"))
+            .expect("subscribe should succeed");
+        handle
+            .set(&p("editor.zoom"), Value::Float(2.0))
+            .expect("set should succeed");
+
+        assert_eq!(
+            handle.get(&p("editor.zoom")),
+            Ok(Some(Value::Float(2.0))),
+            "the core thread must keep serving requests after a Closed delivery"
+        );
+        rt.shutdown().expect("shutdown should succeed");
+    }
 }
