@@ -50,6 +50,9 @@ impl Value {
     /// enclosing expression), so no turbofish is needed in the tests below,
     /// but a bare `Value::map([])` used where the element type cannot be
     /// inferred from context would need one.
+    ///
+    /// If the same key appears more than once, the last occurrence wins —
+    /// this is plain `BTreeMap` insertion semantics, not special-cased here.
     pub fn map<'a>(entries: impl IntoIterator<Item = (&'a str, Value)>) -> Value {
         Value::Map(
             entries
@@ -61,6 +64,13 @@ impl Value {
 
     /// Reads the value at `path`, or `None` if any segment is missing or
     /// addresses the wrong kind of node.
+    ///
+    /// `get` collapses every failure reason into `None`, unlike [`Value::set`]
+    /// which returns a [`SetError`] describing exactly what went wrong. This
+    /// asymmetry is deliberate: `get` is the read hot path, and `Option`
+    /// keeps it allocation-free with no error type to construct, while `set`
+    /// is comparatively rare and its callers benefit from knowing why a
+    /// write was rejected.
     pub fn get(&self, path: &Path) -> Option<&Value> {
         let mut current = self;
         for segment in path.segments() {
@@ -102,10 +112,12 @@ impl Value {
     ///   a `Map`, or any segment against a scalar (`Null`, `Bool`, `Int`,
     ///   `Float`, `Str`, `Bytes`).
     ///
-    /// Every error variant carries the *full* path passed to `set`, not the
-    /// partial path walked so far — a guest process relaying this error over
-    /// IPC needs the whole address to locate the problem, not just the
-    /// segment where the walk stopped.
+    /// [`SetError::MissingKey`] and [`SetError::TypeMismatch`] carry the
+    /// *full* path passed to `set`, not the partial path walked so far — a
+    /// guest process relaying the error over IPC needs the whole address to
+    /// locate the problem, not just the segment where the walk stopped.
+    /// [`SetError::IndexOutOfBounds`] is the exception: it carries only the
+    /// offending index, not a path (see that variant's doc comment).
     pub fn set(&mut self, path: &Path, value: Value) -> Result<(), SetError> {
         let segments = path.segments();
         let Some((last, parents)) = segments.split_last() else {
@@ -128,7 +140,16 @@ impl Value {
 
         match (current, last) {
             (Value::Map(m), Segment::Key(k)) => {
-                m.insert(k.clone(), value);
+                // Clone `k` only on a genuine insert of a new key; an
+                // overwrite of an existing key reuses its `String` in place.
+                // This is the hot path for `Store::set`, so avoiding an
+                // allocation on every overwrite matters.
+                match m.get_mut(k) {
+                    Some(slot) => *slot = value,
+                    None => {
+                        m.insert(k.clone(), value);
+                    }
+                }
                 Ok(())
             }
             (Value::List(l), Segment::Index(i)) => {
@@ -143,9 +164,11 @@ impl Value {
 
 /// Why a write ([`Value::set`]) could not be applied.
 ///
-/// Every variant carries the full path originally passed to `set`, not a
-/// partial path, so a guest process relaying this error over IPC can locate
-/// the problem without reconstructing context this side of the boundary.
+/// [`SetError::MissingKey`] and [`SetError::TypeMismatch`] carry the full
+/// path originally passed to `set`, not a partial path, so a guest process
+/// relaying the error over IPC can locate the problem without reconstructing
+/// context this side of the boundary. [`SetError::IndexOutOfBounds`] does
+/// **not** carry a path — see its doc comment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SetError {
     /// A map key on the path does not exist. Only possible for a key
@@ -156,6 +179,14 @@ pub enum SetError {
     /// A list index on the path — intermediate or final — is out of bounds
     /// for the list it addresses. An index equal to `len()` counts as out of
     /// bounds; `set` never appends.
+    ///
+    /// Unlike the other two variants, this one carries only the offending
+    /// index, **not** the path that produced it: two different paths that
+    /// bottom out on the same out-of-bounds index (e.g. `a.b.c[9]` and
+    /// `flags[9]`) produce an identical, indistinguishable
+    /// `IndexOutOfBounds(9)`. A caller that needs the full address for a
+    /// guest-facing error message must pair this with the path it originally
+    /// passed to `set`.
     IndexOutOfBounds(usize),
     /// A segment addressed the wrong kind of node: a key segment against a
     /// `List`, an index segment against a `Map`, or any segment against a
@@ -182,6 +213,20 @@ mod tests {
     use super::*;
     use crate::path::Path;
 
+    /// The fixture used across `value` tests.
+    ///
+    /// Deliberately reaches structural cases a smaller fixture cannot:
+    /// - `documents` has 3 elements (not 1), so a `set`/`get` that always
+    ///   touches slot 0 regardless of the requested index is distinguishable
+    ///   from a correct implementation, and an out-of-bounds *intermediate*
+    ///   index (e.g. `documents[9].title`) is reachable.
+    /// - `matrix` is a list nested in a list.
+    /// - `empty_map` and `empty_list` are empty containers.
+    /// - `thumbnail` is a `Bytes` value.
+    ///
+    /// `editor.zoom`, `editor.theme`, and `documents[0].title` keep their
+    /// original values so existing tests that reference them by path are
+    /// unaffected by this fixture's growth.
     fn sample() -> Value {
         Value::map([
             (
@@ -193,8 +238,22 @@ mod tests {
             ),
             (
                 "documents",
-                Value::List(vec![Value::map([("title", Value::Str("first".into()))])]),
+                Value::List(vec![
+                    Value::map([("title", Value::Str("first".into()))]),
+                    Value::map([("title", Value::Str("second".into()))]),
+                    Value::map([("title", Value::Str("third".into()))]),
+                ]),
             ),
+            (
+                "matrix",
+                Value::List(vec![
+                    Value::List(vec![Value::Int(1), Value::Int(2)]),
+                    Value::List(vec![Value::Int(3)]),
+                ]),
+            ),
+            ("empty_map", Value::map([])),
+            ("empty_list", Value::List(vec![])),
+            ("thumbnail", Value::Bytes(vec![0xDE, 0xAD, 0xBE, 0xEF])),
         ])
     }
 
@@ -297,6 +356,48 @@ mod tests {
         );
     }
 
+    #[test]
+    fn set_through_out_of_bounds_intermediate_index_errors() {
+        let mut v = sample();
+        // The failing segment is intermediate, not final.
+        assert_eq!(
+            v.set(&p("documents[9].title"), Value::Null),
+            Err(SetError::IndexOutOfBounds(9))
+        );
+    }
+
+    #[test]
+    fn out_of_bounds_error_reports_the_offending_index_not_the_length() {
+        let mut v = sample();
+        // Distinguishes a correct implementation from one reporting len().
+        assert_eq!(
+            v.set(&p("documents[9]"), Value::Null),
+            Err(SetError::IndexOutOfBounds(9))
+        );
+        assert_eq!(
+            v.set(&p("documents[42]"), Value::Null),
+            Err(SetError::IndexOutOfBounds(42))
+        );
+    }
+
+    #[test]
+    fn set_and_get_non_zero_list_index_leaves_index_zero_unchanged() {
+        let mut v = sample();
+        // `documents` now has 3 elements; this kills a mutant that always
+        // reads or writes slot 0 regardless of the requested index.
+        v.set(&p("documents[2].title"), Value::Str("edited".into()))
+            .unwrap();
+        assert_eq!(
+            v.get(&p("documents[2].title")),
+            Some(&Value::Str("edited".into()))
+        );
+        assert_eq!(
+            v.get(&p("documents[0].title")),
+            Some(&Value::Str("first".into())),
+            "writing index 2 must not disturb index 0"
+        );
+    }
+
     // --- Required additions beyond the plan's example-based tests ---
 
     /// Recursively collects every path `get` can reach in `value`, including
@@ -324,30 +425,58 @@ mod tests {
     }
 
     /// For every path that `get` can reach, writing a value there and reading
-    /// it back must return exactly that value, and must not disturb any
-    /// sibling. This is (A) from the task spec: a property test complementing
-    /// the example tests above — per the standing quality bar, property
-    /// tests pin structure and example tests pin semantics, and a prior task
-    /// in this crate found that property tests alone can pass against a
-    /// mutant that breaks semantics.
+    /// it back must return exactly that value, and every *other* reachable
+    /// path that does not overlap it must retain its original value. This is
+    /// (A) from the task spec, tightened by review round two into a genuine
+    /// frame condition ("this write changed exactly one thing and nothing
+    /// else") rather than a single opposite-branch canary, which could not
+    /// detect a mutant that clobbers same-map siblings at depth >= 2 (e.g.
+    /// writing `editor.zoom` silently changing `editor.theme`, two leaves of
+    /// the *same* map). Per the standing quality bar, property tests pin
+    /// structure and example tests pin semantics, and a prior task in this
+    /// crate found that property tests alone can pass against a mutant that
+    /// breaks semantics.
     #[test]
     fn set_then_get_round_trips_at_every_reachable_path() {
+        let pristine = sample();
         let paths = {
             let mut out = Vec::new();
-            collect_paths(&sample(), &Path::root(), &mut out);
+            collect_paths(&pristine, &Path::root(), &mut out);
             out
         };
 
-        // `sample()` has exactly 7 reachable nodes: the root; `editor`; its
-        // two leaves `editor.theme` and `editor.zoom`; `documents`;
-        // `documents[0]`; and its leaf `documents[0].title`. Pinned exactly
-        // so a future change to `sample()` that silently drops a branch (and
-        // with it a class of paths this test exercises) is caught here
-        // rather than discovered later.
-        assert_eq!(paths.len(), 7, "reachable path count changed in sample()");
+        // `sample()` has exactly 20 reachable nodes:
+        //   root                                             1
+        //   editor, editor.theme, editor.zoom                3
+        //   documents, documents[i], documents[i].title (i=0..=2)  1 + 3*2 = 7
+        //   matrix, matrix[0], matrix[0][0], matrix[0][1],
+        //     matrix[1], matrix[1][0]                        6
+        //   empty_map                                        1
+        //   empty_list                                       1
+        //   thumbnail                                        1
+        //                                             total = 20
+        // Pinned exactly so a future change to `sample()` that silently
+        // drops a branch (and with it a class of paths this test exercises)
+        // is caught here rather than discovered later. If this number
+        // changes, recount deliberately using the breakdown above rather
+        // than just updating the digit.
+        assert_eq!(paths.len(), 20, "reachable path count changed in sample()");
+
+        // Snapshot every reachable path's original value once, up front, so
+        // each iteration below can check every *other* path against it.
+        let snapshot: Vec<(Path, Value)> = paths
+            .iter()
+            .map(|path| {
+                let value = pristine
+                    .get(path)
+                    .unwrap_or_else(|| panic!("collected path {path} must be reachable"))
+                    .clone();
+                (path.clone(), value)
+            })
+            .collect();
 
         for path in &paths {
-            let mut v = sample();
+            let mut v = pristine.clone();
             let sentinel = Value::Str("SENTINEL".to_string());
             v.set(path, sentinel.clone())
                 .unwrap_or_else(|e| panic!("set at reachable path {path} must succeed: {e}"));
@@ -357,24 +486,22 @@ mod tests {
                 "round trip failed for path {path}"
             );
 
-            if path.is_root() {
-                // Root replaces the whole tree; there is no sibling left to
-                // check.
-                continue;
+            // Frame condition: every other reachable path that does not
+            // overlap `path` (neither an ancestor nor a descendant of it)
+            // must retain exactly its original `sample()` value. Ancestors
+            // and descendants are excluded because writing `path` legitimately
+            // changes them (an ancestor's subtree now contains the sentinel;
+            // a descendant no longer exists once `path` becomes a scalar).
+            for (other_path, original_value) in &snapshot {
+                if path.overlaps(other_path) {
+                    continue;
+                }
+                assert_eq!(
+                    v.get(other_path),
+                    Some(original_value),
+                    "writing {path} disturbed unrelated path {other_path}"
+                );
             }
-            // Pick a canary from whichever top-level branch `path` does NOT
-            // touch, so writing `path` must leave the canary exactly as
-            // `sample()` set it.
-            let (canary_path, canary_expected) = if p("editor").overlaps(path) {
-                (p("documents[0].title"), Value::Str("first".to_string()))
-            } else {
-                (p("editor.zoom"), Value::Float(1.0))
-            };
-            assert_eq!(
-                v.get(&canary_path),
-                Some(&canary_expected),
-                "writing {path} disturbed unrelated path {canary_path}"
-            );
         }
     }
 
@@ -432,11 +559,11 @@ mod tests {
     #[test]
     fn set_index_one_past_end_is_out_of_bounds_not_append() {
         let mut v = sample();
-        // `documents` has length 1 (valid index: 0). Index 1 is one past the
-        // end and must error, not silently grow the list.
+        // `documents` has length 3 (valid indices: 0, 1, 2). Index 3 is one
+        // past the end and must error, not silently grow the list.
         assert_eq!(
-            v.set(&p("documents[1]"), Value::Null),
-            Err(SetError::IndexOutOfBounds(1))
+            v.set(&p("documents[3]"), Value::Null),
+            Err(SetError::IndexOutOfBounds(3))
         );
         assert_eq!(v, sample(), "a rejected append must not mutate the list");
     }
@@ -447,14 +574,15 @@ mod tests {
 
     #[test]
     fn failed_writes_leave_the_tree_completely_untouched() {
-        let failing_paths_and_values: [(Path, Value); 7] = [
+        let failing_paths_and_values: [(Path, Value); 8] = [
             (p("nope.deeper"), Value::Null),
             (p("editor[0]"), Value::Null),
             (p("documents[9]"), Value::Null),
             (p("editor.zoom.deeper"), Value::Null),
             (p("documents.title"), Value::Null),
             (p("editor[0].nested"), Value::Null),
-            (p("documents[1]"), Value::Null),
+            (p("documents[3]"), Value::Null),
+            (p("documents[9].title"), Value::Null),
         ];
 
         for (path, value) in failing_paths_and_values {
