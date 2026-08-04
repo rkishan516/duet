@@ -67,4 +67,17 @@ mod tests {
         fn assert_error<E: std::error::Error>() {}
         assert_error::<RuntimeError>();
     }
+
+    #[test]
+    fn set_error_converts_into_a_wrapped_store_error() {
+        let inner = duet_core::SetError::MissingKey(
+            duet_core::Path::parse("nope.deeper").expect("test path should parse"),
+        );
+        let converted: RuntimeError = inner.clone().into();
+        assert_eq!(
+            converted,
+            RuntimeError::Store(inner),
+            "From must wrap the store error, not discard it"
+        );
+    }
 }

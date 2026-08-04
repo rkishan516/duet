@@ -38,6 +38,14 @@ impl std::error::Error for SinkError {}
 pub trait Sink: Send + 'static {
     /// Accepts one batch.
     ///
+    /// Implementations **must not block**. `deliver` is called on the core
+    /// thread, which must stay responsive to store requests; a blocking sink
+    /// stalls every reader and writer in the process. Marshal and return.
+    ///
+    /// Panic behaviour is **not yet defined** — do not rely on `deliver` being
+    /// panic-safe. A later task establishes what happens when it panics; this
+    /// is currently left open rather than silently assumed either way.
+    ///
     /// # Errors
     ///
     /// Returns [`SinkError::Closed`] when the destination no longer exists. The
@@ -157,6 +165,20 @@ mod tests {
     fn null_sink_accepts_everything_and_records_nothing() {
         let sink = NullSink;
         assert_eq!(sink.deliver(vec![note(1)]), Ok(()));
+    }
+
+    #[test]
+    fn clones_share_one_recording() {
+        let sink = RecordingSink::new();
+        let clone = sink.clone();
+        clone
+            .deliver(vec![note(1)])
+            .expect("delivery should succeed");
+        assert_eq!(
+            sink.notifications().len(),
+            1,
+            "a clone and its original must observe the same recording"
+        );
     }
 
     #[test]
