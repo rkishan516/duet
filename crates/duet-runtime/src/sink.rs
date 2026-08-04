@@ -196,4 +196,9 @@ mod tests {
             .expect("empty delivery should succeed");
         assert_eq!(sink.batches().len(), 1);
     }
+
+    #[test]
+    fn sink_error_closed_displays_actionably() {
+        assert_eq!(SinkError::Closed.to_string(), "notification sink is closed");
+    }
 }
