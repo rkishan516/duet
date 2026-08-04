@@ -122,6 +122,7 @@ impl Path {
     }
 
     /// True when `self` addresses this path or any ancestor of `other`.
+    #[inline]
     pub fn is_prefix_of(&self, other: &Path) -> bool {
         self.0.len() <= other.0.len() && self.0.iter().zip(other.0.iter()).all(|(a, b)| a == b)
     }
@@ -132,6 +133,7 @@ impl Path {
     /// notified about a write at `other` when the paths overlap in either
     /// direction. A write to an ancestor may change the subscriber's value, and a
     /// write to a descendant changes part of the subtree the subscriber observes.
+    #[inline]
     pub fn overlaps(&self, other: &Path) -> bool {
         self.is_prefix_of(other) || other.is_prefix_of(self)
     }
@@ -658,24 +660,47 @@ mod tests {
         assert!(!p("docs[0].title").overlaps(&p("docs[1].title")));
     }
 
-    /// Enumerates every path of depth 0..=3 over a 4-symbol alphabet
-    /// (`a`, `b`, `[0]`, `[1]`) at every segment position, giving all
-    /// `4^0 + 4^1 + 4^2 + 4^3 = 85` combinations. This guarantees coverage
-    /// of: the root path (depth 0); single-key and single-index paths
-    /// (depth 1: `a`, `b`, `[0]`, `[1]`); depth-2 and depth-3 paths;
-    /// sibling keys at the same depth (e.g. `a` vs `b`); distinct indices
-    /// at the same position (e.g. `[0]` vs `[1]`); and a key and an index
-    /// at the same depth position (e.g. `a` vs `[0]`).
+    #[test]
+    fn key_that_is_string_prefix_of_another_does_not_overlap() {
+        // A subscriber at `edit` must not be notified about a write to `editor`.
+        // Segment equality is exact, not textual-prefix.
+        assert!(!p("edit").overlaps(&p("editor")));
+        assert!(!p("editor").overlaps(&p("edit")));
+        assert!(!p("edit").is_prefix_of(&p("editor")));
+        assert!(!p("editor").is_prefix_of(&p("edit")));
+    }
+
+    /// Enumerates every path of depth `0..=MAX_DEPTH` over a 4-symbol
+    /// alphabet (`a`, `ab`, `[0]`, `[1]`) at every segment position. This
+    /// guarantees coverage of: the root path (depth 0); single-key and
+    /// single-index paths (depth 1: `a`, `ab`, `[0]`, `[1]`); depth-2 and
+    /// depth-3 paths; sibling keys at the same depth (e.g. `a` vs `ab`);
+    /// distinct indices at the same position (e.g. `[0]` vs `[1]`); a key
+    /// and an index at the same depth position (e.g. `a` vs `[0]`); and,
+    /// critically, a key that is a *string*-prefix of another key at the
+    /// same position (`a` is a string-prefix of `ab`) — this is what
+    /// distinguishes correct `Segment` equality from an accidental
+    /// `str::starts_with` bug, which a corpus of single-character keys
+    /// cannot catch, since every key would then be equal-length and
+    /// distinguishing the two implementations would be impossible.
     fn prefix_test_corpus() -> Vec<Path> {
+        const MAX_DEPTH: usize = 3;
+
+        // `"a"` and `"ab"` deliberately share a string prefix — do not
+        // collapse `"ab"` back to a single character like `"b"`. A future
+        // edit that does so would silently reopen the string-prefix-vs-
+        // equality gap described in the doc comment above, since a corpus
+        // of single-character keys can't distinguish `==` from
+        // `starts_with`.
         let alphabet: [Segment; 4] = [
             Segment::Key("a".to_string()),
-            Segment::Key("b".to_string()),
+            Segment::Key("ab".to_string()),
             Segment::Index(0),
             Segment::Index(1),
         ];
 
         let mut corpus = Vec::new();
-        for len in 0..=3usize {
+        for len in 0..=MAX_DEPTH {
             let total = alphabet.len().pow(len as u32);
             for code in 0..total {
                 let mut remaining = code;
@@ -688,11 +713,14 @@ mod tests {
             }
         }
 
-        // 4^0 + 4^1 + 4^2 + 4^3 = 1 + 4 + 16 + 64 = 85. If the alphabet or
-        // max depth changes, update this count deliberately.
+        // One path per segment sequence of every length 0..=MAX_DEPTH over
+        // the alphabet: sum_{d=0}^{MAX_DEPTH} alphabet.len()^d. Derived
+        // rather than hardcoded so the asserted count can never drift from
+        // what the loop above actually produces.
+        let expected: usize = (0..=MAX_DEPTH).map(|d| alphabet.len().pow(d as u32)).sum();
         assert_eq!(
             corpus.len(),
-            85,
+            expected,
             "corpus size changed; update this count deliberately"
         );
         corpus
