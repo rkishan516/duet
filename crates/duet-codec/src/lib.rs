@@ -30,3 +30,19 @@ pub mod error;
 mod value;
 
 pub use error::CodecError;
+
+/// Encodes a [`duet_core::Value`] into its tagged JSON representation.
+pub fn encode_value(value: &duet_core::Value) -> serde_json::Value {
+    value::encode_value(value)
+}
+
+/// Decodes a tagged JSON representation back into a [`duet_core::Value`].
+///
+/// # Errors
+///
+/// Returns a [`CodecError`] describing the first structural problem found. This
+/// function is total over all JSON input: it never panics, whatever a guest
+/// sends.
+pub fn decode_value(json: &serde_json::Value) -> Result<duet_core::Value, CodecError> {
+    value::decode_value(json)
+}
