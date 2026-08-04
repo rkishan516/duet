@@ -8,4 +8,4 @@ pub mod path;
 pub mod value;
 
 pub use path::{Path, PathParseError, Segment};
-pub use value::Value;
+pub use value::{SetError, Value};

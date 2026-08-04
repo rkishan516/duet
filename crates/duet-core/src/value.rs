@@ -72,7 +72,110 @@ impl Value {
         }
         Some(current)
     }
+
+    /// Writes `value` at `path`.
+    ///
+    /// Intermediate nodes are never created: writing to `a.b` when `a` does not
+    /// exist is a `MissingKey` error rather than an implicit insert. The final
+    /// segment of a map path *is* inserted if absent, so adding a new key to an
+    /// existing map succeeds. The empty path (root) replaces the whole tree
+    /// unconditionally and cannot fail.
+    ///
+    /// On error, `self` is left completely unchanged: `set` only mutates the
+    /// tree after it has walked every intermediate segment successfully, so a
+    /// failure partway through never leaves a partial write in place. This
+    /// matters to the `Store` task: a failed write must produce no
+    /// notifications and no partial mutation.
+    ///
+    /// # Errors
+    ///
+    /// - [`SetError::MissingKey`] — an intermediate or final map key on the
+    ///   path does not exist. Note the final segment of a map path is the one
+    ///   exception: it is inserted rather than erroring (see above), so this
+    ///   variant is only ever returned for a key strictly before the last
+    ///   segment.
+    /// - [`SetError::IndexOutOfBounds`] — a list index on the path, whether
+    ///   intermediate or final, is `>= len()` for the list it addresses. This
+    ///   includes an index exactly equal to `len()`; `set` never appends.
+    /// - [`SetError::TypeMismatch`] — a segment addressed the wrong kind of
+    ///   node, e.g. a key segment against a `List`, an index segment against
+    ///   a `Map`, or any segment against a scalar (`Null`, `Bool`, `Int`,
+    ///   `Float`, `Str`, `Bytes`).
+    ///
+    /// Every error variant carries the *full* path passed to `set`, not the
+    /// partial path walked so far — a guest process relaying this error over
+    /// IPC needs the whole address to locate the problem, not just the
+    /// segment where the walk stopped.
+    pub fn set(&mut self, path: &Path, value: Value) -> Result<(), SetError> {
+        let segments = path.segments();
+        let Some((last, parents)) = segments.split_last() else {
+            *self = value;
+            return Ok(());
+        };
+
+        let mut current: &mut Value = self;
+        for segment in parents {
+            current = match (current, segment) {
+                (Value::Map(m), Segment::Key(k)) => m
+                    .get_mut(k)
+                    .ok_or_else(|| SetError::MissingKey(path.clone()))?,
+                (Value::List(l), Segment::Index(i)) => {
+                    l.get_mut(*i).ok_or(SetError::IndexOutOfBounds(*i))?
+                }
+                _ => return Err(SetError::TypeMismatch(path.clone())),
+            };
+        }
+
+        match (current, last) {
+            (Value::Map(m), Segment::Key(k)) => {
+                m.insert(k.clone(), value);
+                Ok(())
+            }
+            (Value::List(l), Segment::Index(i)) => {
+                let slot = l.get_mut(*i).ok_or(SetError::IndexOutOfBounds(*i))?;
+                *slot = value;
+                Ok(())
+            }
+            _ => Err(SetError::TypeMismatch(path.clone())),
+        }
+    }
 }
+
+/// Why a write ([`Value::set`]) could not be applied.
+///
+/// Every variant carries the full path originally passed to `set`, not a
+/// partial path, so a guest process relaying this error over IPC can locate
+/// the problem without reconstructing context this side of the boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SetError {
+    /// A map key on the path does not exist. Only possible for a key
+    /// strictly before the final segment: the final segment of a map path is
+    /// inserted rather than erroring, so a missing *final* key never
+    /// produces this variant.
+    MissingKey(Path),
+    /// A list index on the path — intermediate or final — is out of bounds
+    /// for the list it addresses. An index equal to `len()` counts as out of
+    /// bounds; `set` never appends.
+    IndexOutOfBounds(usize),
+    /// A segment addressed the wrong kind of node: a key segment against a
+    /// `List`, an index segment against a `Map`, or any segment against a
+    /// scalar variant.
+    TypeMismatch(Path),
+}
+
+impl std::fmt::Display for SetError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SetError::MissingKey(path) => write!(f, "no key exists at path \"{path}\""),
+            SetError::IndexOutOfBounds(i) => write!(f, "index {i} is out of bounds"),
+            SetError::TypeMismatch(path) => {
+                write!(f, "path \"{path}\" addresses the wrong kind of node")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SetError {}
 
 #[cfg(test)]
 mod tests {
@@ -132,5 +235,271 @@ mod tests {
     fn get_through_wrong_kind_returns_none() {
         // `editor` is a map, not a list.
         assert_eq!(sample().get(&p("editor[0]")), None);
+    }
+
+    #[test]
+    fn set_root_replaces_whole_tree() {
+        let mut v = sample();
+        v.set(&Path::root(), Value::Int(7)).unwrap();
+        assert_eq!(v, Value::Int(7));
+    }
+
+    #[test]
+    fn set_existing_key() {
+        let mut v = sample();
+        v.set(&p("editor.zoom"), Value::Float(2.5)).unwrap();
+        assert_eq!(v.get(&p("editor.zoom")), Some(&Value::Float(2.5)));
+    }
+
+    #[test]
+    fn set_inserts_new_key_on_existing_map() {
+        let mut v = sample();
+        v.set(&p("editor.wrap"), Value::Bool(true)).unwrap();
+        assert_eq!(v.get(&p("editor.wrap")), Some(&Value::Bool(true)));
+    }
+
+    #[test]
+    fn set_through_index() {
+        let mut v = sample();
+        v.set(&p("documents[0].title"), Value::Str("renamed".into()))
+            .unwrap();
+        assert_eq!(
+            v.get(&p("documents[0].title")),
+            Some(&Value::Str("renamed".into()))
+        );
+    }
+
+    #[test]
+    fn set_missing_intermediate_key_errors() {
+        let mut v = sample();
+        assert_eq!(
+            v.set(&p("nope.deeper"), Value::Null),
+            Err(SetError::MissingKey(p("nope.deeper")))
+        );
+    }
+
+    #[test]
+    fn set_out_of_bounds_index_errors() {
+        let mut v = sample();
+        assert_eq!(
+            v.set(&p("documents[9]"), Value::Null),
+            Err(SetError::IndexOutOfBounds(9))
+        );
+    }
+
+    #[test]
+    fn set_wrong_kind_errors() {
+        let mut v = sample();
+        // `editor` is a map; indexing into it is a type error.
+        assert_eq!(
+            v.set(&p("editor[0]"), Value::Null),
+            Err(SetError::TypeMismatch(p("editor[0]")))
+        );
+    }
+
+    // --- Required additions beyond the plan's example-based tests ---
+
+    /// Recursively collects every path `get` can reach in `value`, including
+    /// the root and every intermediate node, not just leaves. Used by the
+    /// round-trip property test below.
+    fn collect_paths(value: &Value, prefix: &Path, out: &mut Vec<Path>) {
+        out.push(prefix.clone());
+        match value {
+            Value::Map(m) => {
+                for (k, child) in m {
+                    let mut segments = prefix.segments().to_vec();
+                    segments.push(Segment::Key(k.clone()));
+                    collect_paths(child, &Path::from_segments(segments), out);
+                }
+            }
+            Value::List(l) => {
+                for (i, child) in l.iter().enumerate() {
+                    let mut segments = prefix.segments().to_vec();
+                    segments.push(Segment::Index(i));
+                    collect_paths(child, &Path::from_segments(segments), out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// For every path that `get` can reach, writing a value there and reading
+    /// it back must return exactly that value, and must not disturb any
+    /// sibling. This is (A) from the task spec: a property test complementing
+    /// the example tests above — per the standing quality bar, property
+    /// tests pin structure and example tests pin semantics, and a prior task
+    /// in this crate found that property tests alone can pass against a
+    /// mutant that breaks semantics.
+    #[test]
+    fn set_then_get_round_trips_at_every_reachable_path() {
+        let paths = {
+            let mut out = Vec::new();
+            collect_paths(&sample(), &Path::root(), &mut out);
+            out
+        };
+
+        // `sample()` has exactly 7 reachable nodes: the root; `editor`; its
+        // two leaves `editor.theme` and `editor.zoom`; `documents`;
+        // `documents[0]`; and its leaf `documents[0].title`. Pinned exactly
+        // so a future change to `sample()` that silently drops a branch (and
+        // with it a class of paths this test exercises) is caught here
+        // rather than discovered later.
+        assert_eq!(paths.len(), 7, "reachable path count changed in sample()");
+
+        for path in &paths {
+            let mut v = sample();
+            let sentinel = Value::Str("SENTINEL".to_string());
+            v.set(path, sentinel.clone())
+                .unwrap_or_else(|e| panic!("set at reachable path {path} must succeed: {e}"));
+            assert_eq!(
+                v.get(path),
+                Some(&sentinel),
+                "round trip failed for path {path}"
+            );
+
+            if path.is_root() {
+                // Root replaces the whole tree; there is no sibling left to
+                // check.
+                continue;
+            }
+            // Pick a canary from whichever top-level branch `path` does NOT
+            // touch, so writing `path` must leave the canary exactly as
+            // `sample()` set it.
+            let (canary_path, canary_expected) = if p("editor").overlaps(path) {
+                (p("documents[0].title"), Value::Str("first".to_string()))
+            } else {
+                (p("editor.zoom"), Value::Float(1.0))
+            };
+            assert_eq!(
+                v.get(&canary_path),
+                Some(&canary_expected),
+                "writing {path} disturbed unrelated path {canary_path}"
+            );
+        }
+    }
+
+    // (B) Error-path tests the plan's example tests miss.
+
+    #[test]
+    fn set_through_a_scalar_is_type_mismatch_not_panic() {
+        let mut v = sample();
+        // `editor.zoom` is a `Float`; descending further into it must error,
+        // not panic.
+        assert_eq!(
+            v.set(&p("editor.zoom.deeper"), Value::Null),
+            Err(SetError::TypeMismatch(p("editor.zoom.deeper")))
+        );
+    }
+
+    #[test]
+    fn get_through_a_scalar_returns_none_not_panic() {
+        assert_eq!(sample().get(&p("editor.zoom.deeper")), None);
+    }
+
+    #[test]
+    fn set_final_key_against_list_errors() {
+        let mut v = sample();
+        // `documents` is a `List`; a key segment against it is a type error,
+        // even as the final segment.
+        assert_eq!(
+            v.set(&p("documents.title"), Value::Null),
+            Err(SetError::TypeMismatch(p("documents.title")))
+        );
+    }
+
+    #[test]
+    fn set_intermediate_index_against_map_errors() {
+        let mut v = sample();
+        // `editor` is a `Map`; an index segment against it is a type error
+        // when it is an intermediate segment, not just when final.
+        assert_eq!(
+            v.set(&p("editor[0].nested"), Value::Null),
+            Err(SetError::TypeMismatch(p("editor[0].nested")))
+        );
+    }
+
+    #[test]
+    fn set_intermediate_key_against_list_errors() {
+        let mut v = sample();
+        // `documents` is a `List`; a key segment against it is a type error
+        // when it is an intermediate segment, not just when final.
+        assert_eq!(
+            v.set(&p("documents.foo.bar"), Value::Null),
+            Err(SetError::TypeMismatch(p("documents.foo.bar")))
+        );
+    }
+
+    #[test]
+    fn set_index_one_past_end_is_out_of_bounds_not_append() {
+        let mut v = sample();
+        // `documents` has length 1 (valid index: 0). Index 1 is one past the
+        // end and must error, not silently grow the list.
+        assert_eq!(
+            v.set(&p("documents[1]"), Value::Null),
+            Err(SetError::IndexOutOfBounds(1))
+        );
+        assert_eq!(v, sample(), "a rejected append must not mutate the list");
+    }
+
+    // (C) A failed write must leave the tree completely untouched: `Store`
+    // will rely on this to guarantee no notification and no partial mutation
+    // on a failed write.
+
+    #[test]
+    fn failed_writes_leave_the_tree_completely_untouched() {
+        let failing_paths_and_values: [(Path, Value); 7] = [
+            (p("nope.deeper"), Value::Null),
+            (p("editor[0]"), Value::Null),
+            (p("documents[9]"), Value::Null),
+            (p("editor.zoom.deeper"), Value::Null),
+            (p("documents.title"), Value::Null),
+            (p("editor[0].nested"), Value::Null),
+            (p("documents[1]"), Value::Null),
+        ];
+
+        for (path, value) in failing_paths_and_values {
+            let mut v = sample();
+            let result = v.set(&path, value);
+            assert!(
+                result.is_err(),
+                "expected {path} to fail so the untouched-tree guarantee is actually exercised"
+            );
+            assert_eq!(
+                v,
+                sample(),
+                "failed set at {path} must not mutate the tree at all"
+            );
+        }
+    }
+
+    // (D) `Value::map` with an empty iterator.
+
+    #[test]
+    fn map_with_empty_iterator_produces_an_empty_map() {
+        // `Value::map([])` compiles without a turbofish here because the
+        // `let` binding's `Value` type, combined with the single `Value::Map`
+        // variant `map` can construct, is enough for inference to pick
+        // `entries: []` as `[(&str, Value); 0]`. A call site without any
+        // surrounding type context (e.g. passed directly to a function
+        // generic over its argument) would need an explicit turbofish, e.g.
+        // `Value::map::<&str, _>([])`.
+        let v: Value = Value::map([]);
+        match v {
+            Value::Map(m) => assert_eq!(m.len(), 0),
+            other => panic!("expected an empty Value::Map, got {other:?}"),
+        }
+    }
+
+    // (E) NaN breaks reflexivity of derived `PartialEq`. Documented on the
+    // `Float` variant; pinned here, not "fixed" with a hand-written impl.
+
+    #[test]
+    fn float_nan_is_not_equal_to_itself() {
+        let a = Value::Float(f64::NAN);
+        let b = Value::Float(f64::NAN);
+        #[allow(clippy::eq_op)]
+        {
+            assert_ne!(a, b, "IEEE 754 NaN is never equal to NaN, including itself");
+        }
     }
 }
