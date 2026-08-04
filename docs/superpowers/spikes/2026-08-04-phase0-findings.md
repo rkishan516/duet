@@ -6,7 +6,7 @@ Charter: `docs/superpowers/plans/2026-08-04-phase0-spike-charter.md`
 |---|---|---|
 | A | Engine-first embedding and view parenting | **YES** (macOS; Windows/Linux pending) |
 | B | Run loop coexistence | **YES** (macOS; Linux NOT attempted — largest open risk) |
-| C | Hot reload in a custom embedder | not started |
+| C | Hot reload in a custom embedder | **YES** — genuine hot reload, ~113 ms median |
 
 Environment: macOS 26.5.2, arm64. Flutter 3.47.0-0.3.pre (master), Dart 3.13.0.
 Rust 1.92. `objc2` 0.6.4, `objc2-app-kit`/`objc2-foundation` 0.3.2, `tao` 0.36.0.
@@ -226,17 +226,95 @@ thread. Re-check on Windows and Linux, where embedder threading differs.
 
 ---
 
-## Spike C — Hot reload in a custom embedder: not started
+## Spike C — Hot reload in a custom embedder (macOS): **YES**
 
-Spike A's F7 is an encouraging early signal: the headless engine exposed a Dart VM service URI
-with no configuration at all, which is most of Spike C's criterion 2.
+**The highest-risk assumption in the project holds.** A Rust-hosted Flutter engine in JIT mode
+hot-reloads via the Dart VM service, driven by a `frontend_server` we manage ourselves, with
+genuine hot-reload semantics and latency roughly 4× inside the 500 ms bar.
+
+Full write-up: `spikes/spike-c-macos/FINDINGS.md`. Verified by the controller re-running it.
+
+| # | Criterion | Verdict |
+|---|---|---|
+| 1 | JIT kernel loads and renders in a Rust host | yes (reused Spike A) |
+| 2 | VM service URI printed and usable | yes |
+| 3 | Persistent `frontend_server` emits incremental diffs | yes — 9–22 ms per recompile |
+| 4 | `reloadSources` applies the diff, **Dart heap state survives** | **yes** |
+| 5 | Edit→pixel latency under 500 ms | **yes — median ~113 ms** |
+
+### C1 — Latency is roughly 4× inside the requirement
+
+Measured from *source file written* to *the new marker observed over a platform channel from a
+post-frame callback* — so the interval includes recompile, `reloadSources`, widget rebuild and
+render, not merely the RPC round trip.
+
+| Run | n | min | median | max |
+|---|---|---|---|---|
+| Subagent | 10 | 111.7 ms | 123.3 ms | 165.1 ms |
+| **Controller re-run** | 5 | **107.5 ms** | **112.9 ms** | **143.9 ms** |
+
+**Impact — spec §8.2.** The hot-reload-parity requirement that drove v1's scope is achievable.
+The persistent-`frontend_server` decision is vindicated: incremental recompiles are 9–22 ms, so
+the bulk of the 113 ms is VM reload plus rebuild, not compilation.
+
+### C2 — It is genuine hot reload, not hot restart
+
+Two independent proofs:
+
+1. **Dart heap state survived.** `_tapCount` was primed to 3 and stayed 3 across every reload in
+   three separate runs. A restart resets it to 0.
+2. **The reload was incremental**, per `reloadSources`' own report:
+
+```json
+{"receivedLibraryCount":2, "savedLibraryCount":752, "finalLibraryCount":753,
+ "receivedLibrariesBytes":22912, "success":true, "type":"ReloadReport"}
+```
+
+752 libraries **saved**, only 2 received (22 KB). A restart would reload all 753.
+
+### C3 — `ext.flutter.reassemble` is required after `reloadSources`
+
+`reloadSources` alone loads the new code but does not rebuild the widget tree. The host must
+follow it with an `ext.flutter.reassemble` service-extension call, exactly as `flutter_tools`
+does. Both calls appear in every measured iteration.
+
+### C4 — A stray `force: true` on `reloadSources` causes a VM-fatal crash
+
+Adding `"force": true` to the `reloadSources` params produced a fatal error inside the Dart VM's
+own C++ runtime (`"StatelessWidget which is not loaded yet"`) — it asks the VM to force-reload
+libraries the delta does not contain. Real `flutter_tools` never sets it.
+
+Worth recording because the failure is opaque and fatal, and because the subagent pursued two
+plausible-but-wrong fixes (splicing the baseline kernel over the bundle's `kernel_blob.bin`;
+switching to `package:` URIs) before isolating the real cause, then verified by reverting both.
+**Phase 4's CLI must not set `force`.**
+
+### C5 — Capturing the VM service URI needs an fd-1 redirect
+
+The engine prints the URI to stdout from native code, so Rust cannot see it through normal
+means. The spike redirects fd 1 to capture it (`src/stdout_capture.rs`). Workable, but ugly.
+
+**Phase 4 should look for a cleaner route** — the VM service URI may be obtainable from the
+engine object or via `--vm-service-port` with a known port — before shipping an fd-redirect in
+the CLI.
 
 ---
 
-## Open risks after Spikes A and B
+## Phase 0 verdict: all three spikes PASS. The architecture is sound.
+
+The design rests on three assumptions and all three now have running-code evidence on macOS.
+Nothing found in Phase 0 invalidates the architecture; the corrections were to detail
+(§6.1 signatures, §6.4 multi-view, §5.1 memory semantics, §8 asset bundling).
+
+## Open risks carried into Phase 1+
 
 1. **Linux (Flutter GTK + WebKitGTK in one GTK main loop)** — not attempted, no platform
-   available. The least-trodden combination in the design and the largest unretired risk.
+   available. The least-trodden combination in the design and now **the largest unretired risk
+   in the project**. Spec §12 Phase 5 should front-load it rather than treat it as fill-in.
 2. **Windows** — engine-first signatures and run loop both unverified.
-3. **Real input routing**, especially to the webview — untestable in this environment.
-4. **Spike C** — hot reload, still the item that can most change the plan.
+3. **Real input routing**, especially to the webview — untestable here; synthetic input reached
+   Flutter but not the webview.
+4. **Engine cycling leaks** — Spike A's 8-cycle sample was inconclusive; the Phase 3 soak test
+   is the right instrument.
+5. **`Could not create the embedder backing store`** under rapid view cycling — unexplained,
+   flagged for the soak test.

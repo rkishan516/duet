@@ -467,6 +467,34 @@ roughly 200 ms incremental recompile versus 1–3 s rebuild.
 is printed so `flutter attach` and IDE debuggers work as well. The URI costs nothing to
 expose.
 
+> **CONFIRMED by Spike C (2026-08-04).** This works, and the persistent-`frontend_server`
+> decision is vindicated. Measured edit→pixel latency — file write to the changed UI actually
+> rendered, including recompile, reload, rebuild and render:
+>
+> | Run | n | min | median | max |
+> |---|---|---|---|---|
+> | Spike | 10 | 111.7 ms | 123.3 ms | 165.1 ms |
+> | Independent re-run | 5 | 107.5 ms | 112.9 ms | 143.9 ms |
+>
+> Roughly 4× inside the 500 ms bar. Incremental recompiles were 9–22 ms — faster than the
+> ~200 ms estimated above — so most of the latency is VM reload plus widget rebuild, not
+> compilation.
+>
+> It is **genuine hot reload, not restart**: Dart heap state survived every reload
+> (`_tapCount` held at 3), and `reloadSources` reported `savedLibraryCount: 752` against
+> `receivedLibraryCount: 2`.
+>
+> Three implementation requirements for Phase 4, all learned the hard way:
+>
+> - **`ext.flutter.reassemble` must follow `reloadSources`.** The former loads new code; only
+>   the latter rebuilds the widget tree. `flutter_tools` does both.
+> - **Never set `force: true` on `reloadSources`.** It causes a fatal error inside the Dart VM's
+>   own C++ runtime (`"StatelessWidget which is not loaded yet"`), because it asks the VM to
+>   force-reload libraries the delta does not contain.
+> - **Capturing the VM service URI currently needs an fd-1 redirect**, since the engine prints
+>   it from native code. Workable but ugly — look for a cleaner route (a known
+>   `--vm-service-port`, or reading it off the engine object) before shipping this in the CLI.
+
 ### 8.3 `duet build`
 
 AOT `flutter assemble` → web production bundle → `cargo build --release` → platform bundling

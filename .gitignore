@@ -8,4 +8,9 @@ node_modules/
 #   flutter create --platforms=macos --project-name spike_app spikes/spike_app
 #   (cd spikes/spike_app && flutter build macos --debug)
 spikes/spike_app/
+# ...except the hand-edited entrypoint. Spikes B and C add a platform channel,
+# a post-frame reporter, and the kReloadMarker const that hot reload mutates.
+# `flutter create` will NOT regenerate these, so the file is tracked explicitly.
+!spikes/spike_app/lib/
+!spikes/spike_app/lib/main.dart
 spikes/*/target/
