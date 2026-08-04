@@ -120,6 +120,21 @@ impl Path {
 
         Ok(Path(segments))
     }
+
+    /// True when `self` addresses this path or any ancestor of `other`.
+    pub fn is_prefix_of(&self, other: &Path) -> bool {
+        self.0.len() <= other.0.len() && self.0.iter().zip(other.0.iter()).all(|(a, b)| a == b)
+    }
+
+    /// True when either path is a prefix of the other.
+    ///
+    /// This is the subscription-matching rule: a subscriber at `self` must be
+    /// notified about a write at `other` when the paths overlap in either
+    /// direction. A write to an ancestor may change the subscriber's value, and a
+    /// write to a descendant changes part of the subtree the subscriber observes.
+    pub fn overlaps(&self, other: &Path) -> bool {
+        self.is_prefix_of(other) || other.is_prefix_of(self)
+    }
 }
 
 /// Parses an index segment starting at the `[` found at byte offset `at`.
@@ -268,6 +283,10 @@ impl std::fmt::Display for Path {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn p(s: &str) -> Path {
+        Path::parse(s).expect("test path should parse")
+    }
 
     #[test]
     fn root_path_is_empty() {
@@ -602,5 +621,134 @@ mod tests {
             "accepted count changed; the language `parse` accepts changed \
              (see the comment above this assertion)"
         );
+    }
+
+    #[test]
+    fn prefix_is_directional() {
+        assert!(p("editor").is_prefix_of(&p("editor.zoom")));
+        assert!(!p("editor.zoom").is_prefix_of(&p("editor")));
+    }
+
+    #[test]
+    fn path_is_its_own_prefix() {
+        assert!(p("editor.zoom").is_prefix_of(&p("editor.zoom")));
+    }
+
+    #[test]
+    fn root_is_prefix_of_everything() {
+        assert!(Path::root().is_prefix_of(&p("a.b[2].c")));
+        assert!(Path::root().is_prefix_of(&Path::root()));
+    }
+
+    #[test]
+    fn overlaps_is_bidirectional() {
+        // Ancestor write reaches descendant subscriber.
+        assert!(p("editor").overlaps(&p("editor.zoom")));
+        // Descendant write reaches ancestor subscriber.
+        assert!(p("editor.zoom").overlaps(&p("editor")));
+    }
+
+    #[test]
+    fn siblings_do_not_overlap() {
+        assert!(!p("editor.zoom").overlaps(&p("editor.theme")));
+    }
+
+    #[test]
+    fn distinct_indices_do_not_overlap() {
+        assert!(!p("docs[0].title").overlaps(&p("docs[1].title")));
+    }
+
+    /// Enumerates every path of depth 0..=3 over a 4-symbol alphabet
+    /// (`a`, `b`, `[0]`, `[1]`) at every segment position, giving all
+    /// `4^0 + 4^1 + 4^2 + 4^3 = 85` combinations. This guarantees coverage
+    /// of: the root path (depth 0); single-key and single-index paths
+    /// (depth 1: `a`, `b`, `[0]`, `[1]`); depth-2 and depth-3 paths;
+    /// sibling keys at the same depth (e.g. `a` vs `b`); distinct indices
+    /// at the same position (e.g. `[0]` vs `[1]`); and a key and an index
+    /// at the same depth position (e.g. `a` vs `[0]`).
+    fn prefix_test_corpus() -> Vec<Path> {
+        let alphabet: [Segment; 4] = [
+            Segment::Key("a".to_string()),
+            Segment::Key("b".to_string()),
+            Segment::Index(0),
+            Segment::Index(1),
+        ];
+
+        let mut corpus = Vec::new();
+        for len in 0..=3usize {
+            let total = alphabet.len().pow(len as u32);
+            for code in 0..total {
+                let mut remaining = code;
+                let mut segments = Vec::with_capacity(len);
+                for _ in 0..len {
+                    segments.push(alphabet[remaining % alphabet.len()].clone());
+                    remaining /= alphabet.len();
+                }
+                corpus.push(Path::from_segments(segments));
+            }
+        }
+
+        // 4^0 + 4^1 + 4^2 + 4^3 = 1 + 4 + 16 + 64 = 85. If the alphabet or
+        // max depth changes, update this count deliberately.
+        assert_eq!(
+            corpus.len(),
+            85,
+            "corpus size changed; update this count deliberately"
+        );
+        corpus
+    }
+
+    /// `overlaps` must be symmetric: if A overlaps B then B overlaps A.
+    /// Subscription routing is meaningless if this does not hold.
+    #[test]
+    fn overlaps_is_symmetric_over_generated_paths() {
+        let corpus = prefix_test_corpus();
+        for a in &corpus {
+            for b in &corpus {
+                assert_eq!(
+                    a.overlaps(b),
+                    b.overlaps(a),
+                    "symmetry broken for {a} vs {b}"
+                );
+            }
+        }
+    }
+
+    /// Every path overlaps itself, and root overlaps everything.
+    #[test]
+    fn overlaps_is_reflexive_and_root_is_universal() {
+        for a in &prefix_test_corpus() {
+            assert!(a.overlaps(a), "{a} does not overlap itself");
+            assert!(Path::root().overlaps(a), "root does not overlap {a}");
+            assert!(a.overlaps(&Path::root()), "{a} does not overlap root");
+        }
+    }
+
+    /// `is_prefix_of` must be transitive: a prefix of a prefix is a prefix.
+    #[test]
+    fn is_prefix_of_is_transitive() {
+        let corpus = prefix_test_corpus();
+        for a in &corpus {
+            for b in &corpus {
+                for c in &corpus {
+                    if a.is_prefix_of(b) && b.is_prefix_of(c) {
+                        assert!(a.is_prefix_of(c), "transitivity broken: {a} -> {b} -> {c}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// `is_prefix_of` must be antisymmetric: mutual prefixes are equal.
+    #[test]
+    fn is_prefix_of_is_antisymmetric() {
+        let corpus = prefix_test_corpus();
+        for a in &corpus {
+            for b in &corpus {
+                if a.is_prefix_of(b) && b.is_prefix_of(a) {
+                    assert_eq!(a, b, "mutual prefixes must be equal: {a} vs {b}");
+                }
+            }
+        }
     }
 }
