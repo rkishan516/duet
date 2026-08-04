@@ -1,0 +1,11 @@
+[package]
+name = "duet-runtime"
+description = "Threading runtime for Duet: owns the store on a core thread"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+duet-core = { path = "../duet-core" }
