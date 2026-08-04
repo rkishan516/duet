@@ -12,18 +12,22 @@ pub enum Segment {
 pub struct Path(Vec<Segment>);
 
 impl Path {
+    /// Returns the root path (the empty path).
     pub fn root() -> Self {
         Path(Vec::new())
     }
 
+    /// Builds a path from an owned vector of segments, taking ownership of it.
     pub fn from_segments(segments: Vec<Segment>) -> Self {
         Path(segments)
     }
 
+    /// Borrows the path's segments as a slice.
     pub fn segments(&self) -> &[Segment] {
         &self.0
     }
 
+    /// Returns true if this path is the root (has no segments).
     pub fn is_root(&self) -> bool {
         self.0.is_empty()
     }
@@ -51,11 +55,12 @@ mod tests {
 
     #[test]
     fn path_from_segments() {
-        let p = Path::from_segments(vec![
+        let segments = vec![
             Segment::Key("editor".to_string()),
             Segment::Key("zoom".to_string()),
-        ]);
+        ];
+        let p = Path::from_segments(segments.clone());
         assert!(!p.is_root());
-        assert_eq!(p.segments().len(), 2);
+        assert_eq!(p.segments(), segments.as_slice());
     }
 }
