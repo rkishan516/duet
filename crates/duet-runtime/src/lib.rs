@@ -23,6 +23,7 @@
 
 #![deny(missing_docs)]
 
+mod command;
 pub mod error;
 pub mod sink;
 
