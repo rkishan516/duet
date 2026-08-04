@@ -3,7 +3,7 @@
 //! [`duet_core`] provides a lifecycle state machine and a teardown policy
 //! evaluator, both pure functions. This crate is what drives them against real
 //! surfaces: it tracks each surface's state and window counts, consumes host
-//! events, and on each `Supervisor::tick` returns the [`SurfaceAction`]s the
+//! events, and on each [`Supervisor::tick`] returns the [`SurfaceAction`]s the
 //! host must perform.
 //!
 //! # Decisions, not effects
@@ -44,4 +44,5 @@ const _: () = {
     assert_send_sync::<SurfaceAction>();
     assert_send_sync::<SurfaceIdAllocator>();
     assert_send_sync::<HostEvent>();
+    assert_send_sync::<Supervisor>();
 };
