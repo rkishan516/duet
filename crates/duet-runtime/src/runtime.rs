@@ -1,10 +1,12 @@
 //! The core thread: owns the store, serves requests, delivers notifications.
 
 use std::cell::Cell;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 
-use duet_core::{Store, Value};
+use duet_core::{Store, SubscriberId, Value};
 
 use crate::command::CoreCommand;
 use crate::error::RuntimeError;
@@ -37,6 +39,7 @@ pub(crate) fn on_core_thread() -> bool {
 pub struct Runtime {
     tx: Sender<CoreCommand>,
     join: JoinHandle<()>,
+    next_subscriber: Arc<AtomicU64>,
 }
 
 impl Runtime {
@@ -54,13 +57,29 @@ impl Runtime {
             .name("duet-core".to_string())
             .spawn(move || core_loop(Store::new(root), rx, sink))
             .expect("spawning the core thread should not fail");
-        Runtime { tx, join }
+        Runtime {
+            tx,
+            join,
+            next_subscriber: Arc::new(AtomicU64::new(0)),
+        }
     }
 
     /// Returns a handle. Call as many times as needed; handles are cheap and
     /// all clones address the same store.
     pub fn handle(&self) -> StoreHandle {
-        StoreHandle::new(self.tx.clone())
+        StoreHandle::new(self.tx.clone(), Arc::clone(&self.next_subscriber))
+    }
+
+    /// Allocates a `SubscriberId` that no other caller of this runtime will be
+    /// given.
+    ///
+    /// Ids are caller-supplied in [`duet_core::Store`], and a collision does
+    /// not error — it silently delivers one subscriber's notifications to
+    /// another. Across a trust boundary (the Flutter surface and the webview
+    /// are separate guests) that would be a confidentiality bug, so always
+    /// allocate rather than inventing an id.
+    pub fn next_subscriber_id(&self) -> SubscriberId {
+        SubscriberId(self.next_subscriber.fetch_add(1, Ordering::Relaxed))
     }
 
     /// Stops the core thread and waits for it to exit.
@@ -206,6 +225,40 @@ mod tests {
     fn get_on_missing_path_is_none_not_an_error() {
         let rt = Runtime::spawn(sample(), NullSink);
         assert_eq!(rt.handle().get(&p("editor.nope")), Ok(None));
+        rt.shutdown().expect("shutdown should succeed");
+    }
+
+    #[test]
+    fn successive_subscriber_ids_differ() {
+        let rt = Runtime::spawn(sample(), NullSink);
+        let a = rt.next_subscriber_id();
+        let b = rt.next_subscriber_id();
+        assert_ne!(a, b, "a fresh id must never repeat the last one issued");
+        rt.shutdown().expect("shutdown should succeed");
+    }
+
+    #[test]
+    fn subscriber_ids_from_different_handles_of_one_runtime_never_collide() {
+        // Two independently created handles must still draw from the same
+        // counter: a Flutter surface and a webview surface each get their own
+        // StoreHandle, and a collision between them silently cross-delivers
+        // one surface's notifications to the other.
+        let rt = Runtime::spawn(sample(), NullSink);
+        let a = rt.handle().next_subscriber_id();
+        let b = rt.handle().next_subscriber_id();
+        assert_ne!(a, b);
+        rt.shutdown().expect("shutdown should succeed");
+    }
+
+    #[test]
+    fn subscriber_id_allocation_works_from_another_thread() {
+        let rt = Runtime::spawn(sample(), NullSink);
+        let handle = rt.handle();
+        let from_other_thread = thread::spawn(move || handle.next_subscriber_id())
+            .join()
+            .expect("allocating a subscriber id must not panic");
+        let from_this_thread = rt.next_subscriber_id();
+        assert_ne!(from_other_thread, from_this_thread);
         rt.shutdown().expect("shutdown should succeed");
     }
 

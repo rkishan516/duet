@@ -47,6 +47,13 @@ pub trait Sink: Send + 'static {
     /// cannot be served, because this thread is the one that would have to
     /// serve it. Marshal the batch elsewhere and return.
     ///
+    /// `deliver` is called synchronously on the core thread, before it accepts
+    /// the next request. Everything done here is head-of-line latency for
+    /// every subsequent reader and writer. **Post the batch and return — do
+    /// not serialize, compress, or otherwise transform it inside `deliver`.**
+    /// Encoding belongs on the receiving side, after the batch has left the
+    /// core thread.
+    ///
     /// Panic behaviour is **not yet defined** — do not rely on `deliver` being
     /// panic-safe. A later task establishes what happens when it panics; this
     /// is currently left open rather than silently assumed either way.

@@ -1,5 +1,7 @@
 //! A cheap, cloneable, thread-safe handle to the store.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
 
 use duet_core::{Path, SubscriberId, SubscriptionId, Value};
@@ -22,14 +24,34 @@ use crate::error::RuntimeError;
 #[derive(Debug, Clone)]
 pub struct StoreHandle {
     tx: Sender<CoreCommand>,
+    next_subscriber: Arc<AtomicU64>,
 }
 
 impl StoreHandle {
     /// Wraps a raw command sender as a handle. Crate-private: callers obtain a
     /// `StoreHandle` from [`crate::Runtime::handle`], never by constructing one
     /// directly.
-    pub(crate) fn new(tx: Sender<CoreCommand>) -> Self {
-        StoreHandle { tx }
+    ///
+    /// `next_subscriber` is shared with the owning [`crate::Runtime`] and every
+    /// other handle cloned from it, so ids allocated from any of them never
+    /// collide.
+    pub(crate) fn new(tx: Sender<CoreCommand>, next_subscriber: Arc<AtomicU64>) -> Self {
+        StoreHandle {
+            tx,
+            next_subscriber,
+        }
+    }
+
+    /// Allocates a `SubscriberId` that no other caller sharing this runtime
+    /// will be given.
+    ///
+    /// Ids are caller-supplied in [`duet_core::Store`], and a collision does
+    /// not error — it silently delivers one subscriber's notifications to
+    /// another. Across a trust boundary (the Flutter surface and the webview
+    /// are separate guests) that would be a confidentiality bug, so always
+    /// allocate rather than inventing an id.
+    pub fn next_subscriber_id(&self) -> SubscriberId {
+        SubscriberId(self.next_subscriber.fetch_add(1, Ordering::Relaxed))
     }
 
     /// Sends a request and waits for its reply.

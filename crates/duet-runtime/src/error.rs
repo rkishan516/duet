@@ -38,7 +38,14 @@ impl std::fmt::Display for RuntimeError {
     }
 }
 
-impl std::error::Error for RuntimeError {}
+impl std::error::Error for RuntimeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            RuntimeError::Store(e) => Some(e),
+            RuntimeError::CoreThreadGone | RuntimeError::ReentrantCall => None,
+        }
+    }
+}
 
 impl From<SetError> for RuntimeError {
     fn from(e: SetError) -> Self {
@@ -86,6 +93,22 @@ mod tests {
     fn runtime_error_is_a_std_error() {
         fn assert_error<E: std::error::Error>() {}
         assert_error::<RuntimeError>();
+    }
+
+    #[test]
+    fn source_chains_through_to_the_wrapped_store_error() {
+        use std::error::Error;
+
+        let inner = duet_core::SetError::MissingKey(
+            duet_core::Path::parse("nope.deeper").expect("test path should parse"),
+        );
+        let wrapped = RuntimeError::Store(inner);
+        assert!(
+            wrapped.source().is_some(),
+            "Store variant must chain to its cause"
+        );
+        assert!(RuntimeError::CoreThreadGone.source().is_none());
+        assert!(RuntimeError::ReentrantCall.source().is_none());
     }
 
     #[test]
