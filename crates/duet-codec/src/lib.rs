@@ -27,5 +27,6 @@
 
 mod base64;
 pub mod error;
+mod value;
 
 pub use error::CodecError;
