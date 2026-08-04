@@ -28,10 +28,12 @@
 pub mod action;
 pub mod event;
 pub mod id;
+pub mod supervisor;
 
 pub use action::SurfaceAction;
 pub use event::HostEvent;
 pub use id::{SurfaceId, SurfaceIdAllocator};
+pub use supervisor::Supervisor;
 
 /// These bounds are load-bearing: a host will tick the supervisor from its
 /// event loop while holding it alongside other state. Asserted here so a change
