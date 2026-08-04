@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/duet-core"]
+members = ["crates/duet-core", "crates/duet-runtime"]
 # Phase 0 spikes are throwaway experiments with their own dependencies.
 # They must never affect the zero-dependency guarantee of duet-core.
 exclude = ["spikes"]
