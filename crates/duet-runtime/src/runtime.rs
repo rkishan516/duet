@@ -390,4 +390,99 @@ mod tests {
             "the core thread must survive as long as any handle does"
         );
     }
+
+    #[test]
+    fn subscribe_snapshot_is_the_real_value_at_the_path() {
+        // Kills the mutant where core_loop's Subscribe arm replies with an
+        // empty snapshot regardless of what the store holds.
+        let rt = Runtime::spawn(sample(), NullSink);
+        let handle = rt.handle();
+        let (_id, snapshot) = handle
+            .subscribe(duet_core::SubscriberId(1), p("editor.zoom"))
+            .expect("subscribe should succeed");
+        assert_eq!(
+            snapshot,
+            Some(Value::Float(1.0)),
+            "the snapshot must be the current value at the subscribed path"
+        );
+        rt.shutdown().expect("shutdown should succeed");
+    }
+
+    #[test]
+    fn unsubscribe_reports_presence_then_absence() {
+        // Kills the mutant where core_loop's Unsubscribe arm always replies
+        // false, which would make every unsubscribe look like a no-op.
+        let rt = Runtime::spawn(sample(), NullSink);
+        let handle = rt.handle();
+        let (id, _snapshot) = handle
+            .subscribe(duet_core::SubscriberId(1), p("editor.zoom"))
+            .expect("subscribe should succeed");
+
+        assert_eq!(
+            handle.unsubscribe(id),
+            Ok(true),
+            "removing a live subscription must report it as having been present"
+        );
+        assert_eq!(
+            handle.unsubscribe(id),
+            Ok(false),
+            "removing the same id twice must report it as no longer present"
+        );
+        rt.shutdown().expect("shutdown should succeed");
+    }
+
+    #[test]
+    fn drop_subscriber_removes_exactly_its_own_subscriptions_and_silences_future_writes() {
+        // Kills the mutant where core_loop's DropSubscriber arm always replies
+        // 0 — the count this test pins is exactly what teardown relies on to
+        // know a surface's subscriptions are really gone.
+        let sink = RecordingSink::new();
+        let rt = Runtime::spawn(sample(), sink.clone());
+        let handle = rt.handle();
+        let subscriber = duet_core::SubscriberId(1);
+        handle
+            .subscribe(subscriber, p("editor.zoom"))
+            .expect("subscribe should succeed");
+        handle
+            .subscribe(subscriber, p("editor.theme"))
+            .expect("subscribe should succeed");
+
+        assert_eq!(
+            handle.drop_subscriber(subscriber),
+            Ok(2),
+            "both subscriptions held by this subscriber must be counted and removed"
+        );
+
+        handle
+            .set(&p("editor.zoom"), Value::Float(5.0))
+            .expect("set should succeed");
+        rt.shutdown().expect("shutdown should succeed");
+
+        assert!(
+            sink.notifications().is_empty(),
+            "a write after drop_subscriber must notify nobody: every subscription was removed"
+        );
+    }
+
+    #[test]
+    fn successful_write_matching_no_subscription_delivers_no_batch() {
+        // Kills the mutant where core_loop's `if !notifications.is_empty()`
+        // guard is removed and every successful write calls sink.deliver, even
+        // with an empty batch. Distinct from `sink.notifications()` being
+        // empty (which an empty-batch delivery would also satisfy): this
+        // asserts on `sink.batches()` directly so a spurious empty delivery is
+        // itself the failure.
+        let sink = RecordingSink::new();
+        let rt = Runtime::spawn(sample(), sink.clone());
+        let handle = rt.handle();
+        handle
+            .set(&p("editor.zoom"), Value::Float(5.0))
+            .expect("set should succeed");
+        rt.shutdown().expect("shutdown should succeed");
+
+        assert!(
+            sink.batches().is_empty(),
+            "a write with no overlapping subscription must not call deliver at all"
+        );
+    }
 }
