@@ -1,0 +1,13 @@
+[package]
+name = "spike-b-macos"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+block2 = "0.6.2"
+objc2 = { version = "0.6.4", features = ["catch-all"] }
+objc2-app-kit = "0.3.2"
+objc2-foundation = "0.3.2"
+tao = "0.36.0"
+wry = "0.56.0"

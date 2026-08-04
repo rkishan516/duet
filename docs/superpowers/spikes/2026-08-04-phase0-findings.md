@@ -5,7 +5,7 @@ Charter: `docs/superpowers/plans/2026-08-04-phase0-spike-charter.md`
 | Spike | Question | Verdict |
 |---|---|---|
 | A | Engine-first embedding and view parenting | **YES** (macOS; Windows/Linux pending) |
-| B | Run loop coexistence | not started |
+| B | Run loop coexistence | **YES** (macOS; Linux NOT attempted — largest open risk) |
 | C | Hot reload in a custom embedder | not started |
 
 Environment: macOS 26.5.2, arm64. Flutter 3.47.0-0.3.pre (master), Dart 3.13.0.
@@ -164,8 +164,79 @@ The Phase 3 soak test (hundreds of cycles, with `leaks`/Instruments) is the righ
 
 ---
 
-## Spike B — Run loop coexistence: not started
+## Spike B — Run loop coexistence (macOS): **YES**
+
+**Spec §6.2's threading model is sound on macOS.** Full write-up: `spikes/spike-b-macos/FINDINGS.md`.
+
+| # | Criterion | Verdict |
+|---|---|---|
+| 1 | Simultaneous coexistence, both rendering | yes |
+| 2 | Neither starves the other | yes (WebKit rAF caveat, B2) |
+| 3 | `EventLoopProxy` drives both sides from a background thread | yes |
+| 4 | Sustained, no deadlock | yes — 180 s, 709 sent / 709 received, missed=0 |
+| 5 | Input routing | **cannot verify here** (B4) |
+| 6 | Linux GTK + WebKitGTK | **not attempted** — largest open risk |
+
+### B1 — `EventLoopProxy` is reliable; the core-thread model is validated
+
+180 s of continuous proxy traffic driving both guests from one `UserEvent` handler:
+709 events sent, 709 received, zero lost, no deadlock, 700 Flutter channel replies and 696
+webview eval round-trips. Both directions proven to land — Dart replied over the channel and
+the JS readback returned mutated page state.
+
+**Impact — spec §6.2.** The single cross-platform marshalling mechanism is validated on macOS;
+no per-platform `dispatch_async`/`PostMessage`/`g_idle_add` path is needed there.
+
+### B2 — An apparent starvation turned out to be WebKit rAF throttling
+
+Investigated specifically because it looked like it might invalidate the design. The webview's
+`requestAnimationFrame` froze at t+77 s while Flutter kept rendering for another 100 s.
+
+It is **not** starvation. `evaluate_script` calls kept landing throughout (`pings` 1 → 701 during
+the freeze), Flutter kept rendering, and a re-run that added a `setInterval` timer showed rAF
+advancing steadily past the freeze value with no slowdown at all. Windows reported
+`occlusionState: visible` and `visibilityState: "visible"`, so this is WebKit's page-activity
+throttling of rAF in a window that never becomes **key** — impossible to avoid here, since there
+is no WindowServer.
+
+**Impact:** benign and environmental. Worth one line in the framework docs: a webview surface
+that is open but never focused may have rAF throttled by WebKit. Standard web behaviour, not a
+Duet bug.
+
+### B3 — Synthetic input reaches Flutter but not the webview
+
+Synthetic `mouseDown`/`mouseUp` via `-[NSWindow sendEvent:]` incremented Dart's `tapCount`
+0 → 1, but the webview's JS `clicks` stayed 0. Probably a WKWebView hit-testing difference,
+not diagnosed further because real input is untestable here anyway.
+
+**Impact:** do not assume the webview receives input just because Flutter does. Verify input
+routing on real hardware before Phase 2 depends on it.
+
+### B4 — `wry` double-encodes returned strings
+
+Returning an already-stringified JSON string from evaluated JS yields a double-encoded result,
+because `wry` runs the return value through `NSJSONSerialization`. Return a plain JS **object**
+and let `wry` serialize once. **Phase 2's webview IPC should return objects.**
+
+### B5 — Merged UI and platform thread, again
+
+`Running with merged UI and platform thread. Experimental.` appears here as in Spike A. No
+observed conflict with spec §6.2, which already places Flutter's platform thread on the main
+thread. Re-check on Windows and Linux, where embedder threading differs.
+
+---
 
 ## Spike C — Hot reload in a custom embedder: not started
 
-F7 is an encouraging early signal: the VM service is exposed by default.
+Spike A's F7 is an encouraging early signal: the headless engine exposed a Dart VM service URI
+with no configuration at all, which is most of Spike C's criterion 2.
+
+---
+
+## Open risks after Spikes A and B
+
+1. **Linux (Flutter GTK + WebKitGTK in one GTK main loop)** — not attempted, no platform
+   available. The least-trodden combination in the design and the largest unretired risk.
+2. **Windows** — engine-first signatures and run loop both unverified.
+3. **Real input routing**, especially to the webview — untestable in this environment.
+4. **Spike C** — hot reload, still the item that can most change the plan.
