@@ -418,6 +418,86 @@ git add crates/duet-core/src/path.rs
 git commit -m "feat(core): parse and display paths"
 ```
 
+- [ ] **Step 6: Make the parser strict (amendment, added during execution)**
+
+Edge-case probing during review found the parser above too lenient in two ways that
+matter, because `Path::parse` runs on paths arriving from Flutter and JavaScript guests over
+IPC — a trust boundary. A lenient parser turns a client typo into a valid-but-wrong path
+whose subscription silently never fires.
+
+- `parse("foo]")` returned `Ok(Key("foo]"))` — the key scanner never stopped at `]`.
+- `parse("foo[3]extra")` returned `Ok`, but `Display` rendered it `foo[3].extra`, breaking
+  the parse↔display round-trip invariant.
+
+Add a variant to `PathParseError`:
+
+```rust
+    /// A character appeared where the grammar does not allow it, such as a
+    /// stray `]` or text immediately following a closing bracket.
+    UnexpectedChar { at: usize, ch: char },
+```
+
+Two rules: the key scanner must also stop at `]` and report `UnexpectedChar`; and after a
+closing `]` the only legal next characters are `.`, `[`, or end-of-input.
+
+Use `s[at..].chars().next()` to obtain the `char`, so multi-byte characters are reported
+whole rather than as a partial UTF-8 byte.
+
+Tests to add: `rejects_stray_closing_bracket`, `rejects_text_immediately_after_index`,
+`allows_legal_characters_after_index`, `reports_multibyte_char_after_index_correctly`.
+
+Behaviour that must NOT regress: `"foo[]"` → `InvalidIndex("")`; `"a..b"` →
+`EmptySegment(2)`; `"[0]"` → `Ok` (leading index stays legal); `"foo["` →
+`UnclosedIndex(3)`; `"foo[-1]"` → `InvalidIndex("-1")`; `"café.zoom"` → `Ok`; `"a[0][1].b"`
+→ `Ok` and round-trips.
+
+```bash
+git commit -m "fix(core): reject stray brackets and text after an index"
+```
+
+- [ ] **Step 7: Close the remaining grammar holes (second amendment)**
+
+A deeper review found Step 6 insufficient. The parse↔Display round-trip still failed on
+**36 of 2748** accepted short inputs, from two causes:
+
+- **`parse("a.[0]")` was accepted.** The `expect_key` flag is documented as enforcing "a key
+  must follow a dot" but was never checked, and its `= true` initialiser was dead code — the
+  loop body unconditionally assigns `false`, and the empty-string early return guarantees at
+  least one iteration. Initialise it to `false` so it means "a dot was just consumed", then
+  reject `[` when it is set. A leading `[0]` stays legal.
+- **`usize::from_str` accepts `[007]` and `[+3]`.** Require canonical decimal: non-empty, all
+  ASCII digits, no leading zero unless the literal is exactly `0`. Reject rather than
+  normalise — silent normalisation would leave the round-trip broken.
+
+Also in this step:
+
+- `InvalidIndex` becomes `{ at: usize, raw: String }`. It was the only variant without a
+  position, so `a[1].b[2].c[x]` gave a guest no way to locate the bad bracket.
+- `PathParseError` gains `Display` and `std::error::Error` impls and `#[non_exhaustive]`.
+  These errors cross an IPC boundary to non-Rust guests, so something must render them, and
+  the enum has now changed twice while it still has no external consumers.
+- `parse` splits into private `scan_key` and `scan_index` helpers to stay under the 50-line
+  guideline.
+- `parse` docs gain an `# Errors` section stating that **all offsets are byte offsets**,
+  which will not align with JavaScript UTF-16 or Dart string indices — a real hazard at the
+  IPC boundary — plus the accepted key character set (any run excluding `.`, `[`, `]`;
+  whitespace included; not trimmed).
+- `from_segments` documents that it performs no validation, with a `debug_assert!` that no
+  key contains `.`, `[`, or `]`.
+
+**The key addition is `round_trip_is_total_over_short_inputs`**, which exhaustively
+enumerates every string of length 0..=4 over `['a', '.', '[', ']', '0', 'é']` and asserts
+that each accepted input renders back to itself. This is a property test rather than an
+example test: it would have caught all 36 counterexamples at once, and it guards the
+invariant permanently. Verify it fails before the grammar fixes and passes after.
+
+Task 3 therefore ends at **23 tests**, not 10. Every later task's cumulative count shifts by
++13.
+
+```bash
+git commit -m "fix(core): close path grammar holes and add error positions"
+```
+
 ---
 
 ## Task 4: Prefix matching
@@ -502,7 +582,7 @@ Add to the `impl Path` block:
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p duet-core`
-Expected: PASS — 16 passed.
+Expected: PASS — 29 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -664,7 +744,7 @@ pub use value::Value;
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p duet-core`
-Expected: PASS — 22 passed.
+Expected: PASS — 35 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -826,7 +906,7 @@ pub use value::{SetError, Value};
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p duet-core`
-Expected: PASS — 29 passed.
+Expected: PASS — 42 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1006,7 +1086,7 @@ warns, leave it; the next task resolves it.
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p duet-core`
-Expected: PASS — 34 passed.
+Expected: PASS — 47 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1021,6 +1101,22 @@ git commit -m "feat(core): add Store with subscriptions and snapshots"
 
 This is the centre of the crate. Read the "Background" section again before starting if the
 two-way overlap rule is not fresh.
+
+> **Decision made during execution: `Store::set` always notifies. It does not diff.**
+>
+> A write to a path notifies every overlapping subscriber whether or not the value actually
+> changed. Skipping notification for no-op writes was considered and rejected.
+>
+> The reason is not just simplicity. `Value` derives `PartialEq` and contains `Float(f64)`,
+> so `Value::Float(NAN) != Value::Float(NAN)` — a tree containing a NaN is not equal to a
+> clone of itself. Change detection written as `if old != new { notify }` would therefore fire
+> on *every* write to any subtree containing a NaN, including genuine no-ops: a permanent
+> notification storm that is invisible until someone puts a NaN in the store.
+>
+> A reviewer proposed a `Value::same()` helper using `f64::to_bits` to defend against this.
+> Declining it: not diffing at all makes the hazard structurally unreachable rather than
+> defended against, and no-op writes are rare in practice. Revisit only if profiling shows
+> redundant notifications are actually costing something.
 
 **Files:**
 - Modify: `crates/duet-core/src/store.rs`
@@ -1187,7 +1283,7 @@ pub use store::{Notification, Patch, Store, SubscriberId, SubscriptionId};
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p duet-core`
-Expected: PASS — 41 passed.
+Expected: PASS — 54 passed.
 
 - [ ] **Step 5: Verify there are no warnings**
 
@@ -1431,7 +1527,7 @@ pub use value::{SetError, Value};
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p duet-core`
-Expected: PASS — 51 passed.
+Expected: PASS — 64 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1690,7 +1786,7 @@ pub use value::{SetError, Value};
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p duet-core`
-Expected: PASS — 60 passed.
+Expected: PASS — 73 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1818,7 +1914,7 @@ pub use value::{SetError, Value};
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p duet-core`
-Expected: PASS — 60 unit tests and 2 integration tests.
+Expected: PASS — 73 unit tests and 2 integration tests.
 
 - [ ] **Step 5: Commit**
 
@@ -1900,7 +1996,7 @@ git commit -m "ci: add duet-core test and coverage gate"
 
 ## Done criteria
 
-- [ ] `cargo test -p duet-core` passes — 60 unit, 2 integration
+- [ ] `cargo test -p duet-core` passes — 73 unit, 2 integration
 - [ ] `cargo llvm-cov -p duet-core --fail-under-lines 90` exits 0
 - [ ] `cargo clippy -p duet-core --all-targets -- -D warnings` is clean
 - [ ] `crates/duet-core/Cargo.toml` still has an empty `[dependencies]`
