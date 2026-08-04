@@ -25,6 +25,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+mod base64;
 pub mod error;
 
 pub use error::CodecError;
