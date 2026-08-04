@@ -126,8 +126,11 @@ fn independent_surfaces_survive_teardown_separately() {
         now: Instant(1_000),
     };
     assert_eq!(evaluate(&policy, &input), Decision::Suspend);
-    flutter_state =
-        transition(&flutter_state, &LifecycleEvent::Suspend { at: Instant(1_000) }).unwrap();
+    flutter_state = transition(
+        &flutter_state,
+        &LifecycleEvent::Suspend { at: Instant(1_000) },
+    )
+    .unwrap();
 
     let input = PolicyInput {
         state: flutter_state.clone(),
@@ -170,10 +173,7 @@ fn independent_surfaces_survive_teardown_separately() {
 fn failure_state_is_observable_by_the_peer_surface() {
     let mut store = Store::new(Value::map([(
         "surfaces",
-        Value::map([(
-            "webview",
-            Value::map([("status", Value::Str("ok".into()))]),
-        )]),
+        Value::map([("webview", Value::map([("status", Value::Str("ok".into()))]))]),
     )]));
 
     let flutter = SubscriberId(1);
@@ -212,10 +212,7 @@ fn failure_state_is_observable_by_the_peer_surface() {
     assert_eq!(notes.len(), 1);
     assert_eq!(notes[0].subscriber, flutter);
     assert_eq!(notes[0].subscription, flutter_sub);
-    assert_eq!(
-        notes[0].patch.value,
-        Value::Str("renderer crashed".into())
-    );
+    assert_eq!(notes[0].patch.value, Value::Str("renderer crashed".into()));
 }
 
 // --- Required addition (C): each policy variant drives a full cycle ---
@@ -482,8 +479,14 @@ fn state_survives_teardown_but_events_do_not() {
 
     // Events don't survive: neither write produced any notification,
     // because the only subscriber was dropped the moment it went cold.
-    assert!(notes_1.is_empty(), "no live subscriber -- no event delivered");
-    assert!(notes_2.is_empty(), "no live subscriber -- no event delivered");
+    assert!(
+        notes_1.is_empty(),
+        "no live subscriber -- no event delivered"
+    );
+    assert!(
+        notes_2.is_empty(),
+        "no live subscriber -- no event delivered"
+    );
 
     // State survives: resuming and resubscribing sees the latest value,
     // "v2", even though zero events were ever delivered for either write
