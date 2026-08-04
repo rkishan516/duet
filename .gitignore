@@ -3,3 +3,9 @@ build/
 .dart_tool/
 node_modules/
 .DS_Store
+
+# Phase 0 spike fixture — regenerate with:
+#   flutter create --platforms=macos --project-name spike_app spikes/spike_app
+#   (cd spikes/spike_app && flutter build macos --debug)
+spikes/spike_app/
+spikes/*/target/

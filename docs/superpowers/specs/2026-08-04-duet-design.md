@@ -211,6 +211,35 @@ Conflict resolution is last-write-wins, serialized by the core thread.
 renderer crashes, the Flutter side can render the error UI**, and vice versa. Surface health
 is just state, so the surviving side already knows.
 
+> **Spike A finding (2026-08-04): `Suspending` is a latency state, not a memory state.**
+> Measured RSS for the Flutter side on macOS:
+>
+> | Point | RSS |
+> |---|---|
+> | Process start | 14 MB |
+> | Engine booted, **no view** | 148 MB |
+> | View attached, rendering | 223 MB |
+> | **View detached, engine alive** (`Suspending`) | **223 MB** |
+> | **After `shutDownEngine`** (`Cold`) | **104 MB** |
+>
+> Detaching the view reclaims essentially nothing — the engine, its isolate, and its caches
+> are the entire footprint, not the view. Only reaching `Cold` reclaims real memory, ~125 MB
+> here.
+>
+> The state machine is unchanged and correct, but the *emphasis* in this document was wrong:
+> the grace period buys responsiveness, not footprint, and every second of grace is a second
+> of full memory retention. **The 5 s default in §5.2 should be re-tuned against measured
+> engine boot cost** rather than assumed. Spike A's timings: engine allocation to
+> `runWithEntrypoint` returning was ~120 ms, and view-controller creation to attached was
+> ~60 ms — so roughly 180 ms from cold to a live view, on a warm filesystem cache with a debug
+> build. That suggests a default well under 5 s is affordable, but the number to tune against
+> is a release-build measurement on a cold cache, which Phase 3 should take.
+>
+> Two further constraints on this state machine, also from Spike A: `Suspending → Cold →
+> Starting` **cannot be driven synchronously** — teardown and re-create must be separated by a
+> run-loop tick or the engine throws; and rapid detach/recreate cycling logs
+> `Could not create the embedder backing store`, which the Phase 3 soak test must investigate.
+
 ### 5.2 Policy
 
 ```rust
@@ -282,11 +311,35 @@ trait WebviewHost { /* create / destroy / eval / ipc */ }
 | Windows | `flutter_windows.h` — `FlutterDesktopEngineCreate`, `FlutterDesktopViewControllerCreate` | `HWND` | `SetParent` + `WS_CHILD` restyle |
 | Linux | `flutter_linux` GTK — `fl_engine_new`, `fl_view_new` | `GtkWidget*` | `gtk_container_add`; tao already uses GTK3 here |
 
-**Open item for Phase 0:** all three embedders expose both a "view controller creates the
-engine" path and an explicit engine-first path. Duet requires engine-first, so that engines
-can be booted and views attached/detached independently. The engine-first entry points are
-believed to exist on all three platforms, but **exact signatures must be confirmed during
-the Phase 0 spike** before the implementation plan hardens.
+**macOS: CONFIRMED by Spike A** (2026-08-04). The engine-first path exists and works. Verified
+sequence, from a running Rust binary:
+
+```
+FlutterDartProject  initWithPrecompiledDartBundle:  <NSBundle of App.framework>
+FlutterEngine       initWithName:project:allowHeadlessExecution:YES
+FlutterEngine       runWithEntrypoint:nil                        -> BOOL
+FlutterViewController initWithEngine:nibName:bundle:              (per view)
+  .view -> NSView, addSubview into the tao NSWindow's contentView
+detach = removeFromSuperview + drop the controller (engine holds it only weakly)
+FlutterEngine       shutDownEngine
+```
+
+`allowHeadlessExecution:YES` is what lets the engine exist with zero views. The
+`engine.viewController` property must **not** be used — it is the legacy single-view path and
+reassigning it throws.
+
+Two corrections to this section, both from Spike A:
+
+- **Assets must come from an `NSBundle`.** macOS `FlutterDartProject` has no
+  `initWithAssetsPath:` — only `initWithPrecompiledDartBundle:`. §8's tooling must produce a
+  real `.app` bundle or an `App.framework`-shaped directory, not a bare `flutter_assets` copy.
+- **`objc2`'s `catch-all` feature is mandatory** for `duet-flutter`. Without it an
+  Objective-C exception crossing into Rust aborts the process with no message, no reason and no
+  backtrace.
+
+**Still open for Phase 0:** Windows and Linux engine-first signatures remain unverified.
+
+See `docs/superpowers/spikes/2026-08-04-phase0-findings.md`.
 
 ### 6.2 Threading
 
@@ -339,6 +392,18 @@ App authors never observe the difference. This is the highest-churn area of the 
 Flutter desktop multi-view is actively evolving upstream, so this abstraction is partly
 insulation against a moving target. Keeping it behind `FlutterSurface` means upstream churn
 costs one crate rather than a public API break.
+
+> **Spike A finding (2026-08-04): strategy 1 is unavailable on macOS today.** A second
+> concurrent `initWithEngine:` throws `NSInternalInconsistencyException — The engine already
+> has a view controller for the implicit view`. Both controllers report `viewIdentifier=0`,
+> the *implicit view*. Sequential detach-then-create works; simultaneous does not.
+>
+> The header docs read as though arbitrary multi-view were supported; on this engine build it
+> is not. **macOS must use one engine per Flutter window.** The abstraction held — this was
+> already the named fallback — but strategy 1 should not be planned around until re-verified.
+>
+> This does not affect Duet's primary shape (one Flutter window plus one webview window), and
+> it makes the replace-not-duplicate teardown model the natural fit for this engine.
 
 ---
 
