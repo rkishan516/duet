@@ -58,10 +58,23 @@ impl Path {
                     .map_err(|_| PathParseError::InvalidIndex(raw.to_string()))?;
                 segments.push(Segment::Index(index));
                 i = end + 1;
+
+                // After a closing `]`, only `.`, `[`, or end-of-input may follow.
+                if i < bytes.len() && bytes[i] != b'.' && bytes[i] != b'[' {
+                    let ch = s[i..].chars().next().expect("i is a char boundary");
+                    return Err(PathParseError::UnexpectedChar { at: i, ch });
+                }
             } else {
                 let mut end = i;
-                while end < bytes.len() && bytes[end] != b'.' && bytes[end] != b'[' {
+                while end < bytes.len()
+                    && bytes[end] != b'.'
+                    && bytes[end] != b'['
+                    && bytes[end] != b']'
+                {
                     end += 1;
+                }
+                if end < bytes.len() && bytes[end] == b']' {
+                    return Err(PathParseError::UnexpectedChar { at: end, ch: ']' });
                 }
                 if end == i {
                     return Err(PathParseError::EmptySegment(i));
@@ -92,6 +105,12 @@ pub enum PathParseError {
     UnclosedIndex(usize),
     InvalidIndex(String),
     TrailingDot,
+    /// A character appeared where the grammar does not allow it, such as a
+    /// stray `]` or text immediately following a closing bracket.
+    UnexpectedChar {
+        at: usize,
+        ch: char,
+    },
 }
 
 impl std::fmt::Display for Path {
@@ -194,5 +213,38 @@ mod tests {
             let parsed = Path::parse(raw).unwrap();
             assert_eq!(parsed.to_string(), raw, "round trip failed for {raw:?}");
         }
+    }
+
+    #[test]
+    fn rejects_stray_closing_bracket() {
+        assert_eq!(
+            Path::parse("foo]"),
+            Err(PathParseError::UnexpectedChar { at: 3, ch: ']' })
+        );
+    }
+
+    #[test]
+    fn rejects_text_immediately_after_index() {
+        assert_eq!(
+            Path::parse("foo[3]extra"),
+            Err(PathParseError::UnexpectedChar { at: 6, ch: 'e' })
+        );
+    }
+
+    #[test]
+    fn allows_legal_characters_after_index() {
+        // `.`, `[`, and end-of-input are all legal after a closing bracket.
+        assert!(Path::parse("foo[3].bar").is_ok());
+        assert!(Path::parse("foo[3][4]").is_ok());
+        assert!(Path::parse("foo[3]").is_ok());
+    }
+
+    #[test]
+    fn reports_multibyte_char_after_index_correctly() {
+        // The error must carry the whole char, not a partial UTF-8 byte.
+        assert_eq!(
+            Path::parse("foo[3]é"),
+            Err(PathParseError::UnexpectedChar { at: 6, ch: 'é' })
+        );
     }
 }
