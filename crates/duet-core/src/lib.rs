@@ -6,10 +6,12 @@
 
 pub mod lifecycle;
 pub mod path;
+pub mod policy;
 pub mod store;
 pub mod value;
 
 pub use lifecycle::{Instant, InvalidTransition, LifecycleEvent, SurfaceState, transition};
 pub use path::{Path, PathParseError, Segment};
+pub use policy::{Decision, Policy, PolicyInput, evaluate};
 pub use store::{Notification, Patch, Store, SubscriberId, SubscriptionId};
 pub use value::{SetError, Value};
