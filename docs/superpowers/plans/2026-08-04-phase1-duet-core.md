@@ -1102,6 +1102,22 @@ git commit -m "feat(core): add Store with subscriptions and snapshots"
 This is the centre of the crate. Read the "Background" section again before starting if the
 two-way overlap rule is not fresh.
 
+> **Decision made during execution: `Store::set` always notifies. It does not diff.**
+>
+> A write to a path notifies every overlapping subscriber whether or not the value actually
+> changed. Skipping notification for no-op writes was considered and rejected.
+>
+> The reason is not just simplicity. `Value` derives `PartialEq` and contains `Float(f64)`,
+> so `Value::Float(NAN) != Value::Float(NAN)` — a tree containing a NaN is not equal to a
+> clone of itself. Change detection written as `if old != new { notify }` would therefore fire
+> on *every* write to any subtree containing a NaN, including genuine no-ops: a permanent
+> notification storm that is invisible until someone puts a NaN in the store.
+>
+> A reviewer proposed a `Value::same()` helper using `f64::to_bits` to defend against this.
+> Declining it: not diffing at all makes the hazard structurally unreachable rather than
+> defended against, and no-op writes are rare in practice. Revisit only if profiling shows
+> redundant notifications are actually costing something.
+
 **Files:**
 - Modify: `crates/duet-core/src/store.rs`
 - Modify: `crates/duet-core/src/lib.rs`
