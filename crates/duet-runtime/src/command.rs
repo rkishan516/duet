@@ -15,12 +15,9 @@ use duet_core::{Path, SetError, SubscriberId, SubscriptionId, Value};
 /// This type is crate-private: it is an implementation detail of how the handle
 /// talks to the thread, not part of the public API.
 ///
-/// `#[allow(dead_code)]`: nothing constructs most variants yet, because the
-/// core thread that matches on them (`Runtime`/`StoreHandle`) is built in the
-/// next task by design — see the phase plan. Remove this allow once that
-/// consumer lands.
+/// Constructed by [`crate::StoreHandle`]'s methods and consumed by
+/// [`crate::Runtime`]'s core thread loop.
 #[derive(Debug)]
-#[allow(dead_code)]
 pub(crate) enum CoreCommand {
     /// Read the value at a path.
     Get {

@@ -2,7 +2,7 @@
 //!
 //! [`duet_core::Store`] is deliberately single-threaded plain data. This crate
 //! moves it onto a dedicated **core thread** and hands out cheap, cloneable
-//! `StoreHandle`s that any thread may use.
+//! [`StoreHandle`]s that any thread may use.
 //!
 //! # Why a thread rather than a mutex
 //!
@@ -17,7 +17,7 @@
 //!
 //! # Delivery
 //!
-//! Notifications are handed to a `Sink`. That is a trait rather than `tao`'s
+//! Notifications are handed to a [`Sink`]. That is a trait rather than `tao`'s
 //! `EventLoopProxy` so this crate stays testable without a window system;
 //! Phase 2b supplies the real implementation.
 
@@ -25,9 +25,13 @@
 
 mod command;
 pub mod error;
+pub mod handle;
+pub mod runtime;
 pub mod sink;
 
 pub use error::RuntimeError;
+pub use handle::StoreHandle;
+pub use runtime::Runtime;
 pub use sink::{NullSink, RecordingSink, Sink, SinkError};
 
 /// These bounds are load-bearing: the core thread owns the `Store` and receives
@@ -36,4 +40,5 @@ pub use sink::{NullSink, RecordingSink, Sink, SinkError};
 const _: () = {
     const fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<RuntimeError>();
+    assert_send_sync::<StoreHandle>();
 };
