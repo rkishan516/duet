@@ -5,5 +5,7 @@
 //! dependencies, so all behaviour here is testable with plain `cargo test`.
 
 pub mod path;
+pub mod value;
 
 pub use path::{Path, PathParseError, Segment};
+pub use value::Value;
