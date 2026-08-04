@@ -4,7 +4,7 @@ use std::sync::mpsc::Sender;
 
 use duet_core::{Path, SetError, SubscriberId, SubscriptionId, Value};
 
-/// A request from a `StoreHandle` to the core thread.
+/// A request from a [`crate::StoreHandle`] to the core thread.
 ///
 /// Every variant carries its own reply channel, so a caller waits only on its
 /// own request and never on a shared lock. Dropping the reply sender without

@@ -34,11 +34,12 @@ pub use handle::StoreHandle;
 pub use runtime::Runtime;
 pub use sink::{NullSink, RecordingSink, Sink, SinkError};
 
-/// These bounds are load-bearing: the core thread owns the `Store` and receives
-/// values from other threads. Asserted here so a change that breaks them fails
-/// at its own source rather than at an integration point.
+/// These bounds are load-bearing: the core thread owns the [`duet_core::Store`]
+/// and receives values from other threads. Asserted here so a change that
+/// breaks them fails at its own source rather than at an integration point.
 const _: () = {
     const fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<RuntimeError>();
     assert_send_sync::<StoreHandle>();
+    assert_send_sync::<Runtime>();
 };

@@ -14,14 +14,20 @@ use crate::error::RuntimeError;
 ///
 /// All methods **block** the calling thread until the core thread replies. The
 /// operations are microseconds of in-process work, and a blocking API avoids
-/// forcing an async executor choice on callers. Never call these from the core
-/// thread itself: it would wait for a reply it is responsible for producing.
+/// forcing an async executor choice on callers. Calling a method from the core
+/// thread itself — most plausibly from inside a [`crate::Sink`] implementation
+/// — cannot be served, since the core thread would be waiting on a reply only
+/// it can produce; such a call returns [`RuntimeError::ReentrantCall`] instead
+/// of deadlocking.
 #[derive(Debug, Clone)]
 pub struct StoreHandle {
     tx: Sender<CoreCommand>,
 }
 
 impl StoreHandle {
+    /// Wraps a raw command sender as a handle. Crate-private: callers obtain a
+    /// `StoreHandle` from [`crate::Runtime::handle`], never by constructing one
+    /// directly.
     pub(crate) fn new(tx: Sender<CoreCommand>) -> Self {
         StoreHandle { tx }
     }
@@ -31,7 +37,15 @@ impl StoreHandle {
     /// Both a failed send and a closed reply channel mean the core thread is
     /// gone, so both map to the same error. This is the single place that
     /// blocking round-trip is implemented.
+    ///
+    /// Refuses to serve a call made from the core thread itself: such a call
+    /// would block that thread on a reply only it can produce, which is a
+    /// permanent, unrecoverable hang rather than an ordinary error. See
+    /// [`crate::RuntimeError::ReentrantCall`].
     fn call<T>(&self, make: impl FnOnce(Sender<T>) -> CoreCommand) -> Result<T, RuntimeError> {
+        if crate::runtime::on_core_thread() {
+            return Err(RuntimeError::ReentrantCall);
+        }
         let (reply_tx, reply_rx) = mpsc::channel();
         self.tx
             .send(make(reply_tx))
@@ -41,24 +55,37 @@ impl StoreHandle {
 
     /// Reads the value at `path`, or `None` if it is absent.
     ///
-    /// Returns an owned `Value` rather than a reference, because a reference
-    /// into the core thread's store cannot cross a thread boundary.
+    /// Returns an owned [`Value`] rather than a reference, because a reference
+    /// into the core thread's store cannot cross a thread boundary. The value
+    /// is deep-cloned on the core thread, so reading at a broad path —
+    /// [`duet_core::Path::root`] above all — copies that whole subtree and
+    /// blocks every other reader and writer while it does. Read at the
+    /// narrowest path that answers your question.
     ///
     /// # Errors
     ///
     /// [`RuntimeError::CoreThreadGone`] if the runtime has shut down.
+    /// [`RuntimeError::ReentrantCall`] if called from the core thread itself.
     pub fn get(&self, path: &Path) -> Result<Option<Value>, RuntimeError> {
         let path = path.clone();
         self.call(|reply| CoreCommand::Get { path, reply })
     }
 
-    /// Writes `value` at `path`, notifying every overlapping subscription.
+    /// Writes `value` at `path`.
+    ///
+    /// Returns once the write has been applied. Notifications for it are
+    /// delivered to the [`crate::Sink`] immediately afterwards, on the core
+    /// thread, so a slow sink cannot stall the writer. A caller may therefore
+    /// observe its own write as complete before subscribers have been
+    /// notified. Reads through any `StoreHandle` are unaffected — they are
+    /// served after delivery.
     ///
     /// # Errors
     ///
     /// [`RuntimeError::Store`] if the store rejected the write — in which case
     /// nothing was mutated and no notifications were produced.
     /// [`RuntimeError::CoreThreadGone`] if the runtime has shut down.
+    /// [`RuntimeError::ReentrantCall`] if called from the core thread itself.
     pub fn set(&self, path: &Path, value: Value) -> Result<(), RuntimeError> {
         let path = path.clone();
         self.call(|reply| CoreCommand::Set { path, value, reply })?
@@ -70,6 +97,7 @@ impl StoreHandle {
     /// # Errors
     ///
     /// [`RuntimeError::CoreThreadGone`] if the runtime has shut down.
+    /// [`RuntimeError::ReentrantCall`] if called from the core thread itself.
     pub fn subscribe(
         &self,
         subscriber: SubscriberId,
@@ -87,6 +115,7 @@ impl StoreHandle {
     /// # Errors
     ///
     /// [`RuntimeError::CoreThreadGone`] if the runtime has shut down.
+    /// [`RuntimeError::ReentrantCall`] if called from the core thread itself.
     pub fn unsubscribe(&self, id: SubscriptionId) -> Result<bool, RuntimeError> {
         self.call(|reply| CoreCommand::Unsubscribe { id, reply })
     }
@@ -98,6 +127,7 @@ impl StoreHandle {
     /// # Errors
     ///
     /// [`RuntimeError::CoreThreadGone`] if the runtime has shut down.
+    /// [`RuntimeError::ReentrantCall`] if called from the core thread itself.
     pub fn drop_subscriber(&self, subscriber: SubscriberId) -> Result<usize, RuntimeError> {
         self.call(|reply| CoreCommand::DropSubscriber { subscriber, reply })
     }

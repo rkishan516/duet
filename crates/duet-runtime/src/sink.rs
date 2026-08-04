@@ -42,6 +42,11 @@ pub trait Sink: Send + 'static {
     /// thread, which must stay responsive to store requests; a blocking sink
     /// stalls every reader and writer in the process. Marshal and return.
     ///
+    /// `deliver` runs on the core thread. Calling any [`crate::StoreHandle`]
+    /// method from inside it returns [`crate::RuntimeError::ReentrantCall`] — it
+    /// cannot be served, because this thread is the one that would have to
+    /// serve it. Marshal the batch elsewhere and return.
+    ///
     /// Panic behaviour is **not yet defined** — do not rely on `deliver` being
     /// panic-safe. A later task establishes what happens when it panics; this
     /// is currently left open rather than silently assumed either way.

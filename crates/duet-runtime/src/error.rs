@@ -14,6 +14,13 @@ pub enum RuntimeError {
     CoreThreadGone,
     /// The store rejected the write. Carries `duet-core`'s error unchanged.
     Store(SetError),
+    /// A [`crate::StoreHandle`] method was called from the core thread itself —
+    /// almost always from inside a [`crate::Sink`] implementation.
+    ///
+    /// Serving it would deadlock permanently: the core thread would wait for a
+    /// reply that only it can produce. Returning an error instead converts a
+    /// silent unrecoverable hang into an immediate, debuggable failure.
+    ReentrantCall,
 }
 
 impl std::fmt::Display for RuntimeError {
@@ -23,6 +30,10 @@ impl std::fmt::Display for RuntimeError {
                 write!(f, "the runtime core thread is no longer running")
             }
             RuntimeError::Store(e) => write!(f, "store rejected the write: {e}"),
+            RuntimeError::ReentrantCall => write!(
+                f,
+                "a StoreHandle method was called from the core thread itself, which would deadlock"
+            ),
         }
     }
 }
@@ -45,6 +56,15 @@ mod tests {
         assert!(
             rendered.contains("core thread"),
             "message should name the core thread, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn reentrant_call_displays_actionably() {
+        let rendered = RuntimeError::ReentrantCall.to_string();
+        assert!(
+            rendered.contains("deadlock"),
+            "message should name the hazard, got: {rendered}"
         );
     }
 
