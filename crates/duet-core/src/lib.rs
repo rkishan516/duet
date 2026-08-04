@@ -9,5 +9,5 @@ pub mod store;
 pub mod value;
 
 pub use path::{Path, PathParseError, Segment};
-pub use store::{Store, SubscriberId, SubscriptionId};
+pub use store::{Notification, Patch, Store, SubscriberId, SubscriptionId};
 pub use value::{SetError, Value};
