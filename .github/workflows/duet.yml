@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - 'crates/**'
+      - 'fixtures/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/duet.yml'
