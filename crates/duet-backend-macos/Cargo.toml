@@ -12,6 +12,8 @@ duet-core = { path = "../duet-core" }
 duet-runtime = { path = "../duet-runtime" }
 duet-supervisor = { path = "../duet-supervisor" }
 duet-host = { path = "../duet-host" }
+duet-webview = { path = "../duet-webview" }
+duet-protocol = { path = "../duet-protocol" }
 tao = "0.36"
 wry = "0.56"
 objc2 = { version = "0.6.4", features = ["catch-all"] }
