@@ -130,6 +130,8 @@ final class DuetNull extends DuetValue {
 /// `Value::Bool`.
 final class DuetBool extends DuetValue {
   const DuetBool(this.value);
+
+  /// The wrapped boolean.
   final bool value;
   @override
   Map<String, Object?> toJson() => <String, Object?>{'t': 'bool', 'v': value};
@@ -144,6 +146,8 @@ final class DuetBool extends DuetValue {
 /// `Value::Int` — a signed 64-bit integer.
 final class DuetInt extends DuetValue {
   const DuetInt(this.value);
+
+  /// The wrapped signed 64-bit integer.
   final int value;
 
   /// A decimal STRING, never a JSON number: duet-codec/src/value.rs:32.
@@ -163,6 +167,8 @@ final class DuetInt extends DuetValue {
 /// `Value::Float` — a 64-bit float, including NaN and both infinities.
 final class DuetFloat extends DuetValue {
   const DuetFloat(this.value);
+
+  /// The wrapped double, which may be NaN or either infinity.
   final double value;
 
   /// Non-finite doubles travel as string sentinels: duet-codec/src/value.rs:50-70.
@@ -190,6 +196,8 @@ final class DuetFloat extends DuetValue {
 /// `Value::Str`.
 final class DuetStr extends DuetValue {
   const DuetStr(this.value);
+
+  /// The wrapped string.
   final String value;
   @override
   Map<String, Object?> toJson() => <String, Object?>{'t': 's', 'v': value};
@@ -206,6 +214,8 @@ final class DuetStr extends DuetValue {
 /// encoding is tagged at all.
 final class DuetBytes extends DuetValue {
   const DuetBytes(this.value);
+
+  /// The wrapped raw bytes.
   final List<int> value;
   @override
   Map<String, Object?> toJson() =>
@@ -217,6 +227,8 @@ final class DuetBytes extends DuetValue {
 /// `Value::List`.
 final class DuetList extends DuetValue {
   const DuetList(this.items);
+
+  /// The wrapped, order-preserving list of values.
   final List<DuetValue> items;
   @override
   Map<String, Object?> toJson() => <String, Object?>{
@@ -230,6 +242,8 @@ final class DuetList extends DuetValue {
 /// `Value::Map`.
 final class DuetMap extends DuetValue {
   const DuetMap(this.entries);
+
+  /// The wrapped key-value entries.
   final Map<String, DuetValue> entries;
   @override
   Map<String, Object?> toJson() => <String, Object?>{

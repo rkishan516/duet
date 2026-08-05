@@ -86,6 +86,8 @@ class DuetFailure implements Exception {
 /// exchange never reached the protocol layer at all.
 class DuetTransportException implements Exception {
   DuetTransportException(this.message);
+
+  /// What went wrong, safe to show a developer.
   final String message;
   @override
   String toString() => 'DuetTransportException: $message';
@@ -93,6 +95,9 @@ class DuetTransportException implements Exception {
 
 /// `window.__duet`, in Dart.
 class DuetClient {
+  /// [channel] defaults to [kDuetChannel]; the parameter exists so tests can
+  /// inject a distinct channel instance rather than fighting over the one
+  /// real channel's global mock handler.
   DuetClient({BasicMessageChannel<String>? channel})
     : _channel = channel ?? kDuetChannel;
 
