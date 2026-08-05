@@ -1,0 +1,14 @@
+[package]
+name = "duet-protocol"
+description = "Message envelope between Duet's host and its guests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+duet-core = { path = "../duet-core" }
+duet-codec = { path = "../duet-codec" }
+duet-runtime = { path = "../duet-runtime" }
+serde_json = { version = "1", features = ["float_roundtrip"] }
