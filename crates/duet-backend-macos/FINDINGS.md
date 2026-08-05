@@ -501,3 +501,335 @@ cargo fmt --all -- --check                                            # clean
 git diff --stat main -- crates/duet-core crates/duet-runtime crates/duet-codec crates/duet-supervisor crates/duet-host
   # (no output — these five crates are byte-for-byte unchanged by this phase)
 ```
+
+---
+
+## Phase 2b-5 — the webview guest speaks `duet-protocol` over real `wry` IPC
+
+This phase wired a `wry` `WebView` into the same `duet-protocol` conversation
+`duet-backend-macos`'s Flutter surface already speaks, and proved a value
+written by JavaScript is readable from Rust, and a value written by Rust
+reaches JavaScript as a push — both over the real transport, not a mock of
+it. It also extracted the transport-agnostic half of that work into a new
+`duet-webview` crate mid-phase, for a reason explained in F12.
+
+**Where this section lives, and why.** The plan allowed a webview-specific
+findings file if that turned out to be the better home for the platform-free
+parts. This document keeps everything in one place instead: the routing
+logic in `duet-webview` and the `wry`-specific glue in
+`duet-backend-macos::webview` were proven together, in one example, and
+splitting the writeup across two files would force a reader to hold both
+open to see the whole claim (guest text in, JavaScript out) verified end to
+end. F9–F11 below cover the platform-free half; F7, F8 and F9's second half
+cover what is specific to `wry`/macOS.
+
+Environment: macOS 26.5.2 (25F84), arm64. `tao` 0.36.0, `wry` 0.56.0, `objc2`
+0.6.4 (`catch-all`), `serde_json` 1.0.151 — same toolchain F1–F5 used, `wry`
+newly exercised via `with_ipc_handler` for the first time.
+
+| # | Claim | Verdict | Evidence |
+|---|---|---|---|
+| 1 | A JS guest's write is readable from Rust | **yes** | `Rust read counter = Int(42), written by JavaScript over wry IPC`, every run |
+| 2 | A Rust write reaches the guest as exactly one push | **yes** | `window.__duet.pushes.length == 1`, path `counter`, value `{t:"i", v:"99"}`, every run |
+| 3 | `with_ipc_handler` actually delivers guest IPC to Rust | **yes, first try** | never spike-proven before this phase — see F7 |
+| 4 | Dropping the reply-evaluation arm is silently catastrophic | **yes, reproduced independently** | see F8: store write lands, guest hangs forever, only a deadline makes it visible |
+| 5 | Hostile guest text cannot panic, hang, or get echoed back unbounded | **yes** | see F11: exact byte counts reproduced |
+| 6 | `duet_codec`'s recursive decoder is reachable from guest text | **no** | see F10: `serde_json`'s own 128-level recursion guard rejects it first |
+| 7 | Real mouse/keyboard input reaches the webview | **cannot verify here** | no on-screen WindowServer; unchanged from every prior phase |
+| 8 | Two live guests' subscriptions are isolated | **only structurally proven** | see F13; no run has had a webview and a Flutter engine live against one store simultaneously |
+| 9 | `duet-webview` clears the workspace's 90% line-coverage gate on its own | **no — 89.78%, a real gap** | see F13; the gate still passes because it is workspace-wide |
+
+---
+
+### F6 — The proof, measured
+
+`cargo run -p duet-backend-macos --example webview_state` (`examples/webview_state.rs`)
+drives a real `tao` window, a real `wry` `WebView`, and a real
+`duet-runtime` core thread through four stages: guest boots, guest writes
+`counter = 42` over IPC, Rust reads it back, then Rust writes `counter = 99`
+and the guest observes exactly one push carrying it. Reproduced 5 times in a
+row after this document's other findings were verified (see F8's sabotage
+test and F11's byte-count checks, both of which required rebuilding the same
+binary); every run printed the same five `PASS` lines:
+
+```
+PASS: guest bootstrap ran - window.__duet exists after 0.20-0.40s
+PASS: wry IPC round trip (guest -> host -> guest) - the guest received 1 response(s) over wry IPC
+PASS: a JS-written value is readable from Rust - Rust read counter = Int(42), written by JavaScript over wry IPC
+PASS: a Rust write reached the guest exactly once - window.__duet.pushes.length == 1 (want exactly 1)
+PASS: that push carried the value Rust wrote - the push carried path="counter" value={t:"i", v:"99"} (want counter / i / 99)
+
+ALL PASS: a JavaScript guest and Rust share one store over real wry IPC
+```
+
+Per-run timings (`ps`/`time`-independent, taken from the example's own
+`Instant`-based prints and from `/usr/bin/time -p` around the whole process):
+
+| Run | boot | 1st reply | 2nd reply | 1st push | total wall time (`time -p`) |
+|---|---:|---:|---:|---:|---:|
+| 1 | 0.24s | 0.39s | 0.59s | 0.74s | 1.46s |
+| 2 | 0.28s | 0.44s | 0.64s | 0.79s | 1.61s |
+| 3 | — | — | — | — | 1.50s |
+| 4 | — | — | — | — | 1.58s |
+| 5 (with `[measure]` instrumentation, see F11) | 0.20-0.40s | — | — | — | — |
+
+**Correcting a number from the task brief:** the brief characterized the
+whole run as "~0.85s". That does not hold under measurement here — total
+wall time across five runs of the compiled binary was consistently
+1.46-1.61s, not ~0.85s. The ~0.7-0.9s figures *are* real, but they mark when
+the first push arrives, not when the process exits: `SETTLE_TURNS = 6` holds
+the run open for 6 more 50ms turns after that (300ms) before asserting the
+count, plus `Runtime::shutdown()` and process exit overhead account for the
+rest. Reported here as measured, not as originally claimed — the discrepancy
+is in what point of the run the number describes, not a sign anything is
+actually slower than expected.
+
+### F7 — `with_ipc_handler` was not spike-proven, and now is
+
+Spike B (`spikes/spike-b-macos/src/main.rs`) exercised `with_html` and
+`evaluate_script_with_callback` — JavaScript running, and its return value
+coming back to Rust — but never `with_ipc_handler`: nothing in that spike
+sent a message *from* the guest unprompted. This phase's `WebviewSurface::new`
+(`src/webview.rs:46-63`) is therefore the first thing in this workspace to
+register a `wry` IPC handler and observe it actually fire. It worked on the
+first real run with no workaround needed — worth recording precisely because
+Spike B *did* need a workaround for the adjacent double-encoding problem (see
+F9), so "first try, no surprises" for the IPC handler specifically is a real
+data point, not a foregone conclusion.
+
+### F8 — A load-bearing arm whose absence is silent, reproduced by sabotage
+
+`WebviewSurface::new`'s IPC handler cannot hold the webview it answers
+through (see F9's second half for why), so it posts a
+`DuetEvent::WebviewScript(String)` through an `EventLoopProxy` and relies on
+the event loop's own `Event::UserEvent(DuetEvent::WebviewScript(js)) =>
+app.surface.eval(&js)` arm (`examples/webview_state.rs:292-296`) to actually
+run it. This was re-verified here by deliberately deleting that arm's body
+(replacing the `eval` call with a comment) and lowering the example's
+`DEADLINE` from 30s to 5s so the failure would surface quickly, then
+rebuilding and running:
+
+```
+[webview_state] window and wry webview created; subscriber=SubscriberId(0)
+[webview_state] guest booted; probe readback = {...,"ready":true,...}
+[webview_state] evaluated the guest's set call
+[sabotage-check] counter in store = Ok(Some(Int(42)))
+
+=== Duet webview shared-state report ===
+TIMED OUT after 5s while at stage AwaitSetReply; last readback = {...,"pushLen":0,"logLen":0,...}
+notifications received for this subscriber: 0, evaluated into the guest: 0
+
+FAIL: wry IPC round trip (guest -> host -> guest) - never reached; the sequence stopped before this stage
+FAIL: a JS-written value is readable from Rust - never reached; the sequence stopped before this stage
+4 check(s) FAILED
+```
+
+A temporary `[sabotage-check]` print (added only for this verification, then
+removed) confirms the mechanism precisely: the store write lands —
+`counter` is `Int(42)` in Rust — *before* the sabotaged arm would have run,
+because `handle_ipc_text` performs the dispatch synchronously inside the IPC
+handler itself, and only the reply script's delivery is what got dropped.
+From the guest's point of view there is no error, no rejected promise,
+nothing in the console — its `set(...)` call simply never resolves. The
+example's own `AwaitSetReply` poll loop has no way to distinguish "still in
+flight" from "will never arrive," so only the whole-run `DEADLINE` turns this
+into a visible failure at all; a guest with no such deadline (a real webview
+UI) would wait forever with no diagnostic. Both edits (the deadline, the
+sabotaged arm) were reverted after this measurement; `git diff` against
+`examples/webview_state.rs` is empty again (verified below, F-workspace
+section).
+
+### F9 — Two design decisions the code carries a comment for, verified against `wry`'s own source
+
+**Replies are pushed into the guest, never returned from an evaluated
+script.** `handle_ipc_text`'s doc comment and `WebviewSurface::new`
+(`src/webview.rs:52-60`) both explain why: `wry`'s
+`evaluate_script_with_callback` on macOS runs the script's return value
+through `NSJSONSerialization` before handing it back
+(`wry-0.56.0/src/wkwebview/mod.rs:741`, `:759`,
+`evaluateJavaScript_completionHandler`) — so a script that returns an
+already-stringified JSON string would come back double-encoded. Spike B hit
+exactly this. Confirmed directly in the vendored `wry` source at the paths
+above; `response_script`/`push_script` sidestep it entirely by embedding the
+JSON in the *script text* itself (`window.__duet.onResponse({reply_json});`)
+rather than returning it.
+
+**The IPC handler cannot hold the webview.** Read from `wry` 0.56.0's own
+signature (`wry-0.56.0/src/lib.rs:1175-1178`):
+
+```rust
+pub fn with_ipc_handler<F>(mut self, handler: F) -> Self
+where
+    F: Fn(Request<String>) + 'static,
+```
+
+`Fn`, not `FnMut` — so the handler can only capture things it accesses by
+shared reference — and no `Send` bound, just `'static`. `WebviewBuilder::build()`
+is what returns the `WebView`, and the handler is registered before that call,
+so at the point the handler closure is constructed there is no `WebView`
+value yet for it to hold. `EventLoopProxy::send_event` and `StoreHandle`'s
+methods both satisfy `Fn` on `&self`, which is why the handler posts a
+`DuetEvent::WebviewScript` and lets the event loop — which does own the
+`WebView` — evaluate it on a later turn instead.
+
+### F10 — A structural discovery about depth guards
+
+`duet_webview::decode` (`crates/duet-webview/src/lib.rs:60-73`) calls
+`serde_json::from_str` before any of the text reaches
+`duet_protocol::decode_request`, and therefore before it reaches
+`duet_codec::decode_value` (`crates/duet-codec/src/value.rs:161`), which is
+itself recursive over nested tagged values. Reading `serde_json` 1.0.151's
+own source confirms the number already baked into the test's comment: a
+freshly-constructed `serde_json::Deserializer` (`serde_json-1.0.151/src/de.rs:63`)
+sets `remaining_depth: 128` — exactly 128, not "about" 128 — and rejects
+input nested deeper than that on its own, before any `Value` type is ever
+constructed. The consequence: **`duet_codec`'s recursive tagged-value decoder
+is unreachable from guest text**, because the JSON parser sitting in front of
+it is the depth guard. The test `hostile_guest_input_cannot_panic_hang_or_echo_unbounded_text`
+(`crates/duet-webview/src/lib.rs:263-358`) makes this concrete: a `Value`
+nested 5,000 deep inside a real `set` request (line 305-312) looks like it
+targets `duet_codec`'s decoder specifically, but it hits `serde_json`'s guard
+first, at the same ~128-level threshold as 200,000 raw `[` characters with no
+structure at all. If a future change ever swaps in a parser without its own
+recursion limit, this guard disappears and `duet_codec::decode_value`'s own
+recursion becomes reachable for the first time — worth flagging for whoever
+makes that change, since nothing today tests the codec's recursion directly.
+
+### F11 — Hostile input is bounded, with exact numbers reproduced
+
+Ran `cargo test -p duet-webview hostile_guest_input_cannot_panic_hang_or_echo_unbounded_text`
+with a temporary `eprintln!` added after each of the two size-sensitive
+assertions (removed afterward; `git diff` on `crates/duet-webview/src/lib.rs`
+is empty again). Measured, not estimated:
+
+| Hostile input | Result | Reply |
+|---|---|---|
+| 200,000 unclosed `[` | `failed` (serde_json's recursion guard, F10) | small, fixed-shape |
+| 5,000-deep nested tagged `Value` inside a real `set` | `failed` (same guard, F10) | small, fixed-shape |
+| 1 MB `path` string | `failed` | **exactly 100 bytes**: `{"id":"1","kind":"failed","message":"invalid path: unexpected character ']' at byte offset 1000000"}` |
+| 1 MB bogus value `t` tag | `failed` | **exactly 111 bytes**: `{"id":"1","kind":"failed","message":"unknown type tag \"zzz...zzz…\""}`, the tag truncated to `duet_codec::error::MAX_ECHO_CHARS = 48` chars (`crates/duet-codec/src/error.rs:8-11`) |
+| lone UTF-16 surrogate (`\ud800`) in a string | `failed`, no panic | small |
+| raw control character (`\u{0007}`) in a string | `failed`, no panic | small |
+
+No panic, no hang, no reply that scales with the size of the offending
+input, across all six cases — the guest cannot turn a megabyte of garbage
+into a megabyte of host-produced text (e.g. downstream in a log line). This
+is proven against `handle_ipc_text` called directly, not through a real
+`wry` IPC channel — see F13 on what that does and does not establish.
+
+### F12 — A crate was extracted mid-phase; the lesson is about CI, not about code cleanliness
+
+`duet-webview`'s `Cargo.toml` depends only on `duet-core`, `duet-runtime`,
+`duet-protocol`, and `serde_json` — no `tao`, `wry`, or `objc2`, confirmed by
+reading it directly. Nothing in `handle_ipc_text`, `response_script`,
+`push_script`, or `bootstrap::BOOTSTRAP_HTML` touches a platform API. That
+logic started inside `duet-backend-macos` (commit `3ef46e8`) alongside the
+first IPC routing work, which meant it lived in the one crate this
+workspace's CI cannot build at all: `.github/workflows/duet.yml` runs a
+single job on `runs-on: ubuntu-latest` (line 14) and passes
+`--exclude duet-backend-macos` to every workspace-wide `clippy`, `doc`,
+`llvm-cov`, and `test` invocation (lines 33, 35, 39, 41) — the same exclusion
+F2b-3's CI section documents and justifies for the platform-specific code.
+While the routing logic sat inside `duet-backend-macos`, that exclusion also
+hid it: its tests never ran in CI, and its coverage was never counted toward
+the 90% gate, even though nothing about it required a window server, a
+Flutter framework, or an Objective-C runtime. Commit `a39fc97` moved it out
+into `duet-webview`, which CI now builds and tests like any other crate (see
+the workspace verification below — `duet_webview`'s 9 unit tests run in the
+same `cargo test --workspace --exclude duet-backend-macos` invocation as
+everything else).
+
+**Lesson for later phases:** platform-free logic written inside a
+platform-gated crate is invisible to CI and will get duplicated per platform
+if left there — Phase 5's Windows and Linux backends need this exact IPC
+routing and bootstrap script, and without this extraction each would have
+either reimplemented it or reached across into `duet-backend-macos`'s
+macOS-only crate to borrow it. The fix was mechanical (move the code, no
+logic changes — `git diff --stat main -- crates/duet-webview` shows only new
+files, not modifications elsewhere), which is itself the point: the platform
+boundary should be drawn by dependencies, not by which crate happened to be
+open when the code was written.
+
+### F13 — What could not be verified here, stated plainly
+
+- **Nothing was seen on a display.** Unchanged from every prior phase: no
+  reachable on-screen WindowServer for spawned processes. The window and
+  `WKWebView` are created and JavaScript genuinely runs (F6), but no human
+  observed any of it.
+- **Real mouse/keyboard input to the webview is unproven, in either
+  direction.** Spike B found synthetic input events reach a Flutter view but
+  *not* a `WKWebView`, and left that unexplained. Nothing in
+  `examples/webview_state.rs` touches input at all — this phase neither
+  confirms nor contradicts Spike B's finding.
+- **Hostile input has not been driven through the real `wry` IPC channel.**
+  F11's totality proof calls `handle_ipc_text` directly, the same way the
+  unit tests do. A guest actually sending malformed text over
+  `window.ipc.postMessage` and having it arrive at `WebviewSurface`'s
+  `with_ipc_handler` closure (`src/webview.rs:48-61`) intact is untested —
+  plausible given `Request::body()` is just the string `wry` received, but
+  not observed.
+- **Subscriber isolation between two *live* guests is only proven
+  structurally.** `the_handler_ignores_any_subscriber_named_on_the_wire`
+  (`crates/duet-webview/src/lib.rs:184-230`) pins that `handle_ipc_text` uses
+  the host-supplied `SubscriberId` argument and ignores any `"subscriber"`
+  field on the wire, by calling the handler twice in sequence with two
+  different subscriber ids. That is a real property of the function, but no
+  run in this phase — including `webview_state.rs`, which creates exactly
+  one surface — has had a webview and a Flutter engine subscribing
+  simultaneously against one shared store to observe cross-guest isolation
+  in the running system, not just in the function signature.
+- **`duet-webview` sits at 89.78% line coverage on its own, below the
+  workspace's 90% gate.** Measured directly from
+  `cargo llvm-cov --workspace --exclude duet-backend-macos --locked --fail-under-lines 90`'s
+  per-file table: `duet-webview/src/lib.rs` is 194 lines, 18 missed
+  (90.72%); `duet-webview/src/bootstrap.rs` is 31 lines, 5 missed (83.87%).
+  Combined: 225 lines, 23 missed = **89.78%**. The gate still passes overall
+  only because `--fail-under-lines 90` is evaluated workspace-wide: total
+  lines across all seven crates are 5,592 with 235 missed, 95.80%. This is
+  reported as a real, currently-uncovered gap in `duet-webview` specifically
+  — not hidden by the workspace total, and not something this phase closed.
+
+---
+
+### Workspace verification run for this phase
+
+All commands below were run against this branch's actual `HEAD`
+(`d15a4ff`), after F8's sabotage edit and F11's `eprintln!` instrumentation
+were both reverted (`git status --short` shows no changes to any tracked
+file under `crates/`).
+
+```
+cargo test --workspace --exclude duet-backend-macos --locked -- --test-threads=1
+  # 355 tests total (353 unit/integration + 2 doctests), all passed, 0 failed
+  # includes duet_webview: 9/9 (bootstrap: 2, lib: 7)
+
+cargo llvm-cov --workspace --exclude duet-backend-macos --locked --fail-under-lines 90
+  # TOTAL: 95.80% lines (5592 lines / 235 missed) -- gate passes (workspace-wide)
+  # duet-webview/src/lib.rs:       90.72% lines (194/18 missed)
+  # duet-webview/src/bootstrap.rs: 83.72% regions, 83.87% lines (31/5 missed)
+  # duet-webview combined:         89.78% lines -- below the 90% gate on its own, see F13
+
+cargo clippy --workspace --exclude duet-backend-macos --all-targets --locked -- -D warnings
+  # clean, no warnings
+
+cargo clippy -p duet-backend-macos --all-targets --locked -- -D warnings
+  # clean, no warnings
+
+cargo doc --workspace --exclude duet-backend-macos --no-deps --locked
+  # clean; generates docs for duet-webview along with the other five crates
+
+cargo fmt --all -- --check
+  # clean
+
+cargo test -p duet-backend-macos
+  # 2 passed, 1 ignored (tao's EventLoop must be built on the main thread,
+  # which the test harness does not provide -- same pre-existing constraint
+  # F5's sink.rs test documents), 0 failed
+
+git diff --stat main -- crates/duet-core crates/duet-runtime crates/duet-codec crates/duet-supervisor crates/duet-host crates/duet-protocol
+  # (no output -- all six untouched by this phase)
+```
+
+Every command above passed or produced the expected clean/empty output; none
+were re-run after a fix, and nothing here was adjusted to make a command
+pass.
