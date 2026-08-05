@@ -168,8 +168,12 @@ fn core_loop<S: Sink>(mut store: Store, rx: Receiver<CoreCommand>, sink: S) {
             } => {
                 let _ = reply.send(store.subscribe(subscriber, path));
             }
-            CoreCommand::Unsubscribe { id, reply } => {
-                let _ = reply.send(store.unsubscribe(id));
+            CoreCommand::Unsubscribe {
+                subscriber,
+                id,
+                reply,
+            } => {
+                let _ = reply.send(store.unsubscribe(subscriber, id));
             }
             CoreCommand::DropSubscriber { subscriber, reply } => {
                 let _ = reply.send(store.drop_subscriber(subscriber));
@@ -467,19 +471,48 @@ mod tests {
         // false, which would make every unsubscribe look like a no-op.
         let rt = Runtime::spawn(sample(), NullSink);
         let handle = rt.handle();
+        let owner = duet_core::SubscriberId(1);
         let (id, _snapshot) = handle
-            .subscribe(duet_core::SubscriberId(1), p("editor.zoom"))
+            .subscribe(owner, p("editor.zoom"))
             .expect("subscribe should succeed");
 
         assert_eq!(
-            handle.unsubscribe(id),
+            handle.unsubscribe(owner, id),
             Ok(true),
             "removing a live subscription must report it as having been present"
         );
         assert_eq!(
-            handle.unsubscribe(id),
+            handle.unsubscribe(owner, id),
             Ok(false),
             "removing the same id twice must report it as no longer present"
+        );
+        rt.shutdown().expect("shutdown should succeed");
+    }
+
+    /// The `subscriber` argument must survive the trip across the channel and
+    /// reach the store. Kills the mutant where `core_loop`'s `Unsubscribe` arm
+    /// destructures `subscriber` and then ignores it — which compiles, and
+    /// which reinstates the cross-guest hijack at the only layer that actually
+    /// serves two live guests.
+    #[test]
+    fn unsubscribe_refuses_an_id_owned_by_a_different_subscriber() {
+        let rt = Runtime::spawn(sample(), NullSink);
+        let handle = rt.handle();
+        let owner = duet_core::SubscriberId(1);
+        let other = duet_core::SubscriberId(2);
+        let (id, _snapshot) = handle
+            .subscribe(owner, p("editor.zoom"))
+            .expect("subscribe should succeed");
+
+        assert_eq!(
+            handle.unsubscribe(other, id),
+            Ok(false),
+            "a subscriber that does not own the subscription must not remove it"
+        );
+        assert_eq!(
+            handle.drop_subscriber(owner),
+            Ok(1),
+            "the owner's subscription must have survived the other guest's attempt"
         );
         rt.shutdown().expect("shutdown should succeed");
     }

@@ -132,14 +132,31 @@ impl StoreHandle {
         })
     }
 
-    /// Removes one subscription, returning whether it was present.
+    /// Removes one subscription owned by `subscriber`, returning whether it
+    /// was present.
+    ///
+    /// `subscriber` must be the id of the guest making the request, not the
+    /// id recorded on the subscription: passing the latter would satisfy the
+    /// ownership check unconditionally and reinstate the cross-guest hijack
+    /// that [`duet_core::Store::unsubscribe`] exists to prevent. A `false`
+    /// return means *either* that no such subscription exists *or* that it
+    /// belongs to another guest — deliberately indistinguishable, so a guest
+    /// cannot use this as an oracle for probing which ids are live.
     ///
     /// # Errors
     ///
     /// [`RuntimeError::CoreThreadGone`] if the runtime has shut down.
     /// [`RuntimeError::ReentrantCall`] if called from the core thread itself.
-    pub fn unsubscribe(&self, id: SubscriptionId) -> Result<bool, RuntimeError> {
-        self.call(|reply| CoreCommand::Unsubscribe { id, reply })
+    pub fn unsubscribe(
+        &self,
+        subscriber: SubscriberId,
+        id: SubscriptionId,
+    ) -> Result<bool, RuntimeError> {
+        self.call(|reply| CoreCommand::Unsubscribe {
+            subscriber,
+            id,
+            reply,
+        })
     }
 
     /// Removes every subscription held by `subscriber`, returning how many.

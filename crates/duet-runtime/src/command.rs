@@ -44,11 +44,15 @@ pub(crate) enum CoreCommand {
         /// Where to send the new id and the current value at that path.
         reply: Sender<(SubscriptionId, Option<Value>)>,
     },
-    /// Remove one subscription.
+    /// Remove one subscription, if `subscriber` owns it.
     Unsubscribe {
+        /// The guest asking. Carried because a [`SubscriptionId`] alone is
+        /// guessable and therefore proves no ownership — see
+        /// [`duet_core::Store::unsubscribe`].
+        subscriber: SubscriberId,
         /// Subscription to remove.
         id: SubscriptionId,
-        /// Where to send whether it was present.
+        /// Where to send whether it was present *and* owned by `subscriber`.
         reply: Sender<bool>,
     },
     /// Remove every subscription held by a subscriber. Used when a surface
@@ -143,20 +147,74 @@ mod tests {
             "snapshot must be the value at the path"
         );
 
-        // Unsubscribe: bool.
+        // Unsubscribe: bool. The variant carries the subscriber as well as the
+        // id, because `Store::unsubscribe` needs both — a mismatch between the
+        // variant's fields and that method's parameters is a compile error
+        // here, and a swapped pair would fail the assertion below.
         let (tx, rx) = mpsc::channel();
-        let cmd = CoreCommand::Unsubscribe { id, reply: tx };
+        let cmd = CoreCommand::Unsubscribe {
+            subscriber: SubscriberId(1),
+            id,
+            reply: tx,
+        };
         match cmd {
-            CoreCommand::Unsubscribe { id, reply } => {
+            CoreCommand::Unsubscribe {
+                subscriber,
+                id,
+                reply,
+            } => {
                 reply
-                    .send(store.unsubscribe(id))
+                    .send(store.unsubscribe(subscriber, id))
                     .expect("reply should send");
             }
             other => panic!("expected Unsubscribe, got {other:?}"),
         }
         assert!(
             rx.recv().expect("reply should arrive"),
-            "removing a live subscription returns true"
+            "removing a live subscription owned by this subscriber returns true"
+        );
+    }
+
+    /// The `subscriber` field must actually reach `Store::unsubscribe` rather
+    /// than being carried and discarded: a command naming a *different*
+    /// subscriber than the subscription's owner must reply `false`.
+    #[test]
+    fn unsubscribe_carries_the_subscriber_through_to_the_store() {
+        use duet_core::{Store, SubscriberId, Value};
+
+        let mut store = Store::new(Value::map([(
+            "editor",
+            Value::map([("zoom", Value::Float(1.0))]),
+        )]));
+        let path = Path::parse("editor.zoom").expect("test path should parse");
+        let (id, _snapshot) = store.subscribe(SubscriberId(1), path);
+
+        let (tx, rx) = mpsc::channel();
+        let cmd = CoreCommand::Unsubscribe {
+            subscriber: SubscriberId(2),
+            id,
+            reply: tx,
+        };
+        match cmd {
+            CoreCommand::Unsubscribe {
+                subscriber,
+                id,
+                reply,
+            } => {
+                reply
+                    .send(store.unsubscribe(subscriber, id))
+                    .expect("reply should send");
+            }
+            other => panic!("expected Unsubscribe, got {other:?}"),
+        }
+        assert!(
+            !rx.recv().expect("reply should arrive"),
+            "a subscriber that does not own the subscription must not remove it"
+        );
+        assert_eq!(
+            store.drop_subscriber(SubscriberId(1)),
+            1,
+            "the owner's subscription must have survived"
         );
     }
 

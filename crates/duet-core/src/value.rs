@@ -199,6 +199,11 @@ impl Value {
 /// Every variant carries the full path originally passed to `set`, not a
 /// partial path, so a guest process relaying the error over IPC can locate
 /// the problem without reconstructing context this side of the boundary.
+///
+/// The **fields** keep that path whole; only
+/// [`Display`](std::fmt::Display) bounds it. A host handler that needs the
+/// complete path should match on the variant and read it, not parse it back
+/// out of the rendered message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SetError {
@@ -225,16 +230,37 @@ pub enum SetError {
     TypeMismatch(Path),
 }
 
+/// Renders the path bounded, because a guest chooses it.
+///
+/// Every variant's path arrives from a guest process, so echoing it whole
+/// would let a 1 MB path become a 1 MB error string — and from there a 1 MB
+/// log line and a 1 MB protocol reply, scaling linearly with input the host
+/// does not control. `index` and `len` are *not* bounded: they are host-
+/// generated `usize`s with a fixed maximum width, so they cannot amplify
+/// anything. The path is capped at a fixed number of **characters** (never
+/// bytes — slicing a `&str` mid-character panics, and a guest picks the
+/// characters); see this crate's private `echo` module for the cap itself.
 impl std::fmt::Display for SetError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SetError::MissingKey(path) => write!(f, "no key exists at path \"{path}\""),
+            SetError::MissingKey(path) => {
+                write!(
+                    f,
+                    "no key exists at path \"{}\"",
+                    crate::echo::truncated(path)
+                )
+            }
             SetError::IndexOutOfBounds { path, index, len } => write!(
                 f,
-                "index {index} is out of bounds at path \"{path}\" (length {len})"
+                "index {index} is out of bounds at path \"{}\" (length {len})",
+                crate::echo::truncated(path)
             ),
             SetError::TypeMismatch(path) => {
-                write!(f, "path \"{path}\" addresses the wrong kind of node")
+                write!(
+                    f,
+                    "path \"{}\" addresses the wrong kind of node",
+                    crate::echo::truncated(path)
+                )
             }
         }
     }
@@ -721,5 +747,94 @@ mod tests {
             len: 3,
         };
         let _: &dyn std::error::Error = &err;
+    }
+
+    #[test]
+    fn set_error_display_truncates_guest_supplied_paths() {
+        // A guest controls this path. Without a cap, a 1 MB path becomes a 1 MB
+        // error string, which becomes a 1 MB log line and a 1 MB protocol reply.
+        // Reproduced before this fix: 1,000,061 bytes in -> 1,000,109 bytes out.
+        let huge = "k".repeat(100_000);
+        let path = Path::parse(&format!("a.{huge}")).expect("path parses; it just cannot resolve");
+        let rendered = SetError::MissingKey(path).to_string();
+        assert!(
+            rendered.len() < 256,
+            "guest text must be truncated, got {} bytes",
+            rendered.len()
+        );
+    }
+
+    #[test]
+    fn every_set_error_variant_truncates_its_guest_supplied_path() {
+        // All three variants carry a guest-chosen path, so bounding only the
+        // one the reproduction happened to use would leave the other two open.
+        let huge =
+            || Path::parse(&format!("a.{}", "k".repeat(100_000))).expect("path should parse");
+
+        for rendered in [
+            SetError::MissingKey(huge()).to_string(),
+            SetError::TypeMismatch(huge()).to_string(),
+            SetError::IndexOutOfBounds {
+                path: huge(),
+                index: 9,
+                len: 3,
+            }
+            .to_string(),
+        ] {
+            assert!(
+                rendered.len() < 256,
+                "every variant must bound its path, got {} bytes: {rendered}",
+                rendered.len()
+            );
+        }
+    }
+
+    #[test]
+    fn the_numeric_fields_survive_truncation_intact() {
+        // `index` and `len` are host-generated and bounded, so bounding the
+        // path must not cost the caller the actionable numbers alongside it.
+        let path = Path::parse(&format!("a.{}", "k".repeat(100_000))).expect("path should parse");
+        let rendered = SetError::IndexOutOfBounds {
+            path,
+            index: 9,
+            len: 3,
+        }
+        .to_string();
+        assert!(rendered.contains("index 9"), "got {rendered}");
+        assert!(rendered.contains("length 3"), "got {rendered}");
+    }
+
+    #[test]
+    fn the_error_field_keeps_the_whole_path_even_though_display_does_not() {
+        // Truncation is a presentation bound, not data loss: a host handler
+        // matching on the variant still gets the complete path.
+        let huge = "k".repeat(100_000);
+        let path = Path::parse(&format!("a.{huge}")).expect("path should parse");
+        let error = SetError::MissingKey(path.clone());
+
+        assert!(error.to_string().len() < 256);
+
+        let mut carried = None;
+        if let SetError::MissingKey(p) = &error {
+            carried = Some(p.clone());
+        }
+        assert_eq!(
+            carried,
+            Some(path),
+            "the field must retain the full path for Debug and host-side handling"
+        );
+    }
+
+    #[test]
+    fn truncation_never_splits_a_multibyte_character() {
+        // Slicing a &str on a byte index inside a multi-byte char panics. A guest
+        // that picks a path of emoji must not be able to crash the host.
+        let path = Path::parse(&"\u{1F600}".repeat(1_000)).expect("path");
+        let rendered = SetError::MissingKey(path).to_string();
+        assert!(rendered.len() < 256, "got {} bytes", rendered.len());
+        assert!(
+            rendered.contains('\u{1F600}'),
+            "should show some of the real text"
+        );
     }
 }

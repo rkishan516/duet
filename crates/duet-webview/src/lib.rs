@@ -327,6 +327,29 @@ mod tests {
             reply.len()
         );
 
+        // A path that *parses* but cannot *resolve* is the case the huge-path
+        // check above misses entirely: that one dies in `Path::parse`, which
+        // reports only a byte offset and one character, so it never reaches
+        // `duet_core::SetError` — whose `Display` renders the path itself.
+        // A `set` at `a.<1 MB>` parses fine and fails resolving `a`, taking the
+        // `SetError::MissingKey` route straight into the reply.
+        let unresolvable_path = format!(
+            r#"{{"kind":"set","id":"1","path":"a.{}","value":{{"t":"i","v":"1"}}}}"#,
+            "k".repeat(1_000_000)
+        );
+        let reply = handle_ipc_text(&handle, SubscriberId(1), &unresolvable_path);
+        let parsed: serde_json::Value = serde_json::from_str(&reply)
+            .expect("1 MB parseable-but-unresolvable path: reply must be valid JSON");
+        assert_eq!(
+            parsed["kind"], "failed",
+            "1 MB parseable-but-unresolvable path: got {reply}"
+        );
+        assert!(
+            reply.len() < MAX_REASONABLE_REPLY,
+            "1 MB parseable-but-unresolvable path: reply must not echo the guest's text, got {} bytes",
+            reply.len()
+        );
+
         // Likewise for a 1 MB bogus value tag inside a `set`.
         let huge_tag = format!(
             r#"{{"kind":"set","id":"1","path":"a","value":{{"t":"{}","v":null}}}}"#,
