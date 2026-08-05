@@ -1,0 +1,4 @@
+# A library package, so the lockfile is not committed: consumers resolve
+# their own. See https://dart.dev/guides/libraries/private-files
+pubspec.lock
+.dart_tool/
