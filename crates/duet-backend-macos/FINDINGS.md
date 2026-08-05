@@ -1,7 +1,23 @@
 # Phase 2b-3 — `duet-backend-macos`: findings from running it for real
 
-**Overall verdict: the reclaim mechanism itself works — Spike A already measured
-that — but this phase's own real run could not reach it.** `examples/lifecycle.rs`
+> **UPDATE (branch `fix/flutter-lifecycle-on-detach`): F1's hang is fixed.**
+> `FlutterEngine::detach`/`FlutterEngine::attach` now send real
+> `AppLifecycleState` transitions on `flutter/lifecycle` around the
+> view-detach/attach points. The run-loop starvation is gone, the `Could not
+> create the embedder backing store` spam is gone (exactly one line per run,
+> not thousands), and `examples/lifecycle.rs` now completes in ~1.7 s instead
+> of hanging forever — the engine genuinely reaches `Teardown`/`Report` for
+> the first time. See **F5** below for the full re-measurement, the
+> before/after comparison, and one genuine remaining problem: the example's
+> own `assert!` still fails, for a reason unrelated to F1 (a baseline-sample
+> quirk in `examples/lifecycle.rs`, not a reclaim-mechanism problem — F5
+> explains and quantifies it). The rest of this document (through F4) is left
+> exactly as originally written, as the historical record of the bug this
+> fixes.
+
+**Overall verdict (as originally written, before the fix above): the reclaim
+mechanism itself works — Spike A already measured that — but this phase's own
+real run could not reach it.** `examples/lifecycle.rs`
 drives one real Flutter surface through `Start` and `Suspend` over the real
 `duet-host`/`duet-supervisor`/`duet-runtime` orchestration, and hangs
 indefinitely at the point `duet-supervisor`'s own design requires: the run-loop
@@ -262,6 +278,192 @@ Task 5's exclusion (`--exclude duet-backend-macos`, see below) means the
 `Docs` step never attempts this crate at all — but it is worth fixing
 separately since it means `cargo doc -p duet-backend-macos` is currently
 broken for any contributor working on this crate locally.
+
+---
+
+## F5 — The F1 fix, and what re-running `examples/lifecycle.rs` actually shows
+
+### Root cause, confirmed against the Flutter framework source
+
+F1 happens because Dart's scheduler keeps requesting frames after its view is
+detached. `spikes/spike_app`'s `Ticker` (`lib/main.dart`) asks for a new frame
+on every vsync unconditionally, forever — it has no way to know a view was
+just removed. With no view to composite into, the embedder logs `Could not
+create the embedder backing store` and retries, apparently without ever
+yielding back to `tao`'s run loop.
+
+Reading the Flutter framework source (`/Users/kishan/dev/rkishan516/flutterDC`)
+confirms the fix: `flutter/lifecycle` is a `BasicMessageChannel<String?>`
+using `StringCodec` (`packages/flutter/lib/src/services/system_channels.dart:386`),
+so the wire payload is just the raw UTF-8 bytes of a string like
+`"AppLifecycleState.hidden"` — no method-call envelope, no codec object
+needed on the Rust side.
+`SchedulerBinding.handleAppLifecycleStateChanged`
+(`packages/flutter/lib/src/scheduler/binding.dart`) is what actually disables
+frame scheduling, and only on `AppLifecycleState.hidden`
+(`_setFramesEnabledState(false)`) — `resumed` and `inactive` leave frames
+enabled. Critically, the transition table in
+`packages/flutter/lib/src/services/binding.dart` does **not** allow jumping
+straight from `resumed` to `hidden` (only `resumed -> inactive`,
+`inactive -> resumed | hidden`, `hidden -> paused | inactive`,
+`paused -> hidden | detached`) — skipping the intermediate `inactive` step
+trips a framework assertion instead of silently working.
+
+### The fix
+
+`FlutterEngine::set_lifecycle_state` (`src/engine.rs`) sends a raw UTF-8
+string on `flutter/lifecycle` through the engine's `binaryMessenger`, reusing
+the same `sendOnChannel:message:` primitive Spike B's method channel already
+proved works (`spikes/spike-b-macos/src/main.rs`).
+
+- **`FlutterEngine::detach`** now sends `AppLifecycleState.inactive` then
+  `AppLifecycleState.hidden` *before* removing the view and dropping the
+  controller — stopping frame scheduling before the view disappears, rather
+  than after.
+- **`FlutterEngine::attach`** now sends `AppLifecycleState.inactive` then
+  `AppLifecycleState.resumed` *after* the view is parented back in —
+  restarting frame scheduling.
+- Both call sites go through `inactive` as the mandatory intermediate step in
+  both directions (`resumed -> inactive -> hidden` and
+  `hidden -> inactive -> resumed`), per the transition table above.
+
+**`detach`'s signature changed from infallible to `Result<(), BackendError>`.**
+Sending a lifecycle message is a real Objective-C call that can throw, unlike
+the old body (`removeFromSuperview` only). The chosen approach: `detach`
+*always* performs the structural detach (`removeFromSuperview` + dropping the
+controller run unconditionally, and that failure path stays absorbed exactly
+as before, since dropping the controller happens regardless of it), but now
+returns `Err` if either lifecycle send failed, because — unlike a failed
+`removeFromSuperview` — a failed lifecycle send has a real consequence: F1's
+retry storm may not actually be prevented that time. `MacBackend::detach_view`
+(`src/backend.rs`), which already returned `Result`, now just propagates it.
+`FlutterEngine::shutdown` (still infallible, for the same "no distinct
+recovery path, engine is dropped by the caller right after regardless" reason
+as its `shutDownEngine` call) absorbs `detach`'s `Result` with `let _ =
+self.detach();` rather than letting it change `shutdown`'s own signature.
+
+### Independent confirmation: the Dart side actually observed the transition
+
+`spikes/spike_app/lib/main.dart` was extended with a `WidgetsBindingObserver`
+that prints `didChangeAppLifecycleState`. A real run shows, in order:
+
+```
+flutter: [spike_app] didChangeAppLifecycleState: AppLifecycleState.inactive
+flutter: [spike_app] didChangeAppLifecycleState: AppLifecycleState.hidden
+[lifecycle] tick at close produced [Suspend(SurfaceId(0))]
+```
+
+Both `println!`s from the Dart side land *before* the Rust driver's own
+`tick at close produced` line prints — i.e., synchronously, within the same
+`Host::tick()` call that executes `Suspend`, consistent with this process
+running Flutter's "merged UI and platform thread" mode. This is a stronger
+proof than "the storm didn't happen": the framework demonstrably received and
+processed both transitions in the correct order.
+
+### Before / after: the spin itself
+
+| | Before (original F1 finding) | After (this fix, 4 runs) |
+|---|---|---|
+| `Could not create the embedder backing store` count | 162,686 in 90 s (one run); up to ~13,000/s | **exactly 1**, every run |
+| CPU | ~111%, sustained | transient (engine boot/render work only), decays to idle; no sustained pinning |
+| RSS during "suspended" | **grows**: 221,904 -> 297,408 kB over 90 s | stable/shrinks: proceeds straight to teardown |
+| Reaches `Teardown`/`Report`? | **never** (killed after up to ~5 min) | **yes**, every run |
+| Wall time to complete | never (hang) | ~1.6-1.75 s |
+
+CPU was independently sampled every 0.1 s across one full run (`ps -o
+%cpu,rss -p <pid>`): it ramps to ~85-96% for roughly half a second during
+normal engine boot/Skia warm-up (expected — this is the same cost every
+engine boot pays, not a storm), then decays through 70% -> 48% -> 30% -> 19%
+-> 12% as the process winds down toward `Teardown`/exit, rather than staying
+pinned near 100%+ indefinitely as F1 originally measured.
+
+### RSS table (`examples/lifecycle.rs`, 4 runs, this fix applied)
+
+All figures in kB, via `ps -o rss=`:
+
+| Stage | Run 1 | Run 2 | Run 3 | Run 5 (with observer) |
+|---|---:|---:|---:|---:|
+| process start | 37,312 | 37,376 | 37,232 | 36,992 |
+| renderer started, view attached (`Readiness::Ready`) | 159,776 | 160,192 | 160,000 | 159,936 |
+| after rasterizing the attached view | 222,064 | 229,328 | 222,448 | 220,816 |
+| view detached, suspending (engine alive) | 222,432 | 227,456 | 220,208 | 218,512 |
+| torn down (engine shut down) | 96,208 | 102,992 | 96,576 | 95,664 |
+
+### The measured delta, and the assertion's actual result — reported honestly
+
+`print_report` (`examples/lifecycle.rs`) computes its delta as **"renderer
+started, view attached"** (the *first* post-attach sample, taken before the
+Dart isolate/Skia warm-up that F2 already documented continues after attach)
+minus **"torn down"**:
+
+| Run | attached (early) kB | torn down kB | delta | floor | Result |
+|---|---:|---:|---:|---:|---|
+| 1 | 159,776 | 96,208 | 63,568 | 81,920 | **FAIL** |
+| 2 | 160,192 | 102,992 | 57,200 | 81,920 | **FAIL** |
+| 3 | 160,000 | 96,576 | 63,424 | 81,920 | **FAIL** |
+| 5 | 159,936 | 95,664 | 64,272 | 81,920 | **FAIL** |
+
+**The example's own `assert!` fails, every run, and the process exits via
+panic (exit code 101) rather than a clean `PASS`.** This is reported exactly
+as measured — the assertion did not pass, and this document is not going to
+call that anything other than what it is.
+
+That said, this is **not** evidence that `shutDownEngine` fails to reclaim
+memory to the degree Spike A measured. The reason is the baseline `print_report`
+diffs against: "view attached (`Readiness::Ready`)" is sampled immediately
+after `attach_view` returns, *before* the Dart isolate/Skia warm-up that grows
+RSS by another ~60 MB during the subsequent `Rasterize` step (F2, unchanged by
+this fix) — a jump that already happens in this codebase, both before and
+after this fix, and is not part of what teardown is being asked to undo.
+Spike A's own 234 MB -> 108 MB (~126 MB drop) measurement
+(`spikes/spike-a-macos/FINDINGS.md`) was taken from a settled, warmed-up RSS
+right before `shutDownEngine`, not from immediately after the first attach —
+so the apples-to-apples comparison is "view detached, suspending" (the last
+sample taken before `Teardown` actually runs) minus "torn down":
+
+| Run | detached (pre-teardown) kB | torn down kB | delta |
+|---|---:|---:|---:|
+| 1 | 222,432 | 96,208 | 126,224 |
+| 2 | 227,456 | 102,992 | 124,464 |
+| 3 | 220,208 | 96,576 | 123,632 |
+| 5 | 218,512 | 95,664 | 122,848 |
+
+Measured this way, every run clears the 80 MB (81,920 kB) floor comfortably —
+122.8-126.2 MB reclaimed, consistent with (and slightly exceeding) Spike A's
+~126 MB. **Both facts are real and are being reported separately, as the task
+brief for this fix required:** F1's spin is fixed and frame scheduling
+genuinely stops (confirmed three independent ways — the storm is gone, CPU is
+not pinned, and the Dart side's own `didChangeAppLifecycleState` print
+confirms `hidden` was received) — but the specific `assert!` this example
+ships with fails on every run, because it diffs against a pre-warm-up
+baseline sample rather than the last sample before teardown. This is a
+pre-existing measurement-baseline choice in `examples/lifecycle.rs` (shipped
+in the commit that added Task 4, before this fix), not something this fix
+introduced or attempted to paper over by changing the assertion to make it
+pass.
+
+### The unrelated `MissingPluginException` noise
+
+Every run also logs several `MissingPluginException(No implementation found
+for method frameMarker on channel duet/spike_c)` errors. This is `spike_app`'s
+Spike-C hot-reload probe (`_reportFrame` in `lib/main.dart`) calling a channel
+this Rust harness never registers a handler for. It is unrelated to F1 (it
+was already firing before this fix, just drowned out by the backing-store
+storm) and does not affect the run's completion — Dart's
+`MethodChannel.invokeMethod` treats a missing handler as a normal (if noisy)
+error, not a fatal one. Not touched by this fix; noted here for completeness
+since it is visible in every log excerpt above.
+
+### Commands run
+
+```
+cargo build -p duet-backend-macos --example lifecycle
+cd spikes/spike_app && flutter build macos --debug   # after editing lib/main.dart
+cargo run -p duet-backend-macos --example lifecycle   # x4, plus one instrumented CPU/RSS sample run
+cargo test -p duet-backend-macos                       # 2 passed, 1 ignored (needs main thread)
+cargo clippy -p duet-backend-macos --all-targets -- -D warnings   # clean
+cargo fmt --all --check                                            # clean
+```
 
 ---
 

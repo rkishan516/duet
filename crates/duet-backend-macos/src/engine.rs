@@ -9,9 +9,23 @@
 //! FlutterEngine         runWithEntrypoint:nil                        -> BOOL
 //! FlutterViewController initWithEngine:nibName:bundle:                (per view)
 //!   .view -> NSView, addSubview into the tao NSWindow's contentView
+//! flutter/lifecycle     sendOnChannel:message:  "AppLifecycleState.inactive"
+//! flutter/lifecycle     sendOnChannel:message:  "AppLifecycleState.hidden"    (before detach)
 //! detach = removeFromSuperview + drop the controller (engine holds it only weakly)
+//! flutter/lifecycle     sendOnChannel:message:  "AppLifecycleState.inactive"
+//! flutter/lifecycle     sendOnChannel:message:  "AppLifecycleState.resumed"   (after attach)
 //! FlutterEngine         shutDownEngine
 //! ```
+//!
+//! The two `flutter/lifecycle` steps are not part of Spike A's sequence —
+//! Spike A never left a view detached long enough to notice they were
+//! missing (see `FINDINGS.md` F1 and its "Contradicts a Phase 0 finding"
+//! section). Without them, Dart's scheduler keeps requesting frames after
+//! `detach` removes the view, the embedder logs `Could not create the
+//! embedder backing store` in an unbounded retry loop, and the host process
+//! never gets control back. See [`FlutterEngine::detach`] and
+//! [`FlutterEngine::attach`] for the fix and why the `inactive` step cannot
+//! be skipped.
 //!
 //! Every call here must run on the main thread (AppKit and the Flutter
 //! platform thread both require it — see spec §6.2). Callers are
@@ -26,7 +40,7 @@ use objc2::msg_send;
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2_app_kit::{NSAutoresizingMaskOptions, NSView, NSWindow};
-use objc2_foundation::{NSBundle, NSString};
+use objc2_foundation::{NSBundle, NSData, NSString};
 use tao::platform::macos::WindowExtMacOS;
 
 /// Owns one Flutter engine and, at most, one attached view.
@@ -88,15 +102,30 @@ impl FlutterEngine {
     }
 
     /// Creates a view controller and adds its `NSView` to `window`'s content
-    /// view.
+    /// view, then restarts Dart's frame scheduling.
+    ///
+    /// After the view is parented in, this sends `AppLifecycleState.inactive`
+    /// then `AppLifecycleState.resumed` on `flutter/lifecycle`. The
+    /// intermediate `inactive` step is not optional: the framework's
+    /// transition table (`packages/flutter/lib/src/services/binding.dart`)
+    /// only allows `hidden -> inactive -> resumed` (and, symmetrically for
+    /// [`FlutterEngine::detach`], `resumed -> inactive -> hidden`) — sending
+    /// `resumed` directly from `hidden` trips a framework assertion. See
+    /// [`FlutterEngine::detach`]'s docs for the matching half of this and
+    /// `FINDINGS.md` F1 for why this exists at all: without it, a
+    /// previously-suspended engine's Dart scheduler stays disabled forever
+    /// (harmless but wrong) rather than the storm this pair actually fixes,
+    /// since `hidden` is what disabled it in the first place.
     ///
     /// # Errors
     ///
     /// [`BackendError::Unavailable`] if a view is already attached (callers
     /// must [`FlutterEngine::detach`] first — see the one-view-per-engine
     /// constraint on this type), if the view controller or its view could
-    /// not be created, if `window` has no backing `NSWindow`, or if an
-    /// Objective-C exception was caught.
+    /// not be created, if `window` has no backing `NSWindow`, if an
+    /// Objective-C exception was caught, or if either lifecycle message
+    /// failed to send (the view is attached either way at that point — only
+    /// the frame-scheduling restart is in question).
     pub(crate) fn attach(&mut self, window: &tao::window::Window) -> Result<(), BackendError> {
         if self.controller.is_some() {
             return Err(BackendError::Unavailable(
@@ -112,26 +141,66 @@ impl FlutterEngine {
         // above enforces the "no view controller attached" half.
         let controller = catch_to_backend_error(|| unsafe { attach_uncaught(engine, window) })??;
         self.controller = Some(controller);
+        self.set_lifecycle_state("AppLifecycleState.inactive")?;
+        self.set_lifecycle_state("AppLifecycleState.resumed")?;
         Ok(())
     }
 
-    /// Removes the view from its superview and drops the controller.
+    /// Stops Dart's frame scheduling, then removes the view from its
+    /// superview and drops the controller.
     ///
-    /// Spike A measured that this reclaims essentially nothing — 223 MB
-    /// before and after. Only [`FlutterEngine::shutdown`] frees memory.
+    /// Spike A measured that removing the view alone reclaims essentially
+    /// nothing — 223 MB before and after. Only [`FlutterEngine::shutdown`]
+    /// frees memory; the point of `detach` is to keep the engine alive so a
+    /// later [`FlutterEngine::attach`] skips the ~180 ms engine boot.
     ///
-    /// Infallible by design (matching the plan's shape for this type): if
-    /// `removeFromSuperview` throws, the exception is caught (via `objc2`'s
-    /// `catch-all`) and absorbed rather than propagated, because the
-    /// controller is dropped immediately afterwards regardless — per
-    /// `FlutterViewController.h`, a deallocated controller automatically
-    /// removes itself from its engine, so there is no recovery action a
-    /// caller could take differently based on whether the explicit
-    /// `removeFromSuperview` succeeded.
-    pub(crate) fn detach(&mut self) {
+    /// **This is the fix for `FINDINGS.md` F1.** Before touching the view,
+    /// this sends `AppLifecycleState.inactive` then
+    /// `AppLifecycleState.hidden` on `flutter/lifecycle`
+    /// (`FlutterEngine`'s `binaryMessenger`, `StringCodec`-encoded raw UTF-8
+    /// — see [`FlutterEngine::set_lifecycle_state`]). `hidden` is what
+    /// `SchedulerBinding.handleAppLifecycleStateChanged`
+    /// (`packages/flutter/lib/src/scheduler/binding.dart`) uses to disable
+    /// frame scheduling (`_setFramesEnabledState(false)`). Without this,
+    /// Dart keeps requesting a frame every vsync (any app with a running
+    /// `Ticker`, like `spikes/spike_app`) with no view to composite into,
+    /// and the embedder logs `Could not create the embedder backing store`
+    /// in an apparently-unbounded retry loop that starves the host's own run
+    /// loop — see `FINDINGS.md` F1 for the full measured reproduction.
+    ///
+    /// The `inactive` step is not optional, and must come *before* `hidden`:
+    /// the framework's transition table
+    /// (`packages/flutter/lib/src/services/binding.dart`) only allows
+    /// `resumed -> inactive -> hidden`; sending `hidden` directly from
+    /// `resumed` trips a framework assertion rather than silently working.
+    /// A future edit that "simplifies" this to a single `hidden` send will
+    /// reintroduce that assertion failure, not just lose the frame-stopping
+    /// effect.
+    ///
+    /// # Errors
+    ///
+    /// Unlike Spike A's version of this method, `detach` is now fallible.
+    /// Sending a lifecycle message is a real Objective-C call
+    /// (`sendOnChannel:message:` through a live `binaryMessenger`) and can
+    /// throw, unlike the old `removeFromSuperview`-only body. This method
+    /// still *performs* the detach — `removeFromSuperview` and dropping the
+    /// controller both run unconditionally below, same as before — but
+    /// returns [`BackendError::Unavailable`] if either lifecycle send
+    /// failed, because that failure means the F1 retry storm this method
+    /// exists to prevent may still happen even though the view came off
+    /// successfully. Contrast with `removeFromSuperview`'s own exception,
+    /// caught and absorbed a few lines down: that failure has no distinct
+    /// recovery action (the controller drops immediately after regardless),
+    /// whereas a failed lifecycle send is the one thing in this method a
+    /// caller (`MacBackend::detach_view`, which already returns `Result`)
+    /// genuinely needs to know about.
+    pub(crate) fn detach(&mut self) -> Result<(), BackendError> {
         let Some(controller) = self.controller.take() else {
-            return;
+            return Ok(());
         };
+        let lifecycle_result = self
+            .set_lifecycle_state("AppLifecycleState.inactive")
+            .and_then(|()| self.set_lifecycle_state("AppLifecycleState.hidden"));
         // SAFETY: `detach_uncaught` requires the caller to be on the main
         // thread and `controller` to be a valid, live
         // `FlutterViewController*` with an attached `.view`. `controller`
@@ -141,6 +210,7 @@ impl FlutterEngine {
             detach_uncaught(&controller);
         }));
         // `controller` drops here either way.
+        lifecycle_result
     }
 
     /// Shuts the engine down. **This is what reclaims memory** — Spike A
@@ -149,12 +219,16 @@ impl FlutterEngine {
     /// Detaches any still-attached view first, so `shutdown` is safe to call
     /// without a preceding `detach`. Idempotent: a second call is a no-op.
     ///
-    /// Infallible by design, for the same reason as [`FlutterEngine::detach`]:
-    /// there is no distinct recovery path for a caught `shutDownEngine`
-    /// exception, and the engine handle is dropped by the caller immediately
-    /// after regardless.
+    /// Infallible by design. This stays infallible even though
+    /// [`FlutterEngine::detach`] (called first, below) is not: a failed
+    /// lifecycle send there only means the F1 retry storm might still be
+    /// running when `shutDownEngine` is sent, and `shutDownEngine` runs here
+    /// regardless of that outcome — there is no different action `shutdown`
+    /// could take with the error, since the engine handle is dropped by the
+    /// caller immediately after either way. Same reasoning as the
+    /// `shutDownEngine` exception itself, caught and absorbed below.
     pub(crate) fn shutdown(&mut self) {
-        self.detach();
+        let _ = self.detach();
         if self.shut_down {
             return;
         }
@@ -168,6 +242,39 @@ impl FlutterEngine {
         let _ = panic::catch_unwind(AssertUnwindSafe(|| unsafe {
             let _: () = msg_send![engine, shutDownEngine];
         }));
+    }
+
+    /// Sends `state` as a raw UTF-8 message on the `flutter/lifecycle`
+    /// channel, through this engine's `binaryMessenger`.
+    ///
+    /// `flutter/lifecycle` is a `BasicMessageChannel<String?>` using
+    /// `StringCodec` (`packages/flutter/lib/src/services/system_channels.dart`),
+    /// and `StringCodec` puts the payload on the wire as-is — raw UTF-8
+    /// bytes, no method-call envelope, no length prefix
+    /// (`packages/flutter/lib/src/services/message_codecs.dart`). That means
+    /// there is no need to build a `FlutterBasicMessageChannel` on the
+    /// Objective-C side at all: this sends `state`'s raw bytes directly
+    /// through `sendOnChannel:message:`, the same `FlutterBinaryMessenger`
+    /// primitive Spike B's method channel is built on top of
+    /// (`spikes/spike-b-macos/src/main.rs`'s `make_method_channel`, which
+    /// also starts from `[engine, binaryMessenger]`).
+    ///
+    /// Expected callers pass one of `"AppLifecycleState.inactive"`,
+    /// `"AppLifecycleState.hidden"`, or `"AppLifecycleState.resumed"` — see
+    /// [`FlutterEngine::detach`] and [`FlutterEngine::attach`] for why those
+    /// three specifically, and why the order between them matters.
+    ///
+    /// # Errors
+    ///
+    /// [`BackendError::Unavailable`] if an Objective-C exception was caught
+    /// (for example, a dead `binaryMessenger`).
+    pub(crate) fn set_lifecycle_state(&self, state: &str) -> Result<(), BackendError> {
+        let engine = &self.engine;
+        // SAFETY: `send_lifecycle_state_uncaught` requires the caller to be
+        // on the main thread and `engine` to be a live, valid
+        // `FlutterEngine*`. `engine` came from `self`, which is only ever
+        // constructed by `boot` from a successfully initialized engine.
+        catch_to_backend_error(|| unsafe { send_lifecycle_state_uncaught(engine, state) })
     }
 }
 
@@ -298,6 +405,31 @@ unsafe fn boot_uncaught(app_framework: &str) -> Result<Retained<AnyObject>, Back
     }
 
     Ok(engine)
+}
+
+/// Sends `state`'s raw UTF-8 bytes on `flutter/lifecycle` through `engine`'s
+/// `binaryMessenger`. See [`FlutterEngine::set_lifecycle_state`] for why no
+/// method-call envelope or codec object is needed here — `StringCodec`
+/// payloads are exactly the raw bytes.
+///
+/// # Safety
+///
+/// Caller must be on the main thread; `engine` must be a valid, live
+/// `FlutterEngine*`.
+unsafe fn send_lifecycle_state_uncaught(engine: &AnyObject, state: &str) {
+    // SAFETY: `engine` is live per this function's contract;
+    // `binaryMessenger` is a read-only property every live `FlutterEngine*`
+    // responds to.
+    let messenger: Retained<AnyObject> = unsafe { msg_send![engine, binaryMessenger] };
+    let channel = NSString::from_str("flutter/lifecycle");
+    let payload = NSData::with_bytes(state.as_bytes());
+    let message: Option<&NSData> = Some(&payload);
+    // SAFETY: `messenger` is the live object just fetched above, which
+    // conforms to `FlutterBinaryMessenger`; `sendOnChannel:message:` takes
+    // an `NSString*` channel and an `NSData* _Nullable` message (see
+    // `FlutterBinaryMessenger.h`) — `channel` and `message` are both live
+    // for the duration of this call.
+    let _: () = unsafe { msg_send![&messenger, sendOnChannel: &*channel, message: message] };
 }
 
 /// Creates a `FlutterViewController` via the multi-view
