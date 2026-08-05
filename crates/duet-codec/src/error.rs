@@ -38,6 +38,44 @@ pub enum CodecError {
     BadPath(String),
 }
 
+impl CodecError {
+    /// A short, stable, machine-readable name for *why* a payload was refused.
+    ///
+    /// Unlike [`Display`](std::fmt::Display), which is prose for a developer and
+    /// free to change, these strings are part of the cross-language contract:
+    /// the golden wire corpus at `corpus/wire-corpus.json` records one per
+    /// reject case, so the Rust, Dart and JavaScript decoders must agree not
+    /// merely that a message is bad but on *which rule* it broke.
+    ///
+    /// # Why this lives in `duet-codec` and not in the consumer that needs it
+    ///
+    /// [`CodecError`] is `#[non_exhaustive]`, so the same match written in any
+    /// other crate would need a wildcard arm. That arm would silently hand a
+    /// future variant some existing — and therefore wrong — code, which is
+    /// precisely the "rejected, but for the wrong reason" failure the corpus
+    /// exists to catch. Inside the defining crate the match is exhaustive and
+    /// adding a variant without a code is a compile error.
+    ///
+    /// # `bad_json` has no variant here
+    ///
+    /// The corpus uses one further reason, `bad_json`, for input that fails
+    /// `serde_json` parsing outright — unbalanced braces, or nesting past
+    /// serde_json's own recursion limit. That text never reaches this crate:
+    /// the JSON parser rejects it before any `CodecError` could be constructed,
+    /// so `bad_json` is deliberately absent from this enum rather than an
+    /// omission.
+    pub fn reason_code(&self) -> &'static str {
+        match self {
+            CodecError::UnknownTag(_) => "unknown_tag",
+            CodecError::BadShape(_) => "bad_shape",
+            CodecError::BadInt(_) => "bad_int",
+            CodecError::BadFloat(_) => "bad_float",
+            CodecError::BadBase64(_) => "bad_base64",
+            CodecError::BadPath(_) => "bad_path",
+        }
+    }
+}
+
 impl std::fmt::Display for CodecError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -92,6 +130,72 @@ mod tests {
     fn codec_error_is_a_std_error() {
         fn assert_error<E: std::error::Error>() {}
         assert_error::<CodecError>();
+    }
+
+    #[test]
+    fn every_error_variant_has_a_distinct_reason_code() {
+        let all = [
+            CodecError::UnknownTag(String::new()),
+            CodecError::BadShape(String::new()),
+            CodecError::BadInt(String::new()),
+            CodecError::BadFloat(String::new()),
+            CodecError::BadBase64(String::new()),
+            CodecError::BadPath(String::new()),
+        ];
+        let codes: Vec<&str> = all.iter().map(CodecError::reason_code).collect();
+        let unique: std::collections::BTreeSet<&&str> = codes.iter().collect();
+        assert_eq!(
+            unique.len(),
+            codes.len(),
+            "reason codes must be distinct: {codes:?}"
+        );
+        // Lowercase snake_case, digits allowed: `bad_base64` carries "64" in
+        // its name. A letters-and-underscore-only predicate would reject it —
+        // the point of the check is that these are stable identifiers safe to
+        // paste into a Dart or TypeScript switch, not that they are alphabetic.
+        assert!(
+            codes.iter().all(|c| c
+                .chars()
+                .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')),
+            "reason codes must be lowercase snake_case: {codes:?}"
+        );
+    }
+
+    #[test]
+    fn reason_codes_are_pinned_exactly() {
+        // Distinctness alone would let a rename through, and these strings are
+        // a cross-language contract: `corpus/wire-corpus.json` stores them, and
+        // Dart and TypeScript tests will compare against them literally. A
+        // rename must be a deliberate corpus regeneration, not a silent drift.
+        assert_eq!(
+            CodecError::UnknownTag(String::new()).reason_code(),
+            "unknown_tag"
+        );
+        assert_eq!(
+            CodecError::BadShape(String::new()).reason_code(),
+            "bad_shape"
+        );
+        assert_eq!(CodecError::BadInt(String::new()).reason_code(), "bad_int");
+        assert_eq!(
+            CodecError::BadFloat(String::new()).reason_code(),
+            "bad_float"
+        );
+        assert_eq!(
+            CodecError::BadBase64(String::new()).reason_code(),
+            "bad_base64"
+        );
+        assert_eq!(CodecError::BadPath(String::new()).reason_code(), "bad_path");
+    }
+
+    #[test]
+    fn the_reason_code_ignores_the_payload_text() {
+        // The code names the rule that was broken, not the offending input, so
+        // two failures of the same rule must report the same code however
+        // different their messages are.
+        assert_eq!(
+            CodecError::BadInt("007".to_string()).reason_code(),
+            CodecError::BadInt("payload must be a decimal string".to_string()).reason_code()
+        );
     }
 
     #[test]
