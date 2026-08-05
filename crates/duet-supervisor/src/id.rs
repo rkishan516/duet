@@ -24,6 +24,16 @@ impl SurfaceId {
     pub fn get(self) -> u64 {
         self.0
     }
+
+    /// Builds an id from a raw value.
+    ///
+    /// Prefer [`SurfaceIdAllocator::next`] — this exists for tests and for a
+    /// host reconstructing an id it was previously given. Two surfaces sharing
+    /// an id would have their lifecycles conflated across a trust boundary, so
+    /// do not mint ids this way in production code.
+    pub fn from_raw(id: u64) -> Self {
+        SurfaceId(id)
+    }
 }
 
 #[cfg(test)]
