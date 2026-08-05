@@ -4,7 +4,7 @@
 //! suspend or be torn down; [`duet_runtime`] holds the state. This crate is
 //! what connects them to a platform: it translates platform events into
 //! supervisor input, executes the supervisor's decisions against a
-//! `WindowBackend`, and discharges the one obligation the supervisor cannot.
+//! [`WindowBackend`], and discharges the one obligation the supervisor cannot.
 //!
 //! # The teardown obligation
 //!
@@ -25,8 +25,10 @@
 #![forbid(unsafe_code)]
 
 pub mod backend;
+pub mod host;
 
 pub use backend::{BackendCall, BackendError, RecordingBackend, WindowBackend};
+pub use host::Host;
 
 /// These bounds are load-bearing: a backend is moved onto the main thread and
 /// its recording shared with assertions. Asserted here so a change that breaks

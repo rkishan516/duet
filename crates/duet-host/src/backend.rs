@@ -24,7 +24,7 @@ impl std::fmt::Display for BackendError {
 
 impl std::error::Error for BackendError {}
 
-/// The platform operations a `Host` performs.
+/// The platform operations a [`crate::Host`] performs.
 ///
 /// This is a trait rather than a direct `tao`/`wry` dependency so that every
 /// orchestration decision is testable with no window server present — the same
@@ -89,7 +89,7 @@ pub enum BackendCall {
 
 /// A backend that records every call instead of touching a platform.
 ///
-/// Cloning shares the recording, so a clone can be handed to a `Host` while
+/// Cloning shares the recording, so a clone can be handed to a [`crate::Host`] while
 /// the original is used to assert.
 #[derive(Debug, Clone, Default)]
 pub struct RecordingBackend {
