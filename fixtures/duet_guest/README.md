@@ -21,9 +21,27 @@ no envelope), talking to `duet_protocol::handle_text` in
   unsolicited host notifications.
 - `lib/main.dart` — a **headless** entry point (`WidgetsFlutterBinding`, no
   `runApp`, no widget tree). It is not exercised by `flutter test`; it is what
-  a Rust example (`cargo run -p duet-backend-macos --example flutter_state`,
-  a later task) boots inside a `FlutterEngine` to drive `DuetClient` against
-  the real host.
+  a Rust example boots inside a `FlutterEngine` to drive `DuetClient` against
+  the real host. It shakes hands with the host and then picks one of the two
+  drivers below.
+- `lib/guest_support.dart` — what both drivers need: the log prefix, the
+  handshake, and the `mode` store path the host writes to choose a driver.
+  One `App.framework` carries both drivers because `flutter build macos`
+  compiles `lib/main.dart` and a second entry point's output would land at the
+  same path and overwrite the first. An absent or unrecognised `mode` selects
+  the solo driver, so a host that has never heard of this gets what it always
+  got.
+- `lib/solo_driver.dart` — the single-guest sequence driven by
+  `cargo run -p duet-backend-macos --example flutter_state`: a `set` Rust reads
+  back, five doubles compared bit-for-bit, hostile input over the real channel,
+  and one push.
+- `lib/duet_driver.dart` — the two-guest sequence driven by
+  `cargo run -p duet-backend-macos --example two_guests`, where this guest
+  shares a process and a store with a live `wry` webview guest. It writes a
+  value for the webview to read, reads the webview's value back, subscribes to
+  one shared path and one of its own, and publishes every push it receives —
+  including the ones it must keep receiving while the webview tries to
+  unsubscribe it and is then torn down.
 - `test/duet_client_test.dart` — unit tests against a mocked
   `TestDefaultBinaryMessenger`, including the wire rules that must match
   Rust exactly (canonical decimal `id`/`subscription`/`subscriber` strings,
@@ -45,11 +63,12 @@ cd fixtures/duet_guest && /Users/kishan/dev/rkishan516/flutterDC/bin/flutter bui
 
 This produces
 `fixtures/duet_guest/build/macos/Build/Products/Debug/App.framework`, which
-the Rust example expects at `DUET_APP_FRAMEWORK_PATH`:
+both Rust examples expect at `DUET_APP_FRAMEWORK_PATH`:
 
 ```bash
-DUET_APP_FRAMEWORK_PATH=fixtures/duet_guest/build/macos/Build/Products/Debug/App.framework \
-  cargo run -p duet-backend-macos --example flutter_state
+export DUET_APP_FRAMEWORK_PATH=fixtures/duet_guest/build/macos/Build/Products/Debug/App.framework
+cargo run -p duet-backend-macos --example flutter_state   # this guest alone
+cargo run -p duet-backend-macos --example two_guests      # alongside a webview guest
 ```
 
 Only a debug/JIT build has been exercised; nothing here has been measured
