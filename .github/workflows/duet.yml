@@ -20,13 +20,22 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - name: Format
         run: cargo fmt --all -- --check
+      # duet-backend-macos links FlutterMacOS.framework and calls into
+      # tao/objc2-app-kit, none of which exist on ubuntu-latest — this
+      # runner has no window server and no Flutter toolchain, so the crate
+      # cannot even *compile* here, let alone run or reach the 90% line
+      # coverage every other crate clears. It is excluded from every step
+      # below that would try to build it (clippy, docs, coverage, test)
+      # rather than silently letting CI stop covering it while looking
+      # green — see crates/duet-backend-macos/FINDINGS.md for what was
+      # verified for it instead, on real macOS hardware.
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --exclude duet-backend-macos --all-targets --locked -- -D warnings
       - name: Docs
-        run: cargo doc --workspace --no-deps --locked
+        run: cargo doc --workspace --exclude duet-backend-macos --no-deps --locked
         env:
           RUSTDOCFLAGS: -D warnings
       - name: Test with coverage gate
-        run: cargo llvm-cov --workspace --locked --fail-under-lines 90
+        run: cargo llvm-cov --workspace --exclude duet-backend-macos --locked --fail-under-lines 90
       - name: Test single-threaded
-        run: cargo test --workspace --locked -- --test-threads=1
+        run: cargo test --workspace --exclude duet-backend-macos --locked -- --test-threads=1
