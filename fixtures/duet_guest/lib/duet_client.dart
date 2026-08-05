@@ -11,7 +11,7 @@ import 'duet_value.dart';
 /// `StringCodec` puts the payload on the wire as raw UTF-8 with no envelope
 /// (packages/flutter/lib/src/services/message_codecs.dart:44-63), which is
 /// exactly the shape `duet_protocol::handle_text(&str) -> String`
-/// (`crates/duet-protocol/src/text.rs`) already has, and exactly the
+/// (crates/duet-protocol/src/text.rs:24-35) already has, and exactly the
 /// primitive `FlutterEngine::set_lifecycle_state`
 /// (crates/duet-backend-macos/src/engine.rs:419-433) already drives.
 ///
