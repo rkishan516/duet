@@ -1,7 +1,7 @@
 //! The message envelope between Duet's host and its guests.
 //!
 //! A Flutter renderer and a JavaScript webview both talk to one Rust host.
-//! This crate defines what they say, and `dispatch` serves it.
+//! This crate defines what they say, and [`dispatch()`] serves it.
 //!
 //! # Three message kinds
 //!
@@ -24,8 +24,11 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod dispatch;
 pub mod message;
 mod wire;
+
+pub use dispatch::dispatch;
 
 pub use message::{Push, Request, RequestId, Response};
 
