@@ -54,7 +54,6 @@
 pub mod backend;
 mod engine;
 pub mod sink;
-mod webview;
 
 pub use backend::MacBackend;
 pub use sink::{DuetEvent, ProxySink};

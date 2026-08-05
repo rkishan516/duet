@@ -10,10 +10,8 @@ repository.workspace = true
 [dependencies]
 duet-core = { path = "../duet-core" }
 duet-runtime = { path = "../duet-runtime" }
-duet-protocol = { path = "../duet-protocol" }
 duet-supervisor = { path = "../duet-supervisor" }
 duet-host = { path = "../duet-host" }
-serde_json = { version = "1", features = ["float_roundtrip"] }
 tao = "0.36"
 wry = "0.56"
 objc2 = { version = "0.6.4", features = ["catch-all"] }

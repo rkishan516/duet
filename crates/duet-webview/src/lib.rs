@@ -1,11 +1,22 @@
-//! The webview surface: a `wry` WebView speaking `duet-protocol`.
+//! Transport-agnostic webview guest logic for Duet.
 //!
-//! This module currently holds only the request-routing logic, exercised
-//! directly by the tests below. Nothing in the crate calls it yet — wiring it
-//! to a real `wry::WebView` (IPC handler registration, script evaluation) is
-//! a later task, so every item here is `pub(crate)` and otherwise unused
-//! outside tests until that lands.
-#![allow(dead_code)]
+//! A webview guest (a `wry` `WebView` on macOS, and eventually Windows and
+//! Linux equivalents) exchanges JSON text with the host: it posts IPC
+//! messages and the host evaluates JavaScript back into it. Everything about
+//! that conversation *except* the platform-specific plumbing for sending and
+//! receiving the text — request routing, decode-and-recover error handling,
+//! and the JavaScript strings that hand a response or a push back to the
+//! guest — is identical no matter which platform hosts the webview. This
+//! crate holds that shared part, so macOS, Windows and Linux backends can
+//! all call into one implementation instead of three copies of it, and so
+//! it can be tested in CI without a window server or a webview runtime.
+//!
+//! Every item here is `pub`: this crate has no internal module structure to
+//! hide behind, so its public API *is* its implementation, except for the
+//! private `decode` helper and `FALLBACK_FAILURE` constant, which stay
+//! private because nothing outside [`handle_ipc_text`] needs them.
+#![deny(missing_docs)]
+#![forbid(unsafe_code)]
 
 use duet_core::SubscriberId;
 use duet_protocol::{Push, RequestId, Response};
@@ -20,7 +31,7 @@ use duet_runtime::StoreHandle;
 /// `subscriber` is the surface's own, supplied by the host. A `subscriber`
 /// field appearing in the message is **ignored** — `duet_protocol::Request`
 /// has no such field, so a guest cannot subscribe as another guest.
-pub(crate) fn handle_ipc_text(store: &StoreHandle, subscriber: SubscriberId, text: &str) -> String {
+pub fn handle_ipc_text(store: &StoreHandle, subscriber: SubscriberId, text: &str) -> String {
     let response = match decode(text) {
         Ok(request) => duet_protocol::dispatch(store, subscriber, request),
         Err((id, message)) => Response::Failed { id, message },
@@ -60,12 +71,12 @@ fn decode(text: &str) -> Result<duet_protocol::Request, (RequestId, String)> {
 }
 
 /// Wraps a response in JavaScript that hands it to the guest.
-pub(crate) fn response_script(reply_json: &str) -> String {
+pub fn response_script(reply_json: &str) -> String {
     format!("window.__duet && window.__duet.onResponse({reply_json});")
 }
 
 /// Wraps a push in JavaScript that hands it to the guest.
-pub(crate) fn push_script(push: &Push) -> String {
+pub fn push_script(push: &Push) -> String {
     let encoded = serde_json::to_string(&duet_protocol::encode_push(push))
         .unwrap_or_else(|_| "null".to_string());
     format!("window.__duet && window.__duet.onPush({encoded});")
@@ -171,27 +182,47 @@ mod tests {
     #[test]
     fn the_handler_ignores_any_subscriber_named_on_the_wire() {
         // The security property: a guest cannot subscribe as another guest.
-        // Even with a `subscriber` field present, the handler must use the one
-        // it was constructed with.
+        // Even with a `subscriber` field present, the handler must use the
+        // one it was constructed with. One call alone cannot distinguish
+        // "uses the parameter" from "hardcodes the subscriber it happens to
+        // see first", so this drives the handler with two different
+        // host-supplied subscribers, both carrying the same bogus
+        // `"subscriber":"999"` on the wire, and checks the subscription
+        // count landed on each one respectively.
         let rt = rt();
         let handle = rt.handle();
-        let reply = handle_ipc_text(
+
+        let reply_a = handle_ipc_text(
             &handle,
             SubscriberId(7),
             r#"{"kind":"subscribe","id":"3","path":"editor.zoom","subscriber":"999"}"#,
         );
-        assert!(reply.contains("\"subscribed\""), "got {reply}");
+        assert!(reply_a.contains("\"subscribed\""), "got {reply_a}");
 
-        // The subscription must belong to 7, not 999.
+        let reply_b = handle_ipc_text(
+            &handle,
+            SubscriberId(42),
+            r#"{"kind":"subscribe","id":"4","path":"editor.zoom","subscriber":"999"}"#,
+        );
+        assert!(reply_b.contains("\"subscribed\""), "got {reply_b}");
+
+        // Neither subscription may be attributed to the guest-named subscriber.
         assert_eq!(
             handle.drop_subscriber(SubscriberId(999)).expect("query"),
             0,
             "no subscription may be attributed to a guest-named subscriber"
         );
+        // Each subscription must belong to the host-supplied subscriber that
+        // made its call, not to whichever one the handler happens to favor.
         assert_eq!(
             handle.drop_subscriber(SubscriberId(7)).expect("query"),
             1,
-            "the subscription must belong to the host-supplied subscriber"
+            "the first subscription must belong to the host-supplied subscriber 7"
+        );
+        assert_eq!(
+            handle.drop_subscriber(SubscriberId(42)).expect("query"),
+            1,
+            "the second subscription must belong to the host-supplied subscriber 42"
         );
         rt.shutdown().expect("shutdown should succeed");
     }
@@ -253,8 +284,22 @@ mod tests {
         // own recursion-limit guard must reject this instead.
         assert_failed(&"[".repeat(200_000), "200,000-deep nested array");
 
-        // The same guard must hold for a tagged `Value` nested 5,000 deep
-        // inside a real `set` request, not just for raw JSON structure.
+        // WARNING to future maintainers: this case looks like it stresses
+        // `duet_codec`'s recursive tagged-value decoder specifically, by
+        // nesting a `Value` 5,000 deep inside a real `set` request rather
+        // than nesting raw JSON structure. It does not. `decode` (above)
+        // calls `serde_json::from_str` before any of this text ever reaches
+        // `duet_protocol::decode_request` — and therefore `duet_codec`'s
+        // decoder — and serde_json's own recursion limit (~128 levels)
+        // rejects input this deep on its own. So this hits exactly the same
+        // guard as the 200,000-bracket case above, just via a longer
+        // string: `duet_codec`'s recursive decoder is structurally
+        // unreachable from guest *text*, because the JSON parser in front
+        // of it is the depth guard. If a future change ever swaps in a
+        // parser without its own recursion limit, that guard disappears and
+        // `duet_codec::decode_value`'s recursion becomes reachable — and
+        // this case would then need a real assertion on the codec's own
+        // behavior, not just on this text-level guard.
         let mut nested_value = "null".to_string();
         for _ in 0..5_000 {
             nested_value = format!(r#"{{"t":"m","v":{{"a":{nested_value}}}}}"#);
