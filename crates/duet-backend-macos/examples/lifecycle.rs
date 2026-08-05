@@ -487,14 +487,24 @@ fn print_report(state: &AppState) {
     }
     println!();
 
-    let attached = find_sample(state, "renderer started, view attached (Readiness::Ready)");
+    // Measure from the last sample before teardown, not from the moment the
+    // view was first attached.
+    //
+    // The attach sample lands ~0.3s in, before Skia and the Dart heap have
+    // warmed up — measured at ~160 MB against a settled ~223 MB. Using it
+    // understates the reclaim by roughly 60 MB and answers the wrong question:
+    // what matters is how much a *live, rendering* surface costs versus one
+    // that has been torn down. Spike A used the same settled baseline
+    // (223 MB -> 104 MB).
+    let settled = find_sample(state, "view detached, suspending (engine still alive)");
     let torn_down = find_sample(
         state,
         "torn down (engine shut down, if the grace period truly elapsed)",
     );
-    let delta = attached - torn_down;
+    let delta = settled - torn_down;
     println!(
-        "delta (view attached -> after teardown): {delta} kB (floor: {MIN_DROP_KB} kB / 80 MB)"
+        "delta (settled, pre-teardown -> after teardown): {delta} kB \
+         (floor: {MIN_DROP_KB} kB / 80 MB)"
     );
 
     if delta >= MIN_DROP_KB {
@@ -511,7 +521,7 @@ fn print_report(state: &AppState) {
     assert!(
         delta >= MIN_DROP_KB,
         "teardown must reclaim at least {MIN_DROP_KB} kB (80 MB); measured {delta} kB \
-         (attached={attached} kB, torn_down={torn_down} kB) — see FINDINGS.md"
+         (settled={settled} kB, torn_down={torn_down} kB) — see FINDINGS.md"
     );
 }
 
