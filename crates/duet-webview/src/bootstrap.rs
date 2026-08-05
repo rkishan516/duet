@@ -5,24 +5,34 @@
 /// Phase 4's codegen will generate a typed client over this same protocol; this
 /// is the hand-written floor that proves the transport works.
 ///
-/// # Two encoding rules a JavaScript guest must not get wrong
+/// # Three encoding rules a JavaScript guest must not get wrong
 ///
 /// This client does **not** encode `duet_core::Value` for you: `set` takes an
-/// already-tagged object (`{t:"i", v:"42"}`). Two of those tags have payloads
-/// JavaScript cannot spell naively, so both are called out in the script's own
-/// comments and given helpers below.
+/// already-tagged object (`{t:"i", v:"42"}`). Three of those constructs have
+/// spellings JavaScript gets wrong naively, so each is called out in the
+/// script's own comments and given a helper below.
 ///
-/// **Ids are canonical decimal strings.** `String(nextId++)` is already
-/// canonical; hand-writing `"007"` is not, and `duet-protocol` rejects it. It
-/// must, because the host echoes ids back in canonical form — a guest that
-/// sent `"007"` would be answered `"7"`, never match its own pending entry,
-/// and hang with no error at all.
+/// **Ids are canonical decimal strings in `0..=i64::MAX`.**
+/// `String(nextId++)` is already canonical; hand-writing `"007"` is not, and
+/// `duet-protocol` rejects it. It must, because the host echoes ids back in
+/// canonical form — a guest that sent `"007"` would be answered `"7"`, never
+/// match its own pending entry, and hang with no error at all. The upper bound
+/// exists because Dart's native `int` is 64-bit signed (see
+/// `duet_codec::MAX_WIRE_ID`); a JS counter reaches `Number.MAX_SAFE_INTEGER`
+/// long before it, so it constrains nothing in practice here.
 ///
 /// **Negative zero needs a sentinel.** `JSON.stringify(-0)` is `"0"`, so a JS
 /// guest cannot express negative zero as a JSON number under any encoding
 /// short of a hand-rolled serializer. `__duet.float()` maps it to the string
 /// `"-0"`, joining `"NaN"`, `"Infinity"` and `"-Infinity"` — the four `f64`
 /// values with no portable JSON-number spelling.
+///
+/// **Map keys travel in code-point order.** JavaScript's default
+/// `Array.prototype.sort` compares UTF-16 **code units**, which disagrees with
+/// code-point order above the BMP: `U+1F600` encodes as the surrogate pair
+/// `D83D DE00`, and `0xD83D < 0xE000`, so a default sort puts it before
+/// `U+E000` where Rust's `BTreeMap<String>` puts it after. `__duet.map()`
+/// builds a `{t:"m"}` value with an explicit code-point comparator.
 pub const BOOTSTRAP_HTML: &str = r#"<!doctype html>
 <html>
 <head><meta charset="utf-8"><title>Duet webview surface</title></head>
@@ -75,6 +85,50 @@ pub const BOOTSTRAP_HTML: &str = r#"<!doctype html>
     throw new Error("unrecognised float sentinel: " + String(v));
   }
 
+  // Map keys travel in CODE-POINT order, which is also UTF-8 byte order and so
+  // matches what Rust's BTreeMap<String> emits.
+  //
+  // DO NOT "simplify" this to keys.sort(), a < b, or a.localeCompare(b). The
+  // default sort compares UTF-16 CODE UNITS: "\u{1F600}" is encoded as the
+  // surrogate pair D83D DE00, and 0xD83D is LESS than 0xE000, so a default sort
+  // puts it before "" while Rust puts it after. Every key below U+D800
+  // compares the same under both rules, so ASCII test data cannot catch this.
+  //
+  // Array.from splits a string into CODE POINTS (surrogate pairs stay whole);
+  // indexing a string yields code units and reintroduces the bug.
+  function compareCodePoints(a, b) {
+    const ac = Array.from(a);
+    const bc = Array.from(b);
+    const shared = Math.min(ac.length, bc.length);
+    for (let i = 0; i < shared; i++) {
+      const x = ac[i].codePointAt(0);
+      const y = bc[i].codePointAt(0);
+      if (x !== y) { return x < y ? -1 : 1; }
+    }
+    // A prefix sorts before the longer string it prefixes.
+    return ac.length - bc.length;
+  }
+
+  // Builds a tagged map value for `set`, keys in canonical order. Takes an
+  // object of ALREADY-TAGGED values: __duet.map({a: __duet.float(1.5)}).
+  //
+  // CAVEAT no JS guest can work around: JSON.stringify emits an object's
+  // INTEGER-LIKE keys ("0", "1", "42") first and in ascending numeric order,
+  // whatever order they were inserted in. That is ECMAScript's own property
+  // ordering and no sort can override it, so a map whose keys look like array
+  // indices cannot be emitted in canonical order from a plain JS object. Such a
+  // value still DECODES correctly — the host sorts into a BTreeMap on arrival,
+  // and decoding is order-insensitive — but its bytes differ, so a value with
+  // integer-like keys must not be used as a golden-corpus fixture captured from
+  // this guest.
+  function map(entries) {
+    const sorted = {};
+    for (const key of Object.keys(entries).sort(compareCodePoints)) {
+      sorted[key] = entries[key];
+    }
+    return { t: "m", v: sorted };
+  }
+
   window.__duet = {
     get: (path) => call("get", { path }),
     set: (path, value) => call("set", { path, value }),
@@ -86,6 +140,15 @@ pub const BOOTSTRAP_HTML: &str = r#"<!doctype html>
 
     // Reads a tagged float value back out of a response or push.
     toFloat: (value) => decodeFloat(value.v),
+
+    // Builds a tagged map value for `set`. Use this rather than writing
+    // {t:"m", v:{...}} by hand: it is the only path that orders keys the way
+    // Rust does.
+    map: map,
+
+    // Exposed so a guest building a nested structure by hand can apply the
+    // same order without reimplementing it (and reimplementing it wrongly).
+    compareKeys: compareCodePoints,
 
     pushes: [],
     log: [],
@@ -177,6 +240,66 @@ mod tests {
         assert!(
             BOOTSTRAP_HTML.contains("CANONICAL"),
             "bootstrap must document why the id spelling matters"
+        );
+    }
+
+    #[test]
+    fn the_bootstrap_orders_map_keys_by_code_point() {
+        // JavaScript's default sort compares UTF-16 CODE UNITS, so it puts
+        // U+1F600 (surrogate pair D83D DE00, lead unit 0xD83D) BEFORE U+E000,
+        // while Rust's BTreeMap<String> — the canonical order — puts it after.
+        // A guest that hand-writes {t:"m", v:{...}} inherits whatever order it
+        // happened to insert in, so the bootstrap must both provide a correct
+        // helper and say why the obvious alternatives are wrong. Pinned as
+        // strings because these tests cannot run JavaScript.
+        assert!(
+            BOOTSTRAP_HTML.contains("map:"),
+            "bootstrap must expose a map builder, not leave key order to the guest"
+        );
+        assert!(
+            BOOTSTRAP_HTML.contains("Array.from(a)"),
+            "the comparator must split into CODE POINTS; indexing a string \
+             yields code units and reintroduces the bug"
+        );
+        assert!(
+            BOOTSTRAP_HTML.contains("codePointAt(0)"),
+            "the comparator must compare code points"
+        );
+        assert!(
+            BOOTSTRAP_HTML.contains("localeCompare"),
+            "the comparator must warn against the wrong alternatives by name, \
+             or a future maintainer will 'simplify' it back to one of them"
+        );
+        // The caveat a JS guest genuinely cannot code around: JSON.stringify
+        // orders integer-like keys numerically first, whatever a sort did.
+        assert!(
+            BOOTSTRAP_HTML.contains("INTEGER-LIKE"),
+            "bootstrap must document that integer-like keys cannot be emitted \
+             in canonical order from a plain JS object"
+        );
+    }
+
+    #[test]
+    fn the_bootstrap_and_the_rust_encoder_agree_on_the_canonical_key_order() {
+        // Pins the two halves against each other: the JS comparator's contract
+        // is "produce what Rust produces", so this test states the Rust side of
+        // that claim right next to the JS side, using the same three keys the
+        // duet-codec and Dart tests use. The keys straddle the surrogate range
+        // deliberately — below U+D800 every implementation already agrees, so
+        // ASCII keys would prove nothing.
+        let encoded = serde_json::to_string(&duet_codec::encode_value(&duet_core::Value::map([
+            ("\u{1F600}", duet_core::Value::Null),
+            ("\u{E000}", duet_core::Value::Null),
+            ("\u{FFFD}", duet_core::Value::Null),
+        ])))
+        .expect("serializes");
+        assert_eq!(
+            encoded,
+            "{\"t\":\"m\",\"v\":{\
+             \"\u{E000}\":{\"t\":\"n\"},\
+             \"\u{FFFD}\":{\"t\":\"n\"},\
+             \"\u{1F600}\":{\"t\":\"n\"}}}",
+            "the order __duet.map must reproduce: E000, FFFD, 1F600"
         );
     }
 

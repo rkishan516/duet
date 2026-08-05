@@ -372,6 +372,57 @@ mod tests {
         // non-reflexivity is documented on Value::Float.
     }
 
+    /// The canonical map key order is **UTF-8 byte order**, equivalently
+    /// code-point order — the two coincide, because UTF-8 is designed so that
+    /// byte-wise comparison of encoded strings matches code-point comparison.
+    ///
+    /// Rust gets this for free and needs no sorting code: `Value::Map` is a
+    /// `BTreeMap<String, _>`, `String`'s `Ord` compares bytes, and
+    /// `serde_json::Map` is itself a `BTreeMap` (this workspace does not enable
+    /// serde_json's `preserve_order` feature, which would swap in an
+    /// insertion-ordered `IndexMap` and silently change this output).
+    ///
+    /// The keys below are chosen so that the *wrong* order is detectable.
+    /// `U+1F600` is non-BMP, so UTF-16 encodes it as the surrogate pair
+    /// `D83D DE00` — and `0xD83D` is numerically **below** `U+E000`. Any
+    /// implementation that compares UTF-16 code units (Dart's `String.compareTo`
+    /// and JavaScript's default `Array.prototype.sort` both do) therefore sorts
+    /// it FIRST, while code-point order puts it LAST.
+    ///
+    /// A test using only ASCII or Latin-1 keys cannot see this at all: below
+    /// the surrogate range every implementation already agrees. That is exactly
+    /// how the divergence survived.
+    #[test]
+    fn map_keys_encode_in_code_point_order_even_across_the_surrogate_range() {
+        let value = Value::map([
+            ("\u{1F600}", Value::Null),
+            ("\u{E000}", Value::Null),
+            ("\u{FFFD}", Value::Null),
+        ]);
+        let encoded = serde_json::to_string(&encode_value(&value)).expect("serializes");
+        assert_eq!(
+            encoded,
+            "{\"t\":\"m\",\"v\":{\
+             \"\u{E000}\":{\"t\":\"n\"},\
+             \"\u{FFFD}\":{\"t\":\"n\"},\
+             \"\u{1F600}\":{\"t\":\"n\"}}}",
+            "map keys must be in code-point order (E000, FFFD, 1F600), not \
+             UTF-16 code-unit order (1F600, E000, FFFD)"
+        );
+        // Insertion order must not leak into the encoding: the same three keys
+        // added in a different order must produce byte-identical output.
+        let reordered = Value::map([
+            ("\u{FFFD}", Value::Null),
+            ("\u{1F600}", Value::Null),
+            ("\u{E000}", Value::Null),
+        ]);
+        assert_eq!(
+            serde_json::to_string(&encode_value(&reordered)).expect("serializes"),
+            encoded,
+            "the encoding must not depend on the order keys were inserted in"
+        );
+    }
+
     #[test]
     fn bytes_and_str_stay_distinguishable() {
         // The single clearest reason the encoding is tagged.

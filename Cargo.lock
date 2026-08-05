@@ -484,8 +484,10 @@ dependencies = [
 name = "duet-webview"
 version = "0.1.0"
 dependencies = [
+ "duet-codec",
  "duet-core",
  "duet-protocol",
+ "serde_json",
 ]
 
 [[package]]

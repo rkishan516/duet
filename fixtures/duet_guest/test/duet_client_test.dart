@@ -86,6 +86,91 @@ void main() {
     }
   });
 
+  test('map keys encode in code-point order, not UTF-16 code-unit order', () {
+    // The exact mirror of duet-codec/src/value.rs's
+    // `map_keys_encode_in_code_point_order_even_across_the_surrogate_range`,
+    // asserting the same byte string.
+    //
+    // These three keys are chosen so the WRONG order is detectable. U+1F600 is
+    // non-BMP, so UTF-16 encodes it as the surrogate pair D83D DE00, and
+    // 0xD83D < 0xE000. Dart's String.compareTo compares UTF-16 code units, so
+    // it sorts U+1F600 FIRST; code-point order — and Rust's BTreeMap — sorts
+    // it LAST. A test using ASCII or Latin-1 keys would pass under both rules
+    // and prove nothing, which is how this divergence survived.
+    const String canonical =
+        '{"t":"m","v":{"\u{E000}":{"t":"n"},"\u{FFFD}":{"t":"n"},'
+        '"\u{1F600}":{"t":"n"}}}';
+
+    expect(
+      jsonEncode(
+        const DuetMap(<String, DuetValue>{
+          '\u{1F600}': DuetNull(),
+          '\u{E000}': DuetNull(),
+          '\u{FFFD}': DuetNull(),
+        }).toJson(),
+      ),
+      canonical,
+    );
+
+    // Insertion order must not leak into the encoding.
+    expect(
+      jsonEncode(
+        const DuetMap(<String, DuetValue>{
+          '\u{FFFD}': DuetNull(),
+          '\u{1F600}': DuetNull(),
+          '\u{E000}': DuetNull(),
+        }).toJson(),
+      ),
+      canonical,
+    );
+
+    // The guard rail: this is the assertion that fails if someone "simplifies"
+    // compareDuetMapKeys back to String.compareTo. Pinned explicitly so the
+    // reason is visible at the point of failure, not just the symptom.
+    expect(
+      '\u{1F600}'.compareTo('\u{E000}'),
+      lessThan(0),
+      reason: 'compareTo puts U+1F600 first — this is the bug being fixed',
+    );
+    expect(
+      compareDuetMapKeys('\u{1F600}', '\u{E000}'),
+      greaterThan(0),
+      reason: 'code-point order puts U+1F600 last, agreeing with Rust',
+    );
+  });
+
+  test('compareDuetMapKeys is a total order over awkward keys', () {
+    // Prefix handling, the empty string, and equality — the cases a
+    // rune-by-rune comparator gets wrong if the exhaustion branches are
+    // mixed up. Sorting must agree with the pairwise comparator.
+    expect(compareDuetMapKeys('', ''), 0);
+    expect(compareDuetMapKeys('', 'a'), lessThan(0));
+    expect(compareDuetMapKeys('a', ''), greaterThan(0));
+    expect(compareDuetMapKeys('a', 'ab'), lessThan(0));
+    expect(compareDuetMapKeys('ab', 'a'), greaterThan(0));
+    expect(compareDuetMapKeys('\u{1F600}', '\u{1F600}'), 0);
+
+    final List<String> keys = <String>[
+      '\u{1F600}',
+      'b',
+      '',
+      '\u{E000}',
+      'a',
+      '\u{FFFD}',
+      'ab',
+    ]..sort(compareDuetMapKeys);
+    // Code-point order: '' < 'a' < 'ab' < 'b' < U+E000 < U+FFFD < U+1F600.
+    expect(keys, <String>[
+      '',
+      'a',
+      'ab',
+      'b',
+      '\u{E000}',
+      '\u{FFFD}',
+      '\u{1F600}',
+    ]);
+  });
+
   test('an id outside the wire domain is rejected', () {
     // Mirrors duet-protocol's `the_wire_id_domain_stops_at_i64_max`. The host
     // narrowed its decoder to i64::MAX precisely because Dart's native int is

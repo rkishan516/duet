@@ -10,3 +10,11 @@ repository.workspace = true
 [dependencies]
 duet-core = { path = "../duet-core" }
 duet-protocol = { path = "../duet-protocol" }
+
+# Test-only. `bootstrap.rs` pins its JavaScript against the Rust encoder's
+# actual output (canonical map key order), which means the test needs the
+# encoder — but the shipped crate only emits JavaScript text and must not grow
+# a runtime dependency on the codec for it.
+[dev-dependencies]
+duet-codec = { path = "../duet-codec" }
+serde_json = { version = "1", features = ["float_roundtrip"] }
