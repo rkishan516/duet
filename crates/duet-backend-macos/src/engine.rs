@@ -58,7 +58,13 @@ use tao::platform::macos::WindowExtMacOS;
 /// time, sequentially. Duet's `MacBackend` therefore uses one engine per
 /// Flutter window rather than the multi-view path the headers appear to
 /// offer.
-pub(crate) struct FlutterEngine {
+/// This type is `pub` only so that [`crate::FlutterSurface::new`] can name it
+/// in its signature (a `pub` function mentioning a `pub(crate)` type trips
+/// `private_interfaces`). Every method on it stays `pub(crate)`: the engine's
+/// lifecycle is driven exclusively through [`crate::MacBackend`]'s
+/// [`duet_host::WindowBackend`] impl, and nothing outside this crate may
+/// boot, attach, detach or shut one down directly.
+pub struct FlutterEngine {
     /// The `FlutterEngine*` (an `AnyObject` because objc2 has no typed
     /// binding for it — it comes from `FlutterMacOS.framework`, which this
     /// crate links via `build.rs` but does not have `objc2` bindgen output
@@ -276,6 +282,38 @@ impl FlutterEngine {
         // constructed by `boot` from a successfully initialized engine.
         catch_to_backend_error(|| unsafe { send_lifecycle_state_uncaught(engine, state) })
     }
+
+    /// Borrows this engine's `FlutterBinaryMessenger`, retained.
+    ///
+    /// An accessor rather than a public `engine` field: a caller needs the
+    /// messenger to register a platform-channel handler (see
+    /// [`crate::FlutterSurface`]), and handing out the raw `FlutterEngine*`
+    /// instead would let it do anything at all to the engine, including the
+    /// lifecycle calls this type exists to sequence.
+    ///
+    /// The returned handle keeps the *messenger* alive, which is not the same
+    /// as keeping the engine alive — on macOS the messenger is a relay that
+    /// holds its engine weakly. Sending through it after the engine has shut
+    /// down is therefore inert rather than unsound, but callers should still
+    /// drop their surfaces before the engine (see [`crate::FlutterSurface`]'s
+    /// `Drop`).
+    ///
+    /// # Errors
+    ///
+    /// [`BackendError::Unavailable`] if an Objective-C exception was caught.
+    pub(crate) fn binary_messenger(&self) -> Result<Retained<AnyObject>, BackendError> {
+        let engine = &self.engine;
+        catch_to_backend_error(|| {
+            // SAFETY: `engine` is `self`'s own live `FlutterEngine*` — `boot`
+            // only ever constructs `self` from a successfully initialized
+            // engine — and `binaryMessenger` is a read-only property every
+            // live `FlutterEngine*` responds to, returning an object
+            // conforming to `FlutterBinaryMessenger`. This method requires
+            // the caller to be on the main thread, per this type's
+            // module-level contract.
+            unsafe { msg_send![engine, binaryMessenger] }
+        })
+    }
 }
 
 impl Drop for FlutterEngine {
@@ -299,7 +337,7 @@ impl Drop for FlutterEngine {
 /// leave a shared `&mut` in an inconsistent state if the unsafe call inside
 /// panics; the panic happens inside `objc2`'s `@catch` before any partially
 /// constructed value here is observed by a caller.
-fn catch_to_backend_error<F, R>(f: F) -> Result<R, BackendError>
+pub(crate) fn catch_to_backend_error<F, R>(f: F) -> Result<R, BackendError>
 where
     F: FnOnce() -> R,
 {
