@@ -1,0 +1,13 @@
+[package]
+name = "duet-host"
+description = "Wires Duet's store, supervisor and platform together"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+duet-core = { path = "../duet-core" }
+duet-runtime = { path = "../duet-runtime" }
+duet-supervisor = { path = "../duet-supervisor" }

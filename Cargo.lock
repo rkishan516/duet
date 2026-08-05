@@ -15,6 +15,15 @@ name = "duet-core"
 version = "0.1.0"
 
 [[package]]
+name = "duet-host"
+version = "0.1.0"
+dependencies = [
+ "duet-core",
+ "duet-runtime",
+ "duet-supervisor",
+]
+
+[[package]]
 name = "duet-runtime"
 version = "0.1.0"
 dependencies = [
