@@ -476,8 +476,10 @@ fn decode_inbound(bytes: &[u8]) -> String {
 /// Whether `note` is addressed to `subscriber`.
 ///
 /// A free function so the confidentiality filter in [`FlutterSurface::push`]
-/// is testable without an engine.
-fn is_addressed_to(note: &Notification, subscriber: SubscriberId) -> bool {
+/// and [`crate::WebviewSurface::push`] is testable without an engine, and so
+/// both surfaces enforce the boundary with one implementation rather than two
+/// that can drift apart.
+pub(crate) fn is_addressed_to(note: &Notification, subscriber: SubscriberId) -> bool {
     note.subscriber == subscriber
 }
 

@@ -1,6 +1,6 @@
 //! The macOS webview surface: a `wry` WebView wired to the shared store.
 
-use duet_core::SubscriberId;
+use duet_core::{Notification, SubscriberId};
 use duet_host::BackendError;
 use duet_protocol::Push;
 use duet_runtime::StoreHandle;
@@ -19,6 +19,9 @@ use crate::sink::DuetEvent;
 /// surface's notifications.
 pub struct WebviewSurface {
     webview: WebView,
+    /// This surface's own subscriber, kept so [`WebviewSurface::push`] can
+    /// refuse to deliver another guest's notification.
+    subscriber: SubscriberId,
 }
 
 impl WebviewSurface {
@@ -61,16 +64,31 @@ impl WebviewSurface {
             .build(window)
             .map_err(|e| BackendError::Unavailable(format!("webview: {e}")))?;
 
-        Ok(WebviewSurface { webview })
+        Ok(WebviewSurface {
+            webview,
+            subscriber,
+        })
     }
 
-    /// Delivers a push to the guest.
+    /// Delivers a notification to this guest, or drops it silently if it is
+    /// addressed to a different one.
+    ///
+    /// Takes a [`Notification`] rather than a [`Push`] so the confidentiality
+    /// filter cannot be bypassed: a caller holding a mixed notification stream
+    /// for several surfaces must not be able to leak one guest's state into
+    /// another by forgetting a check. [`crate::FlutterSurface::push`] enforces
+    /// the same rule through the same predicate.
     ///
     /// # Errors
     ///
     /// [`BackendError::Unavailable`] if the script could not be evaluated.
-    pub fn push(&self, push: &Push) -> Result<(), BackendError> {
-        self.eval(&duet_webview::push_script(push))
+    pub fn push(&self, note: &Notification) -> Result<(), BackendError> {
+        if !crate::flutter_surface::is_addressed_to(note, self.subscriber) {
+            return Ok(());
+        }
+        self.eval(&duet_webview::push_script(&Push::Notification(
+            note.clone(),
+        )))
     }
 
     /// Evaluates JavaScript in the guest.
