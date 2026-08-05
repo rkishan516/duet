@@ -46,8 +46,7 @@ impl WebviewSurface {
         let webview = WebViewBuilder::new()
             .with_html(duet_webview::bootstrap::BOOTSTRAP_HTML)
             .with_ipc_handler(move |request| {
-                let reply =
-                    duet_webview::handle_ipc_text(&handler_store, subscriber, request.body());
+                let reply = duet_protocol::handle_text(&handler_store, subscriber, request.body());
                 // Replies are *pushed* into the guest, never returned from an
                 // evaluated script: wry runs a script's return value through
                 // NSJSONSerialization, which would double-encode the JSON.

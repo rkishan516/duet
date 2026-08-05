@@ -26,11 +26,14 @@
 
 pub mod dispatch;
 pub mod message;
+pub mod text;
 mod wire;
 
 pub use dispatch::dispatch;
 
 pub use message::{Push, Request, RequestId, Response};
+
+pub use text::{handle_text, push_text};
 
 /// Encodes a [`Request`] for transmission.
 pub fn encode_request(request: &Request) -> serde_json::Value {

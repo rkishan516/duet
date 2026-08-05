@@ -485,8 +485,6 @@ version = "0.1.0"
 dependencies = [
  "duet-core",
  "duet-protocol",
- "duet-runtime",
- "serde_json",
 ]
 
 [[package]]
