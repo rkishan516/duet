@@ -14,3 +14,15 @@ spikes/spike_app/
 !spikes/spike_app/lib/
 !spikes/spike_app/lib/main.dart
 spikes/*/target/
+
+# Phase 2b-6 Flutter guest fixture — regenerate scaffolding (macos/, .idea/,
+# pubspec.lock, ...) with:
+#   flutter create --platforms=macos --org com.example --project-name duet_guest fixtures/duet_guest
+fixtures/duet_guest/
+# ...except the hand-written package: the Dart guest client, its tests, the
+# package manifest, and this fixture's own README. `flutter create` will NOT
+# regenerate these, so they are tracked explicitly.
+!fixtures/duet_guest/lib/
+!fixtures/duet_guest/test/
+!fixtures/duet_guest/pubspec.yaml
+!fixtures/duet_guest/README.md
