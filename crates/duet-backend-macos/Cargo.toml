@@ -1,0 +1,19 @@
+[package]
+name = "duet-backend-macos"
+description = "macOS backend for Duet: tao windows, a Flutter engine and a wry webview"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+duet-core = { path = "../duet-core" }
+duet-runtime = { path = "../duet-runtime" }
+duet-supervisor = { path = "../duet-supervisor" }
+duet-host = { path = "../duet-host" }
+tao = "0.36"
+wry = "0.56"
+objc2 = { version = "0.6.4", features = ["catch-all"] }
+objc2-app-kit = "0.3.2"
+objc2-foundation = "0.3.2"
