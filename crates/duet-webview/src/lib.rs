@@ -22,6 +22,8 @@ use duet_core::SubscriberId;
 use duet_protocol::{Push, RequestId, Response};
 use duet_runtime::StoreHandle;
 
+pub mod bootstrap;
+
 /// Serves one IPC message and returns the JSON text to send back.
 ///
 /// Total by construction: malformed input becomes a [`Response::Failed`], so a
