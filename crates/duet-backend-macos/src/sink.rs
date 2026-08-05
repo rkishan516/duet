@@ -11,6 +11,14 @@ pub enum DuetEvent {
     Notifications(Vec<Notification>),
     /// Ask the host to run a supervisor tick.
     Tick,
+    /// JavaScript the host wants evaluated in a webview surface — an IPC
+    /// reply, or a push.
+    ///
+    /// `wry`'s IPC handler is installed before `build()` hands back the
+    /// `WebView`, so the handler cannot hold the webview it replies through.
+    /// It posts this instead, and the event loop — which does own the
+    /// webview — evaluates it on the next turn.
+    WebviewScript(String),
 }
 
 /// Marshals notification batches onto the UI thread via `tao`'s proxy.

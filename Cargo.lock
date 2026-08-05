@@ -422,11 +422,14 @@ version = "0.1.0"
 dependencies = [
  "duet-core",
  "duet-host",
+ "duet-protocol",
  "duet-runtime",
  "duet-supervisor",
+ "duet-webview",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
+ "serde_json",
  "tao",
  "wry",
 ]
@@ -474,6 +477,16 @@ name = "duet-supervisor"
 version = "0.1.0"
 dependencies = [
  "duet-core",
+]
+
+[[package]]
+name = "duet-webview"
+version = "0.1.0"
+dependencies = [
+ "duet-core",
+ "duet-protocol",
+ "duet-runtime",
+ "serde_json",
 ]
 
 [[package]]

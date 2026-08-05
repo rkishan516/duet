@@ -1,0 +1,14 @@
+[package]
+name = "duet-webview"
+description = "Transport-agnostic webview guest logic for Duet: IPC routing and the guest bootstrap"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+duet-core = { path = "../duet-core" }
+duet-runtime = { path = "../duet-runtime" }
+duet-protocol = { path = "../duet-protocol" }
+serde_json = { version = "1", features = ["float_roundtrip"] }

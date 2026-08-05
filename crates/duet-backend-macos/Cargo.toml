@@ -12,8 +12,17 @@ duet-core = { path = "../duet-core" }
 duet-runtime = { path = "../duet-runtime" }
 duet-supervisor = { path = "../duet-supervisor" }
 duet-host = { path = "../duet-host" }
+duet-webview = { path = "../duet-webview" }
+duet-protocol = { path = "../duet-protocol" }
 tao = "0.36"
 wry = "0.56"
 objc2 = { version = "0.6.4", features = ["catch-all"] }
 objc2-app-kit = "0.3.2"
 objc2-foundation = "0.3.2"
+
+[dev-dependencies]
+# Only `examples/webview_state.rs` needs this: it parses the JSON that
+# `WebviewSurface::eval_with_callback` reads back out of the guest. The
+# library itself does not depend on serde_json — `duet-webview` owns all the
+# encoding the backend actually transmits.
+serde_json = { version = "1", features = ["float_roundtrip"] }
