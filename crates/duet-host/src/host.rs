@@ -83,7 +83,10 @@ impl<B: WindowBackend> Host<B> {
     /// Returns the actions that were executed, which is what tests and logs
     /// assert on. An action whose backend call fails is still returned — the
     /// failure is reported to the supervisor separately, as a
-    /// [`HostEvent::Failed`].
+    /// [`HostEvent::Failed`]. An action this build does not recognise —
+    /// possible if a newer `duet-supervisor` adds a [`SurfaceAction`] variant
+    /// — is ignored rather than treated as fatal, so one unfamiliar action
+    /// cannot take every other surface down with it.
     pub fn tick(&mut self, now: Instant) -> Vec<SurfaceAction> {
         let actions = self.supervisor.tick(now);
         for action in &actions {
@@ -113,13 +116,13 @@ impl<B: WindowBackend> Host<B> {
                 self.drop_subscriptions(id);
                 self.backend.destroy_renderer(id)
             }
-            // `SurfaceAction` is `#[non_exhaustive]`: every variant that
-            // exists today is matched above, but the compiler requires this
-            // arm so a future variant fails loudly here rather than being
-            // silently treated as a no-op.
-            _ => unreachable!(
-                "duet-supervisor added a SurfaceAction variant duet-host does not handle yet"
-            ),
+            // `SurfaceAction` is `#[non_exhaustive]`, so this arm is required
+            // even though every variant that exists today is handled above.
+            // Ignoring an unrecognised action is deliberate: this is the
+            // host's dispatcher, and panicking here would take down every
+            // surface in the process because a newer `duet-supervisor` grew
+            // a variant this build does not know about.
+            _ => Ok(()),
         };
 
         match (action, outcome) {
@@ -424,6 +427,121 @@ mod tests {
             b.calls().last(),
             Some(&BackendCall::AttachView(id)),
             "resume ends in an attach"
+        );
+        rt.shutdown().expect("shutdown should succeed");
+    }
+
+    #[test]
+    fn request_suspend_detaches_a_live_surface_and_reports_the_action() {
+        let (mut h, b, rt) = host();
+        let id = h.register(Policy::Never);
+        h.handle_at(
+            Instant(0),
+            HostEvent::WindowOpened {
+                surface: id,
+                window: WindowId::new(1),
+            },
+        );
+        h.tick(Instant(0));
+        assert_eq!(h.state(id), Some(SurfaceState::Live));
+
+        let action = h.request_suspend(id, Instant(1));
+
+        assert_eq!(
+            action,
+            Some(SurfaceAction::Suspend(id)),
+            "a manual suspend on a Live surface must report the Suspend action"
+        );
+        assert_eq!(
+            b.calls().last(),
+            Some(&BackendCall::DetachView(id)),
+            "the manual suspend must actually detach the view"
+        );
+        rt.shutdown().expect("shutdown should succeed");
+    }
+
+    #[test]
+    fn request_suspend_on_a_non_live_surface_is_a_no_op() {
+        let (mut h, b, rt) = host();
+        let id = h.register(Policy::Never);
+        // Never opened, so the surface is still Cold, not Live.
+
+        let action = h.request_suspend(id, Instant(0));
+
+        assert_eq!(
+            action, None,
+            "suspending only ever applies to a Live surface"
+        );
+        assert_eq!(b.calls(), vec![], "a no-op must not touch the backend");
+        rt.shutdown().expect("shutdown should succeed");
+    }
+
+    #[test]
+    fn request_resume_reattaches_a_suspending_surface_and_reports_the_action() {
+        let (mut h, b, rt) = host();
+        let id = h.register(Policy::OnLastWindowClosed { grace_ms: 10_000 });
+        let w = WindowId::new(1);
+        h.handle_at(
+            Instant(0),
+            HostEvent::WindowOpened {
+                surface: id,
+                window: w,
+            },
+        );
+        h.tick(Instant(0));
+        h.handle_at(
+            Instant(1),
+            HostEvent::WindowClosed {
+                surface: id,
+                window: w,
+            },
+        );
+        h.tick(Instant(1));
+        assert!(
+            matches!(h.state(id), Some(SurfaceState::Suspending { .. })),
+            "the grace period must still be open, got {:?}",
+            h.state(id)
+        );
+
+        let action = h.request_resume(id, Instant(2));
+
+        assert_eq!(
+            action,
+            Some(SurfaceAction::Resume(id)),
+            "a manual resume during the grace period must report the Resume action"
+        );
+        assert_eq!(
+            b.calls().last(),
+            Some(&BackendCall::AttachView(id)),
+            "the manual resume must actually reattach the view"
+        );
+        rt.shutdown().expect("shutdown should succeed");
+    }
+
+    #[test]
+    fn request_resume_on_a_non_suspending_surface_is_a_no_op() {
+        let (mut h, b, rt) = host();
+        let id = h.register(Policy::Never);
+        h.handle_at(
+            Instant(0),
+            HostEvent::WindowOpened {
+                surface: id,
+                window: WindowId::new(1),
+            },
+        );
+        h.tick(Instant(0));
+        assert_eq!(h.state(id), Some(SurfaceState::Live));
+
+        let action = h.request_resume(id, Instant(1));
+
+        assert_eq!(
+            action, None,
+            "resuming only ever cancels a pending suspension"
+        );
+        assert_eq!(
+            b.calls(),
+            vec![BackendCall::StartRenderer(id), BackendCall::AttachView(id)],
+            "a no-op must not perform any further backend call"
         );
         rt.shutdown().expect("shutdown should succeed");
     }
