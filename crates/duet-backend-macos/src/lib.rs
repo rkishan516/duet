@@ -51,7 +51,9 @@
 
 #![deny(missing_docs)]
 
+pub mod backend;
 mod engine;
 pub mod sink;
 
+pub use backend::MacBackend;
 pub use sink::{DuetEvent, ProxySink};

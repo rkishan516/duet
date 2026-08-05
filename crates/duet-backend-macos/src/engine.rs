@@ -19,12 +19,6 @@
 //! `tao` nor `objc2` expose a portable "is this the main thread" check that
 //! would be worth trusting more than the caller's own discipline.
 
-// This module has no consumer yet in its own commit — `MacBackend` (Task 3,
-// `src/backend.rs`) is what calls `FlutterEngine`. Until then every item
-// here is legitimately dead code from `rustc`'s point of view; silenced here
-// rather than left to warn, and removed once `backend.rs` lands.
-#![allow(dead_code)]
-
 use std::panic::{self, AssertUnwindSafe};
 
 use duet_host::BackendError;
@@ -81,6 +75,10 @@ impl FlutterEngine {
     /// function catches and converts, rather than letting it abort the
     /// process or propagate as a panic across this API boundary).
     pub(crate) fn boot(app_framework: &str) -> Result<Self, BackendError> {
+        // SAFETY: `boot_uncaught` requires the caller to be on the main
+        // thread, which this crate documents as a precondition of every
+        // `FlutterEngine` method (see the module docs) rather than something
+        // it can check.
         let engine = catch_to_backend_error(|| unsafe { boot_uncaught(app_framework) })??;
         Ok(FlutterEngine {
             engine,
@@ -106,6 +104,12 @@ impl FlutterEngine {
             ));
         }
         let engine = &self.engine;
+        // SAFETY: `attach_uncaught` requires the caller to be on the main
+        // thread and `engine` to be a live, valid `FlutterEngine*` with no
+        // view controller currently attached. `engine` came from `self`,
+        // which is only ever constructed by `boot` from a successfully
+        // initialized engine, and the `self.controller.is_some()` check just
+        // above enforces the "no view controller attached" half.
         let controller = catch_to_backend_error(|| unsafe { attach_uncaught(engine, window) })??;
         self.controller = Some(controller);
         Ok(())
@@ -128,6 +132,11 @@ impl FlutterEngine {
         let Some(controller) = self.controller.take() else {
             return;
         };
+        // SAFETY: `detach_uncaught` requires the caller to be on the main
+        // thread and `controller` to be a valid, live
+        // `FlutterViewController*` with an attached `.view`. `controller`
+        // was just taken from `self.controller`, which `attach` only ever
+        // populates with a controller it successfully created and attached.
         let _ = panic::catch_unwind(AssertUnwindSafe(|| unsafe {
             detach_uncaught(&controller);
         }));
@@ -151,6 +160,11 @@ impl FlutterEngine {
         }
         self.shut_down = true;
         let engine = &self.engine;
+        // SAFETY: `engine` is `self`'s own live `FlutterEngine*`, and this
+        // method requires the caller to be on the main thread, per this
+        // type's module-level contract. `shutDownEngine` takes no
+        // arguments and its return type is `void`, matching the `()`
+        // annotation below.
         let _ = panic::catch_unwind(AssertUnwindSafe(|| unsafe {
             let _: () = msg_send![engine, shutDownEngine];
         }));
