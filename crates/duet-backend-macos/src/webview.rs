@@ -216,4 +216,97 @@ mod tests {
             "the payload must be the tagged encoding, got {js}"
         );
     }
+
+    /// A guest that speaks the webview IPC channel may be running untrusted
+    /// web content — `request.body()` on the `wry` side is attacker-controlled
+    /// text, not a value this host constructed. `handle_ipc_text` sits
+    /// directly on that trust boundary, so it must be total against
+    /// *hostile* input, not merely against a handful of hand-picked bad
+    /// strings: no panic, no hang (deep recursion must be rejected, not
+    /// walked), and no unbounded echo (a guest must not be able to turn a
+    /// megabyte of garbage into a megabyte of host-produced text, e.g. in a
+    /// log line downstream of this function).
+    #[test]
+    fn hostile_guest_input_cannot_panic_hang_or_echo_unbounded_text() {
+        // The reply to a rejected request is a short, fixed-shape JSON
+        // object; it must never scale with the size of the offending input.
+        // 4096 is generous headroom over the ~100-byte replies this actually
+        // produces — the point is "bounded", not a tight bound.
+        const MAX_REASONABLE_REPLY: usize = 4096;
+
+        let rt = rt();
+        let handle = rt.handle();
+
+        let assert_failed = |text: &str, what: &str| -> serde_json::Value {
+            let reply = handle_ipc_text(&handle, SubscriberId(1), text);
+            let parsed: serde_json::Value = serde_json::from_str(&reply)
+                .unwrap_or_else(|e| panic!("{what}: reply must be valid JSON, got {e}: {reply}"));
+            assert_eq!(
+                parsed["kind"], "failed",
+                "{what}: expected a failed response, got {reply}"
+            );
+            parsed
+        };
+
+        // 200,000 unclosed `[` would overflow the stack of a naive recursive
+        // descent parser well before reaching the end of input. serde_json's
+        // own recursion-limit guard must reject this instead.
+        assert_failed(&"[".repeat(200_000), "200,000-deep nested array");
+
+        // The same guard must hold for a tagged `Value` nested 5,000 deep
+        // inside a real `set` request, not just for raw JSON structure.
+        let mut nested_value = "null".to_string();
+        for _ in 0..5_000 {
+            nested_value = format!(r#"{{"t":"m","v":{{"a":{nested_value}}}}}"#);
+        }
+        assert_failed(
+            &format!(r#"{{"kind":"set","id":"1","path":"a","value":{nested_value}}}"#),
+            "5,000-deep nested tagged value",
+        );
+
+        // A 1 MB path must not be echoed back whole: the failure it produces
+        // has to stay small regardless of how large the offending path was.
+        let huge_path = format!(
+            r#"{{"kind":"get","id":"1","path":"{}]"}}"#,
+            "a".repeat(1_000_000)
+        );
+        let reply = handle_ipc_text(&handle, SubscriberId(1), &huge_path);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&reply).expect("1 MB path: reply must be valid JSON");
+        assert_eq!(parsed["kind"], "failed", "1 MB path: got {reply}");
+        assert!(
+            reply.len() < MAX_REASONABLE_REPLY,
+            "1 MB path: reply must not echo the guest's text, got {} bytes",
+            reply.len()
+        );
+
+        // Likewise for a 1 MB bogus value tag inside a `set`.
+        let huge_tag = format!(
+            r#"{{"kind":"set","id":"1","path":"a","value":{{"t":"{}","v":null}}}}"#,
+            "z".repeat(1_000_000)
+        );
+        let reply = handle_ipc_text(&handle, SubscriberId(1), &huge_tag);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&reply).expect("1 MB value tag: reply must be valid JSON");
+        assert_eq!(parsed["kind"], "failed", "1 MB value tag: got {reply}");
+        assert!(
+            reply.len() < MAX_REASONABLE_REPLY,
+            "1 MB value tag: reply must not echo the guest's text, got {} bytes",
+            reply.len()
+        );
+
+        // A lone UTF-16 surrogate and a raw control character are both
+        // things a hostile guest can put in a JSON string; neither may panic
+        // the JSON parser.
+        assert_failed(
+            r#"{"kind":"get","id":"1","path":"\ud800"}"#,
+            "lone UTF-16 surrogate",
+        );
+        assert_failed(
+            "{\"kind\":\"get\",\"id\":\"1\",\"path\":\"\u{0007}\"}",
+            "raw control character",
+        );
+
+        rt.shutdown().expect("shutdown should succeed");
+    }
 }
