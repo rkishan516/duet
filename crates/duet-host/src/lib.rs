@@ -27,7 +27,7 @@
 pub mod backend;
 pub mod host;
 
-pub use backend::{BackendCall, BackendError, RecordingBackend, WindowBackend};
+pub use backend::{BackendCall, BackendError, Readiness, RecordingBackend, WindowBackend};
 pub use host::Host;
 
 /// These bounds are load-bearing: a backend is moved onto the main thread and
@@ -38,4 +38,5 @@ const _: () = {
     assert_send_sync::<BackendError>();
     assert_send_sync::<BackendCall>();
     assert_send_sync::<RecordingBackend>();
+    assert_send_sync::<Readiness>();
 };
