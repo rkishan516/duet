@@ -51,6 +51,7 @@
 
 #![deny(missing_docs)]
 
+mod engine;
 pub mod sink;
 
 pub use sink::{DuetEvent, ProxySink};
