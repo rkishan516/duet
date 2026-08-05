@@ -138,6 +138,19 @@ impl MacBackend {
     pub fn window(&self, surface: SurfaceId) -> Option<&Window> {
         self.windows.get(&surface)
     }
+
+    /// Borrows the Flutter engine running for `surface`, if any.
+    ///
+    /// The only way to obtain a [`FlutterEngine`] from outside this crate,
+    /// and it exists for exactly one caller shape: building a
+    /// [`crate::FlutterSurface`] against the engine
+    /// [`WindowBackend::start_renderer`] just booted. `FlutterEngine`'s own
+    /// methods are all `pub(crate)`, so a borrow handed out here cannot be
+    /// used to boot, attach, detach or shut the engine down behind this
+    /// backend's back — that stays the trait impl's business.
+    pub fn engine(&self, surface: SurfaceId) -> Option<&FlutterEngine> {
+        self.engines.get(&surface)
+    }
 }
 
 impl WindowBackend for MacBackend {

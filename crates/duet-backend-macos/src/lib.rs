@@ -53,9 +53,12 @@
 
 pub mod backend;
 mod engine;
+mod flutter_surface;
 pub mod sink;
 mod webview;
 
 pub use backend::MacBackend;
+pub use engine::FlutterEngine;
+pub use flutter_surface::{DUET_RPC_CHANNEL, FlutterSurface};
 pub use sink::{DuetEvent, ProxySink};
 pub use webview::WebviewSurface;

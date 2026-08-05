@@ -17,6 +17,10 @@ duet-protocol = { path = "../duet-protocol" }
 tao = "0.36"
 wry = "0.56"
 objc2 = { version = "0.6.4", features = ["catch-all"] }
+# `FlutterBinaryMessageHandler` and `FlutterBinaryReply` are Objective-C
+# blocks (`FlutterBinaryMessenger.h:21,30`); `FlutterSurface` cannot register
+# a platform-channel handler without constructing one.
+block2 = "0.6.2"
 objc2-app-kit = "0.3.2"
 objc2-foundation = "0.3.2"
 

@@ -70,7 +70,6 @@ use std::time::{Duration, Instant as StdInstant};
 
 use duet_backend_macos::{DuetEvent, ProxySink, WebviewSurface};
 use duet_core::{Notification, Path, SubscriberId, Value};
-use duet_protocol::Push;
 use duet_runtime::Runtime;
 use tao::dpi::LogicalSize;
 use tao::event::{Event, StartCause};
@@ -314,7 +313,7 @@ fn deliver_pushes(app: &mut App, batch: Vec<Notification>) {
             continue;
         }
         app.notifications_seen += 1;
-        match app.surface.push(&Push::Notification(note)) {
+        match app.surface.push(&note) {
             Ok(()) => app.pushes_delivered += 1,
             Err(e) => println!("[webview_state] pushing a notification failed: {e}"),
         }
