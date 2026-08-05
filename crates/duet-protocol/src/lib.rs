@@ -25,5 +25,51 @@
 #![forbid(unsafe_code)]
 
 pub mod message;
+mod wire;
 
 pub use message::{Push, Request, RequestId, Response};
+
+/// Encodes a [`Request`] for transmission.
+pub fn encode_request(request: &Request) -> serde_json::Value {
+    wire::encode_request(request)
+}
+
+/// Decodes a [`Request`] received from a guest.
+///
+/// # Errors
+///
+/// A [`duet_codec::CodecError`] describing the first structural problem found.
+/// Total over all JSON input: never panics, whatever a guest sends.
+pub fn decode_request(json: &serde_json::Value) -> Result<Request, duet_codec::CodecError> {
+    wire::decode_request(json)
+}
+
+/// Encodes a [`Response`] for transmission.
+pub fn encode_response(response: &Response) -> serde_json::Value {
+    wire::encode_response(response)
+}
+
+/// Decodes a [`Response`] received from the host.
+///
+/// # Errors
+///
+/// A [`duet_codec::CodecError`] describing the first structural problem found.
+/// Total over all JSON input: never panics, whatever the host sends.
+pub fn decode_response(json: &serde_json::Value) -> Result<Response, duet_codec::CodecError> {
+    wire::decode_response(json)
+}
+
+/// Encodes a [`Push`] for transmission.
+pub fn encode_push(push: &Push) -> serde_json::Value {
+    wire::encode_push(push)
+}
+
+/// Decodes a [`Push`] received from the host.
+///
+/// # Errors
+///
+/// A [`duet_codec::CodecError`] describing the first structural problem found.
+/// Total over all JSON input: never panics, whatever the host sends.
+pub fn decode_push(json: &serde_json::Value) -> Result<Push, duet_codec::CodecError> {
+    wire::decode_push(json)
+}
