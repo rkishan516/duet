@@ -251,21 +251,81 @@ final class DuetList extends DuetValue {
 }
 
 /// `Value::Map`.
+///
+/// [entries] is an ordinary Dart map, so it iterates in *insertion* order.
+/// [toJson] therefore sorts: see [compareDuetMapKeys] for the canonical order
+/// and why it is not `String.compareTo`.
 final class DuetMap extends DuetValue {
   const DuetMap(this.entries);
 
-  /// The wrapped key-value entries.
+  /// The wrapped key-value entries, in whatever order the caller built them.
   final Map<String, DuetValue> entries;
+
+  /// Emits the keys in the wire's canonical order, **not** insertion order.
+  ///
+  /// `jsonEncode` walks a Dart `Map` in insertion order, so without this sort
+  /// the same logical value encodes to different bytes depending on how it was
+  /// built — and never matches Rust's `BTreeMap` output. Sorting at encode time
+  /// is what makes the encoding a function of the value alone.
   @override
-  Map<String, Object?> toJson() => <String, Object?>{
-    't': 'm',
-    'v': <String, Object?>{
-      for (final MapEntry<String, DuetValue> e in entries.entries)
-        e.key: e.value.toJson(),
-    },
-  };
+  Map<String, Object?> toJson() {
+    final List<MapEntry<String, DuetValue>> sorted =
+        entries.entries.toList(growable: false)
+          ..sort(
+            (MapEntry<String, DuetValue> a, MapEntry<String, DuetValue> b) =>
+                compareDuetMapKeys(a.key, b.key),
+          );
+    return <String, Object?>{
+      't': 'm',
+      'v': <String, Object?>{
+        for (final MapEntry<String, DuetValue> e in sorted)
+          e.key: e.value.toJson(),
+      },
+    };
+  }
+
   @override
   String toString() => 'Map($entries)';
+}
+
+/// Orders two map keys by **code point** — the Duet wire's canonical map key
+/// order, and equivalently UTF-8 byte order (UTF-8 is constructed so that
+/// byte-wise comparison of encoded strings agrees with code-point comparison).
+/// This is the order Rust's `BTreeMap<String, _>` produces for free, which is
+/// why `duet-codec` needs no sorting code at all.
+///
+/// # Do NOT replace this with `a.compareTo(b)`
+///
+/// A future maintainer will look at this and see a hand-rolled version of the
+/// built-in. It is not. Dart's `String.compareTo` compares **UTF-16 code
+/// units**, and those disagree with code points above the BMP:
+///
+/// - `U+1F600` (😀) is encoded in UTF-16 as the surrogate pair `D83D DE00`.
+/// - `0xD83D` is numerically **less than** `0xE000`.
+/// - So `compareTo` sorts `U+1F600` *before* `U+E000`, while code-point order —
+///   and Rust — sorts it *after*.
+///
+/// Every key below `U+D800` compares identically under both rules, so a test
+/// using ASCII or Latin-1 keys passes either way. That is precisely how this
+/// divergence went unnoticed; the pinned test uses `U+E000`, `U+FFFD` and
+/// `U+1F600` deliberately.
+///
+/// Iterating `runes` is what makes this correct: it yields code points, pairing
+/// surrogates back up, whereas indexing a `String` yields code units.
+int compareDuetMapKeys(String a, String b) {
+  final Iterator<int> aRunes = a.runes.iterator;
+  final Iterator<int> bRunes = b.runes.iterator;
+  while (true) {
+    final bool aHasNext = aRunes.moveNext();
+    final bool bHasNext = bRunes.moveNext();
+    // One ran out: the shorter string is a prefix of the longer, so it sorts
+    // first. Both ran out together means the strings are equal.
+    if (!aHasNext) return bHasNext ? -1 : 0;
+    if (!bHasNext) return 1;
+    final int aRune = aRunes.current;
+    final int bRune = bRunes.current;
+    if (aRune != bRune) return aRune < bRune ? -1 : 1;
+  }
 }
 
 /// Decodes an `"f"` payload: either a JSON number, or one of the four

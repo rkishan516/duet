@@ -11,6 +11,21 @@ use duet_core::{Notification, Path, SubscriptionId, Value};
 /// numbers are IEEE-754 doubles, so a value above 2^53 would corrupt in the
 /// webview while surviving in Dart. `duet-codec` carries `Int` and its ids the
 /// same way for the same reason.
+///
+/// # Invariant: `0..=`[`duet_codec::MAX_WIRE_ID`]
+///
+/// The inner type is `u64`, but the **wire domain is `i64::MAX`**, because
+/// Dart's native `int` is 64-bit signed and cannot parse anything above it.
+/// Constructing a larger `RequestId` is possible and is a bug in the
+/// constructing code.
+///
+/// It is not *prevented* here — a validated constructor would make this a
+/// fallible newtype on a hot path for a bound reachable only after ~9.2 × 10^18
+/// sequential requests. Instead the encoder emits whatever it is given,
+/// verbatim, and every decoder in every language refuses an out-of-domain id.
+/// A violation therefore fails loudly at the first decode rather than being
+/// clamped into a *different* id (answering the wrong request) or accepted by
+/// Rust and Dart alike (which is the divergence this bound exists to close).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RequestId(pub u64);
 
