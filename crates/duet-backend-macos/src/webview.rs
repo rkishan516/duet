@@ -87,4 +87,34 @@ impl WebviewSurface {
             .evaluate_script(script)
             .map_err(|e| BackendError::Unavailable(format!("eval: {e}")))
     }
+
+    /// Evaluates JavaScript and hands `script`'s return value to `callback`
+    /// as JSON text.
+    ///
+    /// This is **observation only** — the protocol never travels this way.
+    /// `wry` runs a script's return value through `NSJSONSerialization`, so a
+    /// script that returns an already-stringified JSON string comes back
+    /// double-encoded (Spike B hit exactly that; see
+    /// `spikes/spike-b-macos/src/main.rs:688`). Always return a plain
+    /// JavaScript object. Real replies and pushes go through [`eval`] with the
+    /// payload embedded in the script, which has no such step.
+    ///
+    /// `callback` runs later, on the main thread, from the webview's
+    /// completion handler — not before this call returns. `wry` requires it to
+    /// be `Send + 'static`, so it cannot borrow from the caller.
+    ///
+    /// [`eval`]: WebviewSurface::eval
+    ///
+    /// # Errors
+    ///
+    /// [`BackendError::Unavailable`] if the script could not be evaluated.
+    pub fn eval_with_callback(
+        &self,
+        script: &str,
+        callback: impl Fn(String) + Send + 'static,
+    ) -> Result<(), BackendError> {
+        self.webview
+            .evaluate_script_with_callback(script, callback)
+            .map_err(|e| BackendError::Unavailable(format!("eval with callback: {e}")))
+    }
 }
