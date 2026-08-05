@@ -199,12 +199,17 @@ impl WindowBackend for MacBackend {
     /// surface. Detaching when no view is attached is not an error — the
     /// underlying [`FlutterEngine::detach`] is a no-op in that case — only a
     /// missing renderer is.
+    ///
+    /// Also [`BackendError::Unavailable`] if [`FlutterEngine::detach`]'s own
+    /// `flutter/lifecycle` sends failed — see its docs (`FINDINGS.md` F1):
+    /// the view is still detached either way, but the caller should know the
+    /// backing-store retry storm this exists to prevent may not actually be
+    /// prevented this time.
     fn detach_view(&mut self, surface: SurfaceId) -> Result<(), BackendError> {
         let engine = self.engines.get_mut(&surface).ok_or_else(|| {
             BackendError::Unavailable("no renderer running for this surface".to_string())
         })?;
-        engine.detach();
-        Ok(())
+        engine.detach()
     }
 
     /// Shuts the surface's engine down and forgets it.

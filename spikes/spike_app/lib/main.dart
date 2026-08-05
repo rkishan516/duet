@@ -47,7 +47,8 @@ class MyHomePage extends StatefulWidget {
   State<MyHomePage> createState() => _MyHomePageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateMixin {
+class _MyHomePageState extends State<MyHomePage>
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   // Counts every vsync tick this widget has been asked to repaint, driven by
   // Flutter's own scheduler - NOT by anything the Rust host does. This is the
   // "Flutter keeps making independent progress" proof for exit criterion 2.
@@ -68,6 +69,13 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
   @override
   void initState() {
     super.initState();
+    // duet-backend-macos F1 fix verification: the Rust host now sends real
+    // AppLifecycleState transitions on flutter/lifecycle around detach and
+    // attach (see crates/duet-backend-macos/src/engine.rs and FINDINGS.md).
+    // This print independently confirms a transition actually arrived at
+    // the framework, rather than inferring it from the absence of the
+    // "Could not create the embedder backing store" retry storm.
+    WidgetsBinding.instance.addObserver(this);
     _spikeBChannel.setMethodCallHandler(_handleMethodCall);
     _ticker = createTicker((_) {
       if (!mounted) return;
@@ -127,7 +135,14 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // ignore: avoid_print
+    print('[spike_app] didChangeAppLifecycleState: $state');
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _ticker.dispose();
     _spikeBChannel.setMethodCallHandler(null);
     super.dispose();
