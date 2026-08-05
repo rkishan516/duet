@@ -422,11 +422,13 @@ version = "0.1.0"
 dependencies = [
  "duet-core",
  "duet-host",
+ "duet-protocol",
  "duet-runtime",
  "duet-supervisor",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
+ "serde_json",
  "tao",
  "wry",
 ]
