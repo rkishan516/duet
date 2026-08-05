@@ -44,9 +44,27 @@ pub(crate) fn encode_value(value: &Value) -> Json {
     }
 }
 
-/// JSON has no representation for non-finite floats, so they travel as string
-/// sentinels. Without this they would decode back as `Null`, changing the
-/// value's variant rather than its magnitude.
+/// Encodes an `f64`, using a string sentinel for the four values that have no
+/// portable JSON-number spelling.
+///
+/// Exactly four `f64` values cannot survive a JSON number round trip through
+/// every guest language, and all four are sentinels here:
+///
+/// | value | sentinel | why a number will not do |
+/// |---|---|---|
+/// | NaN | `"NaN"` | JSON has no literal; would decode back as `Null` |
+/// | +∞ | `"Infinity"` | JSON has no literal |
+/// | −∞ | `"-Infinity"` | JSON has no literal |
+/// | −0.0 | `"-0"` | JSON *has* the literal `-0`, but `JSON.stringify(-0)` is `"0"` in JavaScript, so a JS guest cannot emit it |
+///
+/// The first three change the value's *variant* if untagged; the fourth
+/// changes only its sign bit, which is why it went unnoticed — `-0.0 == 0.0`
+/// is true, so equality assertions cannot see the loss. The sign is still
+/// observable (`1.0 / -0.0` is −∞) and must survive the wire.
+///
+/// Every other `f64` has a faithful JSON-number spelling, so this set is
+/// complete: it needs to grow only if a new float value loses information in
+/// some guest's JSON serializer.
 fn encode_float(f: f64) -> Json {
     if f.is_nan() {
         return Json::String("NaN".to_string());
@@ -56,6 +74,11 @@ fn encode_float(f: f64) -> Json {
     }
     if f == f64::NEG_INFINITY {
         return Json::String("-Infinity".to_string());
+    }
+    // `f == 0.0` is true for BOTH zeros, so the sign bit is the only way to
+    // tell them apart. Positive zero falls through to the number path below.
+    if f == 0.0 && f.is_sign_negative() {
+        return Json::String("-0".to_string());
     }
     // `f` is finite here — NaN and both infinities are handled above — and
     // `serde_json::Number::from_f64` returns `None` only for non-finite
@@ -187,6 +210,15 @@ pub(crate) fn decode_value(json: &Json) -> Result<Value, CodecError> {
     }
 }
 
+/// Decodes an `"f"` payload.
+///
+/// Deliberately wider than [`encode_float`]: any JSON number is accepted, not
+/// only the spellings this crate emits. `{"t":"f","v":1}` decodes to
+/// `Float(1.0)`, because a guest hand-building a value has no way to force a
+/// decimal point — `JSON.stringify(1.0)` is `"1"` in JavaScript. For the same
+/// reason a literal JSON `-0` is still accepted alongside the `"-0"` sentinel:
+/// a guest that *can* emit it (Rust, Dart) should not be forced to use the
+/// sentinel, and `serde_json` preserves the sign of `-0` through `as_f64`.
 fn decode_float(payload: &Json) -> Result<Value, CodecError> {
     if let Some(n) = payload.as_f64() {
         return Ok(Value::Float(n));
@@ -195,6 +227,9 @@ fn decode_float(payload: &Json) -> Result<Value, CodecError> {
         Some("NaN") => Ok(Value::Float(f64::NAN)),
         Some("Infinity") => Ok(Value::Float(f64::INFINITY)),
         Some("-Infinity") => Ok(Value::Float(f64::NEG_INFINITY)),
+        // Negative zero: JavaScript cannot spell it as a JSON number, so this
+        // sentinel is the only way a JS guest can send one. See `encode_float`.
+        Some("-0") => Ok(Value::Float(-0.0)),
         Some(other) => Err(CodecError::BadFloat(other.to_string())),
         None => Err(CodecError::BadFloat(
             "payload must be a number or a sentinel string".to_string(),
@@ -270,6 +305,60 @@ mod tests {
             encode_value(&Value::Float(f64::NEG_INFINITY)),
             json(r#"{"t":"f","v":"-Infinity"}"#)
         );
+    }
+
+    #[test]
+    fn negative_zero_encodes_as_a_string_sentinel() {
+        // JSON.stringify(-0) is "0" in JavaScript, so a JS guest cannot express
+        // negative zero as a JSON number at all. Encoding it as a sentinel keeps
+        // the sign observable in every guest language. NaN and the infinities are
+        // sentinels for the same reason.
+        assert_eq!(
+            encode_value(&Value::Float(-0.0)),
+            serde_json::json!({"t": "f", "v": "-0"})
+        );
+        // Positive zero stays a JSON number — it has a portable spelling.
+        assert_eq!(
+            encode_value(&Value::Float(0.0)),
+            serde_json::json!({"t": "f", "v": 0.0})
+        );
+    }
+
+    #[test]
+    fn negative_zero_round_trips_with_its_sign() {
+        // Compare bits, not values: -0.0 == 0.0 is true in IEEE 754, so an
+        // equality assertion here would pass even if the sign were lost.
+        for text in [
+            r#"{"t":"f","v":"-0"}"#,
+            r#"{"t":"f","v":-0.0}"#,
+            r#"{"t":"f","v":-0}"#,
+        ] {
+            let json: serde_json::Value = serde_json::from_str(text).expect("valid JSON");
+            match decode_value(&json) {
+                Ok(Value::Float(f)) => assert_eq!(
+                    f.to_bits(),
+                    (-0.0f64).to_bits(),
+                    "{text} must decode to negative zero, got bits {:#018x}",
+                    f.to_bits()
+                ),
+                other => panic!("{text} should decode to a float, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn the_float_decoder_is_wider_than_the_encoder() {
+        // The encoder emits a JSON float or one of four sentinels; the decoder
+        // deliberately accepts more, because a guest hand-building a value has
+        // no reason to know that `1` is not an acceptable spelling of `1.0`.
+        // A JS guest in particular cannot control this: JSON.stringify(1.0)
+        // is "1".
+        for text in [r#"{"t":"f","v":1}"#, r#"{"t":"f","v":0}"#] {
+            match decode_value(&json(text)) {
+                Ok(Value::Float(_)) => {}
+                other => panic!("{text} should decode to a float, got {other:?}"),
+            }
+        }
     }
 
     #[test]
