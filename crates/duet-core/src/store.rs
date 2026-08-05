@@ -19,6 +19,12 @@ pub struct SubscriberId(pub u64);
 /// Ids are minted by [`Store::subscribe`] in increasing order and are never
 /// reused, even after [`Store::unsubscribe`] removes the subscription that
 /// held one.
+///
+/// **Not a capability.** Ids are sequential small integers drawn from a
+/// counter starting at zero, so knowing one proves nothing about who owns
+/// it and guessing another guest's is trivial. Anything that acts on a
+/// subscription on a guest's behalf must check the owning [`SubscriberId`]
+/// too — which is exactly why [`Store::unsubscribe`] takes one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SubscriptionId(pub u64);
 
@@ -162,14 +168,31 @@ impl Store {
         (id, snapshot)
     }
 
-    /// Removes one subscription by id.
+    /// Removes one subscription owned by `subscriber`.
     ///
-    /// Returns `true` if a subscription with this id was present and
-    /// removed, `false` if no such subscription existed (already removed,
-    /// or an id from a different `Store`).
-    pub fn unsubscribe(&mut self, id: SubscriptionId) -> bool {
+    /// Returns `true` if a subscription matching **both** `subscriber` and
+    /// `id` was present and removed, `false` otherwise — it was already
+    /// removed, the id came from a different `Store`, or it belongs to a
+    /// different subscriber.
+    ///
+    /// **`subscriber` is a trust boundary, not a convenience.** Each guest
+    /// (the Flutter surface, a webview that may be running untrusted web
+    /// content) is a separate principal, and [`SubscriptionId`]s are small
+    /// sequential integers minted from a counter starting at zero — so a
+    /// hostile guest needs no information whatsoever to name another guest's
+    /// subscription, it simply guesses a small number. Matching on the owner
+    /// as well is what stops one guest silencing another's updates. This is
+    /// the removal-side counterpart of the rule that a guest cannot *create*
+    /// a subscription as another guest: `duet_protocol`'s `Request::Subscribe`
+    /// deliberately carries no [`SubscriberId`], because the host supplies it.
+    ///
+    /// Callers must not turn a `false` return into a distinct error visible to
+    /// a guest; see `duet_protocol::dispatch` for why that would hand a guest
+    /// an oracle for probing which ids exist.
+    pub fn unsubscribe(&mut self, subscriber: SubscriberId, id: SubscriptionId) -> bool {
         let before = self.subscriptions.len();
-        self.subscriptions.retain(|s| s.id != id);
+        self.subscriptions
+            .retain(|s| s.id != id || s.subscriber != subscriber);
         self.subscriptions.len() != before
     }
 
@@ -353,8 +376,41 @@ mod tests {
     fn unsubscribe_removes_the_subscription() {
         let mut store = Store::new(sample());
         let (id, _) = store.subscribe(SubscriberId(1), Path::root());
-        assert!(store.unsubscribe(id));
-        assert!(!store.unsubscribe(id), "second removal should report false");
+        assert!(store.unsubscribe(SubscriberId(1), id));
+        assert!(
+            !store.unsubscribe(SubscriberId(1), id),
+            "second removal should report false"
+        );
+        // The `true` above must mean the subscription is really gone, not just
+        // that the call reported success: a later write must notify nobody.
+        assert!(
+            store
+                .set(&p("editor.zoom"), Value::Float(2.0))
+                .expect("write should succeed")
+                .is_empty(),
+            "a removed subscription must stop receiving notifications"
+        );
+    }
+
+    #[test]
+    fn a_subscriber_cannot_unsubscribe_another_subscribers_subscription() {
+        // Guest isolation: SubscriptionIds are small sequential integers, so a
+        // hostile guest can simply guess them. Removal must therefore be scoped
+        // to the owner, exactly as Request::Subscribe refuses to let a guest name
+        // its own SubscriberId.
+        let mut store = Store::new(Value::map([("a", Value::Int(1))]));
+        let path = Path::parse("a").expect("path");
+        let (id, _) = store.subscribe(SubscriberId(1), path.clone());
+
+        assert!(
+            !store.unsubscribe(SubscriberId(2), id),
+            "a different subscriber must not be able to remove this subscription"
+        );
+        assert_eq!(
+            store.drop_subscriber(SubscriberId(1)),
+            1,
+            "the owner's subscription must survive another guest's attempt"
+        );
     }
 
     #[test]
@@ -886,7 +942,10 @@ mod tests {
             "test premise requires these ids to differ"
         );
 
-        assert!(!store_a.unsubscribe(id_from_b));
+        // Presented under the *owner's* subscriber id, so this is a pure
+        // unknown-id check: it must fail on the id alone, with the owner
+        // check satisfied and therefore unable to mask the result.
+        assert!(!store_a.unsubscribe(SubscriberId(2), id_from_b));
 
         // `store_a`'s own subscription must still be intact.
         let notes = store_a.set(&p("editor.zoom"), Value::Float(2.0)).unwrap();
@@ -898,9 +957,34 @@ mod tests {
     fn subscription_ids_are_never_reused_after_unsubscribe() {
         let mut store = Store::new(sample());
         let (id1, _) = store.subscribe(SubscriberId(1), Path::root());
-        store.unsubscribe(id1);
+        assert!(
+            store.unsubscribe(SubscriberId(1), id1),
+            "the removal this test's premise depends on must actually happen"
+        );
         let (id2, _) = store.subscribe(SubscriberId(1), Path::root());
         assert_ne!(id1, id2);
+    }
+
+    /// The owner check must be an *additional* condition, not a replacement
+    /// for the id check. An implementation that matched on `subscriber` alone
+    /// would pass every other test in this file — including the hijack test,
+    /// since that attacker owns nothing — while silently removing all of a
+    /// guest's subscriptions on any single unsubscribe.
+    #[test]
+    fn unsubscribe_removes_only_the_named_subscription_not_every_one_the_owner_holds() {
+        let mut store = Store::new(sample());
+        let subscriber = SubscriberId(1);
+        let (zoom, _) = store.subscribe(subscriber, p("editor.zoom"));
+        let (theme, _) = store.subscribe(subscriber, p("editor.theme"));
+
+        assert!(store.unsubscribe(subscriber, zoom));
+
+        assert_eq!(
+            store.drop_subscriber(subscriber),
+            1,
+            "the owner's other subscription must be untouched"
+        );
+        assert_ne!(zoom, theme, "test premise requires distinct ids");
     }
 
     #[test]

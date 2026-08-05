@@ -9,7 +9,9 @@ use crate::message::{Request, RequestId, Response};
 ///
 /// `subscriber` is supplied by the **host**, from its own `SurfaceId` mapping —
 /// never by the guest. [`Request::Subscribe`] carries no subscriber precisely so
-/// that one guest cannot subscribe as another and receive its notifications.
+/// that one guest cannot subscribe as another and receive its notifications, and
+/// [`Request::Unsubscribe`] is scoped to this same `subscriber` so that one
+/// guest cannot silence another's subscription by guessing its id.
 ///
 /// Never fails: every error becomes a [`Response::Failed`] carrying a message.
 /// A guest that sent a well-formed request always gets a well-formed answer,
@@ -33,13 +35,24 @@ pub fn dispatch(store: &StoreHandle, subscriber: SubscriberId, request: Request)
             },
             Err(e) => failed(id, e),
         },
-        // Answering `Done` regardless of whether the subscription was present
-        // keeps this idempotent: a guest retrying after a dropped response must
-        // not see a failure for succeeding twice.
-        Request::Unsubscribe { subscription, .. } => match store.unsubscribe(subscription) {
-            Ok(_) => Response::Done { id },
-            Err(e) => failed(id, e),
-        },
+        // Removal is scoped to `subscriber` — the *host-supplied* id, never one
+        // the guest names — so a guest cannot remove another guest's
+        // subscription by guessing its small sequential `SubscriptionId`.
+        //
+        // Answering `Done` regardless of what the store reported is
+        // deliberate, and load-bearing in two ways. It keeps this idempotent:
+        // a guest retrying after a dropped response must not see a failure for
+        // succeeding twice. And it keeps the answer uniform across "removed",
+        // "never existed", and "belongs to another guest" — reporting `Failed`
+        // for a refused removal would hand a guest an oracle for probing which
+        // subscription ids are live and which are someone else's. Do not
+        // "improve" this by surfacing the store's `bool`.
+        Request::Unsubscribe { subscription, .. } => {
+            match store.unsubscribe(subscriber, subscription) {
+                Ok(_) => Response::Done { id },
+                Err(e) => failed(id, e),
+            }
+        }
     }
 }
 
@@ -273,6 +286,98 @@ mod tests {
             ),
             Response::Done { id: RequestId(9) }
         );
+        rt.shutdown().expect("shutdown should succeed");
+    }
+
+    #[test]
+    fn one_guest_cannot_unsubscribe_another_guests_subscription() {
+        // The layer a guest actually reaches. `SubscriptionId`s are small
+        // sequential integers, so guest B needs no information at all to name
+        // guest A's subscription — it just guesses. The counterpart of the
+        // rule pinned by `dispatch_uses_the_subscriber_the_host_supplied...`:
+        // a guest may neither subscribe *as* another guest nor unsubscribe
+        // *for* one.
+        let rt = rt();
+        let handle = rt.handle();
+        let victim = SubscriberId(1);
+        let attacker = SubscriberId(2);
+
+        let subscription = match dispatch(
+            &handle,
+            victim,
+            Request::Subscribe {
+                id: RequestId(20),
+                path: Path::root(),
+            },
+        ) {
+            Response::Subscribed { subscription, .. } => subscription,
+            other => panic!("expected Subscribed, got {other:?}"),
+        };
+
+        // The attacker's attempt is answered `Done` — see
+        // `unsubscribe_answers_done_whether_or_not_it_was_present` for why the
+        // answer is deliberately uniform — but it must not actually remove
+        // anything.
+        assert_eq!(
+            dispatch(
+                &handle,
+                attacker,
+                Request::Unsubscribe {
+                    id: RequestId(21),
+                    subscription
+                }
+            ),
+            Response::Done { id: RequestId(21) },
+            "a refused unsubscribe must be indistinguishable from a successful one"
+        );
+
+        assert_eq!(
+            handle.drop_subscriber(victim).expect("drop"),
+            1,
+            "the victim's subscription must have survived the attacker's guess"
+        );
+
+        rt.shutdown().expect("shutdown should succeed");
+    }
+
+    #[test]
+    fn a_guest_can_still_unsubscribe_its_own_subscription() {
+        // The positive control for the test above: scoping removal to the owner
+        // must not have made removal impossible, which would let that test pass
+        // against an implementation that simply never removes anything.
+        let rt = rt();
+        let handle = rt.handle();
+        let subscriber = SubscriberId(1);
+
+        let subscription = match dispatch(
+            &handle,
+            subscriber,
+            Request::Subscribe {
+                id: RequestId(22),
+                path: Path::root(),
+            },
+        ) {
+            Response::Subscribed { subscription, .. } => subscription,
+            other => panic!("expected Subscribed, got {other:?}"),
+        };
+
+        assert_eq!(
+            dispatch(
+                &handle,
+                subscriber,
+                Request::Unsubscribe {
+                    id: RequestId(23),
+                    subscription
+                }
+            ),
+            Response::Done { id: RequestId(23) }
+        );
+        assert_eq!(
+            handle.drop_subscriber(subscriber).expect("drop"),
+            0,
+            "the owner's own unsubscribe must really have removed it"
+        );
+
         rt.shutdown().expect("shutdown should succeed");
     }
 
