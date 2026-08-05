@@ -27,11 +27,12 @@
 #![forbid(unsafe_code)]
 
 mod base64;
-mod canonical;
+pub mod canonical;
 pub mod error;
 mod value;
 mod wire;
 
+pub use canonical::{is_canonical_signed_decimal, is_canonical_unsigned_digits};
 pub use error::CodecError;
 
 /// Encodes a [`duet_core::Value`] into its tagged JSON representation.

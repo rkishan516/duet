@@ -16,6 +16,12 @@ fn corpus() -> Vec<Value> {
         Value::Int(i64::MIN),
         Value::Int(9_007_199_254_740_993), // 2^53 + 1, unsafe in JS as a number
         Value::Float(0.0),
+        // WARNING: the `assert_eq!` in the round-trip tests below CANNOT see
+        // whether this one keeps its sign. `Value` derives `PartialEq`, so
+        // `Float(-0.0) == Float(0.0)` is true — the corpus contained this
+        // value the whole time the encoder was dropping its sign in
+        // JavaScript. `negative_zero_survives_the_text_hop_with_its_sign`
+        // below is the assertion that actually holds it.
         Value::Float(-0.0),
         Value::Float(1.5),
         Value::Float(f64::MIN),
@@ -109,6 +115,42 @@ fn nan_round_trips_through_text_as_nan() {
     match decode_value(&reparsed).expect("decodes") {
         Value::Float(f) => assert!(f.is_nan(), "expected NaN, got {f}"),
         other => panic!("NaN must remain a Float, got {other:?}"),
+    }
+}
+
+#[test]
+fn negative_zero_survives_the_text_hop_with_its_sign() {
+    // The corpus above holds `Float(-0.0)`, but `assert_eq!` cannot check it:
+    // `-0.0 == 0.0` is true, so the sign could vanish with every existing test
+    // still green. This compares bits instead.
+    //
+    // The sign matters observably — `1.0 / -0.0` is −∞ while `1.0 / 0.0` is
+    // +∞ — and JavaScript cannot spell negative zero as a JSON number
+    // (`JSON.stringify(-0)` is `"0"`), which is why it is encoded as the
+    // `"-0"` sentinel rather than a number.
+    let text = serde_json::to_string(&encode_value(&Value::Float(-0.0))).expect("encodes");
+    assert_eq!(
+        text, r#"{"t":"f","v":"-0"}"#,
+        "negative zero must encode as the sentinel a JS guest can also emit"
+    );
+    let reparsed: serde_json::Value = serde_json::from_str(&text).expect("parses");
+    match decode_value(&reparsed).expect("decodes") {
+        Value::Float(f) => assert_eq!(
+            f.to_bits(),
+            (-0.0f64).to_bits(),
+            "negative zero lost its sign through the text hop: got bits {:#018x}",
+            f.to_bits()
+        ),
+        other => panic!("negative zero must stay a Float, got {other:?}"),
+    }
+
+    // The control: positive zero must not acquire a sign.
+    let text = serde_json::to_string(&encode_value(&Value::Float(0.0))).expect("encodes");
+    assert_eq!(text, r#"{"t":"f","v":0.0}"#);
+    let reparsed: serde_json::Value = serde_json::from_str(&text).expect("parses");
+    match decode_value(&reparsed).expect("decodes") {
+        Value::Float(f) => assert_eq!(f.to_bits(), 0.0f64.to_bits()),
+        other => panic!("positive zero must stay a Float, got {other:?}"),
     }
 }
 

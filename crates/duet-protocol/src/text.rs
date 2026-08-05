@@ -45,6 +45,15 @@ const FALLBACK_FAILURE: &str =
 /// A guest waits on its request id. When the body is undecodable but the id is
 /// readable, returning it lets the guest fail that specific call instead of
 /// hanging.
+///
+/// "Readable" means **canonical** (see
+/// [`duet_codec::is_canonical_unsigned_digits`]). A non-canonical id is not
+/// recovered, and the failure carries `RequestId(0)` instead. Recovering `7`
+/// from `"007"` would reintroduce the very mismatch that rule exists to
+/// prevent: the reply would name an id the guest never sent, so a guest
+/// keying its pending map by the string it sent would hang anyway — while
+/// this function's whole purpose is to stop exactly that hang. `RequestId(0)`
+/// is the honest answer: this reply answers no request the guest can name.
 fn decode(text: &str) -> Result<crate::Request, (RequestId, String)> {
     let json: serde_json::Value = match serde_json::from_str(text) {
         Ok(j) => j,
@@ -53,6 +62,7 @@ fn decode(text: &str) -> Result<crate::Request, (RequestId, String)> {
     let id = json
         .get("id")
         .and_then(|v| v.as_str())
+        .filter(|s| duet_codec::is_canonical_unsigned_digits(s))
         .and_then(|s| s.parse::<u64>().ok())
         .map(RequestId)
         .unwrap_or(RequestId(0));
@@ -164,6 +174,28 @@ mod tests {
             parsed["id"], "77",
             "the failure must name the request it answers"
         );
+        rt.shutdown().expect("shutdown should succeed");
+    }
+
+    #[test]
+    fn a_non_canonical_id_is_not_recovered() {
+        // Recovery exists so a guest can fail one specific call. Recovering
+        // `7` from `"007"` would defeat that: the guest keys its pending map
+        // by the string it SENT, so a reply carrying `"7"` never matches and
+        // the call hangs anyway — silently. `RequestId(0)` is the honest
+        // answer: "this reply answers no request you can name".
+        let rt = rt();
+        for raw in ["007", "+1", "0000000000000000000007", " 1", "1 ", ""] {
+            let text = format!(r#"{{"kind":"get","id":"{raw}","path":"a.[0]"}}"#);
+            let reply = handle_text(&rt.handle(), SubscriberId(1), &text);
+            let parsed: serde_json::Value = serde_json::from_str(&reply)
+                .unwrap_or_else(|e| panic!("reply for {raw:?} must be valid JSON: {e}"));
+            assert_eq!(parsed["kind"], "failed", "id {raw:?} must fail: {reply}");
+            assert_eq!(
+                parsed["id"], "0",
+                "a non-canonical id {raw:?} must NOT be recovered, got {reply}"
+            );
+        }
         rt.shutdown().expect("shutdown should succeed");
     }
 

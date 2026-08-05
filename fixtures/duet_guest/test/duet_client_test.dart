@@ -101,6 +101,62 @@ void main() {
     expect((nan as DuetFloat).value.isNaN, isTrue);
   });
 
+  test('negative zero encodes as a string sentinel', () {
+    // Mirrors duet-codec/src/value.rs's
+    // `negative_zero_encodes_as_a_string_sentinel`. Dart CAN write -0.0 as a
+    // JSON number, but JavaScript cannot — `JSON.stringify(-0)` is "0" — so
+    // all three implementations emit the sentinel and the wire has exactly
+    // one spelling per value.
+    expect(jsonEncode(const DuetFloat(-0.0).toJson()), '{"t":"f","v":"-0"}');
+    // Positive zero stays a JSON number: it has a portable spelling.
+    expect(jsonEncode(const DuetFloat(0.0).toJson()), '{"t":"f","v":0.0}');
+    // The negative-infinity sentinel must not be disturbed by the new arm.
+    expect(
+      jsonEncode(const DuetFloat(double.negativeInfinity).toJson()),
+      '{"t":"f","v":"-Infinity"}',
+    );
+  });
+
+  test('negative zero round-trips with its sign', () {
+    // `-0.0 == 0.0` is true in Dart exactly as in IEEE 754, so an equality
+    // assertion here would pass even with the sign lost. `isNegative` and
+    // `1/x == -infinity` are the two tests that can actually see it.
+    for (final String text in <String>[
+      '{"t":"f","v":"-0"}',
+      '{"t":"f","v":-0.0}',
+    ]) {
+      final DuetValue decoded = DuetValue.fromJson(jsonDecode(text));
+      expect(decoded, isA<DuetFloat>(), reason: text);
+      final double f = (decoded as DuetFloat).value;
+      expect(f, 0.0, reason: text);
+      expect(f.isNegative, isTrue, reason: '$text must keep the sign bit');
+      expect(1 / f, double.negativeInfinity, reason: text);
+    }
+    // The control: positive zero must NOT come back negative, which would be
+    // the failure mode of testing `value == -0.0` instead of `isNegative`.
+    final DuetFloat positive =
+        DuetValue.fromJson(jsonDecode('{"t":"f","v":0.0}')) as DuetFloat;
+    expect(positive.value.isNegative, isFalse);
+    expect(1 / positive.value, double.infinity);
+  });
+
+  test('the float decoder is wider than the encoder', () {
+    // Mirrors duet_codec's `decode_float`: a guest hand-building a value has
+    // no way to force a decimal point, and `JSON.stringify(1.0)` is "1", so
+    // an integer-looking JSON number must decode as a float.
+    expect(DuetValue.fromJson(jsonDecode('{"t":"f","v":1}')), const DuetFloat(1.0));
+    expect(DuetValue.fromJson(jsonDecode('{"t":"f","v":0}')), const DuetFloat(0.0));
+    // An unrecognised sentinel is still rejected — the set is closed at four.
+    expect(
+      () => DuetValue.fromJson(jsonDecode('{"t":"f","v":"-0.0"}')),
+      throwsA(isA<DuetCodecException>()),
+    );
+    expect(
+      () => DuetValue.fromJson(jsonDecode('{"t":"f","v":"huge"}')),
+      throwsA(isA<DuetCodecException>()),
+    );
+  });
+
   test('get/set/subscribe round-trip over the channel', () async {
     final List<String> seen = <String>[];
     messenger.setMockMessageHandler(kDuetChannel.name, (ByteData? message) async {

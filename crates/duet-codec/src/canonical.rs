@@ -7,10 +7,35 @@
 //! base64 decoder and `duet-core`'s path parser (which rejects `[007]`)
 //! already refuse. These functions gate `str::parse` so only the one
 //! canonical rendering of each integer is accepted.
+//!
+//! # Part of the wire contract, not an implementation detail
+//!
+//! **Every integer on the Duet wire travels as a canonical decimal string**,
+//! and every decoder must reject any other spelling of the same number. This
+//! is not a nicety: correlation ids (`id`, `subscription`, `subscriber`) are
+//! *echoed* by the host in canonical form, and a guest that keys its pending
+//! map by the string it sent will never match a reply spelled differently.
+//! The failure is a silent hang — no error, just a promise that never
+//! settles.
+//!
+//! These predicates are public so third-party guest implementations in Rust
+//! can enforce the identical rule from the one definition of it, rather than
+//! writing a fourth near-copy. The Dart guest client mirrors them in
+//! `fixtures/duet_guest/lib/duet_value.dart`, and `duet-protocol` gates every
+//! `u64` wire field on [`is_canonical_unsigned_digits`].
 
 /// True if `s` is a canonical, sign-free decimal digit string: at least one
 /// digit, and no leading zero unless `s` is exactly `"0"`.
-pub(crate) fn is_canonical_unsigned_digits(s: &str) -> bool {
+///
+/// This is the rule for every **unsigned** integer on the wire — the `id`,
+/// `subscription` and `subscriber` fields. Rejects `""`, `"+1"`, `"007"`,
+/// `" 1"`, `"1 "`, `"1_000"` and anything non-numeric; accepts `"0"` and
+/// `"18446744073709551615"`.
+///
+/// Note this validates *spelling only*. A string can be canonical and still
+/// overflow the target integer type, so callers must still check the result
+/// of `str::parse`.
+pub fn is_canonical_unsigned_digits(s: &str) -> bool {
     if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
         return false;
     }
@@ -19,7 +44,13 @@ pub(crate) fn is_canonical_unsigned_digits(s: &str) -> bool {
 
 /// True if `s` is the canonical decimal rendering of some `i64`: no leading
 /// `+`, no leading zeros, and no `-0` — canonical zero is `"0"`.
-pub(crate) fn is_canonical_signed_decimal(s: &str) -> bool {
+///
+/// This is the rule for the **signed** integer payload of a `{"t":"i"}`
+/// value. `-0` is rejected deliberately: `i64` has no negative zero, so
+/// admitting the spelling would give one value two renderings.
+///
+/// Note this validates *spelling only* — see [`is_canonical_unsigned_digits`].
+pub fn is_canonical_signed_decimal(s: &str) -> bool {
     match s.strip_prefix('-') {
         Some(magnitude) => magnitude != "0" && is_canonical_unsigned_digits(magnitude),
         None => is_canonical_unsigned_digits(s),

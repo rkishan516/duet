@@ -171,9 +171,18 @@ final class DuetFloat extends DuetValue {
   /// The wrapped double, which may be NaN or either infinity.
   final double value;
 
-  /// Non-finite doubles travel as string sentinels: duet-codec/src/value.rs:50-70.
-  /// `jsonEncode` THROWS on NaN/Infinity, so this conversion is mandatory,
-  /// not cosmetic.
+  /// The four doubles with no portable JSON-number spelling travel as string
+  /// sentinels: duet-codec/src/value.rs `encode_float`.
+  ///
+  /// `jsonEncode` THROWS on NaN/Infinity, so those three are mandatory here,
+  /// not cosmetic. `-0.0` is different: Dart CAN write it as a JSON number
+  /// and `jsonEncode` preserves the sign, but JavaScript cannot
+  /// (`JSON.stringify(-0)` is `"0"`), so the sentinel exists for the JS guest
+  /// and all three implementations emit it for consistency — the golden
+  /// corpus must have one spelling per value, not one per language.
+  ///
+  /// `value.isNegative` is the test, not `value == -0.0`: `-0.0 == 0.0` is
+  /// true in Dart, so an equality check would tag every zero as negative.
   @override
   Map<String, Object?> toJson() => <String, Object?>{
     't': 'f',
@@ -183,6 +192,8 @@ final class DuetFloat extends DuetValue {
         ? 'Infinity'
         : value == double.negativeInfinity
         ? '-Infinity'
+        : (value == 0.0 && value.isNegative)
+        ? '-0'
         : value,
   };
   @override
@@ -257,8 +268,15 @@ final class DuetMap extends DuetValue {
   String toString() => 'Map($entries)';
 }
 
-/// Decodes an `"f"` payload: either a JSON number, or one of the three
-/// non-finite sentinel strings `duet-codec` emits.
+/// Decodes an `"f"` payload: either a JSON number, or one of the four
+/// sentinel strings `duet-codec` emits for the doubles with no portable
+/// JSON-number spelling (NaN, both infinities, and `-0.0`).
+///
+/// Deliberately wider than [DuetFloat.toJson], mirroring
+/// `duet_codec`'s `decode_float`: any JSON number is accepted, so `1` decodes
+/// to `1.0` and a literal `-0` still decodes with its sign. A guest that
+/// hand-builds a value should not have to know which spelling this library
+/// happens to emit.
 double _decodeFloat(Object? payload) {
   if (payload is num) return payload.toDouble();
   if (payload is String) {
@@ -269,6 +287,8 @@ double _decodeFloat(Object? payload) {
         return double.infinity;
       case '-Infinity':
         return double.negativeInfinity;
+      case '-0':
+        return -0.0;
       default:
         throw DuetCodecException('unrecognised float sentinel ${_echo(payload)}');
     }
