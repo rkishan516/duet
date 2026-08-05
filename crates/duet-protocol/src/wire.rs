@@ -25,11 +25,27 @@ fn as_object<'a>(json: &'a Json, what: &str) -> Result<&'a JsonMap<String, Json>
         .ok_or_else(|| CodecError::BadShape(format!("{what} must be an object")))
 }
 
-/// Reads a `u64` carried as a decimal string.
+/// Reads a `u64` carried as a CANONICAL decimal string: no leading `+`, no
+/// leading zeros, no surrounding space (see
+/// [`duet_codec::is_canonical_unsigned_digits`]).
+///
+/// A bare `str::parse::<u64>()` would accept `"007"` and `"+1"`. That is not
+/// cosmetic here: `tagged()` above re-encodes every id in canonical form, so a
+/// guest that sent `"007"` would receive `"7"` back, never match it against
+/// the pending entry it keyed by the string it sent, and hang forever with no
+/// error. `duet-codec`'s own `u64_field` and the Dart guest client both
+/// already enforce this; the rule lives in `duet-codec` so all three
+/// implementations share one definition of it.
+///
+/// Gates every `u64` field the envelope carries: `id` on requests and
+/// responses, and `subscription` on both `unsubscribe` and `subscribed`.
 fn u64_field(obj: &JsonMap<String, Json>, name: &str) -> Result<u64, CodecError> {
     let s = field(obj, name)?
         .as_str()
         .ok_or_else(|| CodecError::BadShape(format!("\"{name}\" must be a decimal string")))?;
+    if !duet_codec::is_canonical_unsigned_digits(s) {
+        return Err(CodecError::BadInt(format!("\"{name}\": {s}")));
+    }
     s.parse::<u64>()
         .map_err(|_| CodecError::BadInt(format!("\"{name}\": {s}")))
 }
@@ -335,6 +351,79 @@ mod tests {
     }
 
     #[test]
+    fn non_canonical_ids_are_rejected() {
+        // "7" and "007" must not both decode to 7: the host echoes the CANONICAL
+        // form back, so a guest keying its pending map by the string it sent
+        // would wait forever for a reply it already received. duet-codec's
+        // canonical.rs states this as a property of the format; duet-protocol
+        // must enforce it too.
+        for raw in [
+            "007",
+            "+1",
+            "0000000000000000000007",
+            "1_000",
+            " 1",
+            "1 ",
+            "",
+        ] {
+            let text = format!(r#"{{"kind":"get","id":"{raw}","path":"a"}}"#);
+            let json: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
+            assert!(
+                decode_request(&json).is_err(),
+                "id {raw:?} must be rejected as non-canonical"
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_ids_are_still_accepted() {
+        // The positive control: the fix must not reject what it should accept,
+        // including 0 and a value above 2^53 (the reason ids are strings at all).
+        for raw in ["0", "1", "7", "9007199254740993", "18446744073709551615"] {
+            let text = format!(r#"{{"kind":"get","id":"{raw}","path":"a"}}"#);
+            let json: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
+            assert!(decode_request(&json).is_ok(), "id {raw:?} must be accepted");
+        }
+    }
+
+    #[test]
+    fn non_canonical_subscription_ids_are_rejected() {
+        // `subscription` is the second u64 a guest sends, and it is echoed on
+        // the `subscribed` reply exactly as `id` is. Same hazard, same rule.
+        for raw in ["007", "+1", "0000000000000000000007", " 1", ""] {
+            let text = format!(r#"{{"kind":"unsubscribe","id":"1","subscription":"{raw}"}}"#);
+            let json: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
+            assert!(
+                decode_request(&json).is_err(),
+                "subscription {raw:?} must be rejected as non-canonical"
+            );
+        }
+        for raw in ["0", "1", "9007199254740993", "18446744073709551615"] {
+            let text = format!(r#"{{"kind":"unsubscribe","id":"1","subscription":"{raw}"}}"#);
+            let json: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
+            assert!(
+                decode_request(&json).is_ok(),
+                "subscription {raw:?} must be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn non_canonical_response_ids_are_rejected() {
+        // The guest side of the same rule: a guest decoding a host reply must
+        // refuse an id it could not have sent, rather than silently matching
+        // it against a differently-spelled pending entry.
+        for raw in ["007", "+1", " 1", ""] {
+            let text = format!(r#"{{"kind":"done","id":"{raw}"}}"#);
+            let json: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
+            assert!(
+                decode_response(&json).is_err(),
+                "response id {raw:?} must be rejected as non-canonical"
+            );
+        }
+    }
+
+    #[test]
     fn decode_rejects_malformed_messages_without_panicking() {
         for bad in [
             r#"42"#,
@@ -343,6 +432,12 @@ mod tests {
             r#"{"kind":"get"}"#,
             r#"{"kind":"get","id":1,"path":"a"}"#,
             r#"{"kind":"get","id":"x","path":"a"}"#,
+            // Historical gap: this list tested a numeric id and "x" but never
+            // "007", which is why non-canonical ids survived here for so long
+            // while `duet-codec` and the Dart client both already rejected
+            // them. `non_canonical_ids_are_rejected` above is the real
+            // coverage; this line pins the specific case that was missing.
+            r#"{"kind":"get","id":"007","path":"a"}"#,
             r#"{"kind":"get","id":"1","path":"a.[0]"}"#,
             r#"{"kind":"set","id":"1","path":"a"}"#,
             r#"{"kind":"unsubscribe","id":"1","subscription":"x"}"#,

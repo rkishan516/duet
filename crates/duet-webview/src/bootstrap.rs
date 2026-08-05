@@ -4,6 +4,13 @@
 ///
 /// Phase 4's codegen will generate a typed client over this same protocol; this
 /// is the hand-written floor that proves the transport works.
+///
+/// # Ids are canonical decimal strings
+///
+/// `String(nextId++)` is already canonical; hand-writing `"007"` is not, and
+/// `duet-protocol` rejects it. It must, because the host echoes ids back in
+/// canonical form — a guest that sent `"007"` would be answered `"7"`, never
+/// match its own pending entry, and hang with no error at all.
 pub const BOOTSTRAP_HTML: &str = r#"<!doctype html>
 <html>
 <head><meta charset="utf-8"><title>Duet webview surface</title></head>
@@ -21,6 +28,10 @@ pub const BOOTSTRAP_HTML: &str = r#"<!doctype html>
   }
 
   function call(kind, extra) {
+    // A CANONICAL decimal string: no leading "+", no leading zeros. The host
+    // echoes the canonical form back, so an id spelled "007" would be answered
+    // "7", never match this map, and hang forever with no error. String(n) on
+    // a non-negative integer is always canonical; do not hand-write ids.
     const id = String(nextId++);
     return new Promise((resolve) => {
       pending.set(id, resolve);
@@ -79,6 +90,23 @@ mod tests {
         assert!(
             BOOTSTRAP_HTML.contains("window.ipc.postMessage"),
             "bootstrap must send on wry's IPC channel"
+        );
+    }
+
+    #[test]
+    fn the_bootstrap_sends_canonical_ids() {
+        // `duet-protocol` rejects a non-canonical id, and the host echoes the
+        // canonical form back — so a guest that sent "007" would be answered
+        // "7", never match `pending`, and hang. `String(nextId++)` on a
+        // non-negative integer is canonical by construction; anything that
+        // pads or prefixes it would reintroduce the hang.
+        assert!(
+            BOOTSTRAP_HTML.contains("String(nextId++)"),
+            "bootstrap must derive ids from a plain integer counter"
+        );
+        assert!(
+            BOOTSTRAP_HTML.contains("CANONICAL"),
+            "bootstrap must document why the id spelling matters"
         );
     }
 
