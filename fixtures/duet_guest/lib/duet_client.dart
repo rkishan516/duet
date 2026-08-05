@@ -264,12 +264,31 @@ Map<String, Object?> _decodeObject(String text) {
   return parsed;
 }
 
-/// Reads a u64 carried as a CANONICAL decimal string
-/// (crates/duet-codec/src/wire.rs:43-52 — no leading `+`, no leading zeros).
+/// The inclusive top of the Duet wire's id domain, mirroring
+/// `duet_codec::MAX_WIRE_ID` (crates/duet-codec/src/canonical.rs).
 ///
-/// `int.tryParse` alone is too lenient: it accepts "007", which the Rust side
-/// rejects. Without this check a Dart guest would accept ids a Rust guest
-/// refuses, i.e. the two guests would disagree about what is well-formed.
+/// This is `i64::MAX`, not `u64::MAX`, *because* of this file: Dart's native
+/// `int` is 64-bit signed, so `int.tryParse('9223372036854775808')` returns
+/// null and no Dart guest could read a larger id at all. Rather than widen Dart
+/// to `BigInt` for a range that ids — sequential from 1 — never reach, the wire
+/// domain itself stops here, so one id domain holds in every guest language.
+const int kMaxWireId = 9223372036854775807;
+
+/// Reads one of the envelope's id fields, enforcing both halves of the wire's
+/// id rule, exactly as `duet_codec::parse_wire_id` does on the Rust side.
+///
+/// **Canonical spelling** (crates/duet-codec/src/canonical.rs — no leading `+`,
+/// no leading zeros): `int.tryParse` alone is too lenient, since it accepts
+/// "007", which the Rust side rejects. Without this check a Dart guest would
+/// accept ids a Rust guest refuses, i.e. the two guests would disagree about
+/// what is well-formed.
+///
+/// **Domain `0..=`[kMaxWireId]**: checked explicitly rather than left to
+/// `int.tryParse` returning null. On the Dart VM the two happen to coincide,
+/// but relying on that would make the shared wire rule an accident of the
+/// platform's integer width — and it does not hold everywhere Dart runs
+/// (compiled to JavaScript, `int` is a double and `int.tryParse` rounds instead
+/// of failing). The bound is stated, so it holds wherever this client runs.
 int _u64Field(Map<String, Object?> obj, String name) {
   final Object? raw = obj[name];
   if (raw is! String) {
@@ -279,8 +298,10 @@ int _u64Field(Map<String, Object?> obj, String name) {
     throw DuetTransportException('"$name" is not a canonical decimal string');
   }
   final int? parsed = int.tryParse(raw);
-  if (parsed == null || parsed < 0) {
-    throw DuetTransportException('"$name" overflows u64');
+  if (parsed == null || parsed < 0 || parsed > kMaxWireId) {
+    throw DuetTransportException(
+      '"$name" is outside the wire id domain (0..$kMaxWireId)',
+    );
   }
   return parsed;
 }

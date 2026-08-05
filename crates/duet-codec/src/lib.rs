@@ -32,7 +32,9 @@ pub mod error;
 mod value;
 mod wire;
 
-pub use canonical::{is_canonical_signed_decimal, is_canonical_unsigned_digits};
+pub use canonical::{
+    MAX_WIRE_ID, is_canonical_signed_decimal, is_canonical_unsigned_digits, parse_wire_id,
+};
 pub use error::CodecError;
 
 /// Encodes a [`duet_core::Value`] into its tagged JSON representation.

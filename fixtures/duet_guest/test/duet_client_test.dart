@@ -86,6 +86,54 @@ void main() {
     }
   });
 
+  test('an id outside the wire domain is rejected', () {
+    // Mirrors duet-protocol's `the_wire_id_domain_stops_at_i64_max`. The host
+    // narrowed its decoder to i64::MAX precisely because Dart's native int is
+    // 64-bit signed; this pins the guest half of that agreement, so the two
+    // sides cannot drift apart silently.
+    expect(int.tryParse('9223372036854775808'), isNull,
+        reason: 'the reason the domain stops where it does');
+    expect(kMaxWireId, 9223372036854775807);
+
+    Future<void> replyWith(String reply) async {
+      messenger.setMockMessageHandler(
+        kDuetChannel.name,
+        (ByteData? m) async => _codec.encodeMessage(reply),
+      );
+      await DuetClient().get('a');
+    }
+
+    // At the boundary the id is readable, so the mismatch against request 1 is
+    // what fails — proving the value itself parsed rather than being rejected.
+    expect(
+      () => replyWith('{"id":"9223372036854775807","kind":"value","value":null}'),
+      throwsA(
+        isA<DuetTransportException>().having(
+          (DuetTransportException e) => e.message,
+          'message',
+          contains('answered request 9223372036854775807'),
+        ),
+      ),
+    );
+    for (final String tooBig in <String>[
+      '9223372036854775808',
+      '18446744073709551615',
+      '99999999999999999999',
+    ]) {
+      expect(
+        () => replyWith('{"id":"$tooBig","kind":"value","value":null}'),
+        throwsA(
+          isA<DuetTransportException>().having(
+            (DuetTransportException e) => e.message,
+            'message',
+            contains('outside the wire id domain'),
+          ),
+        ),
+        reason: tooBig,
+      );
+    }
+  });
+
   test('jsonEncode throws on a raw NaN, so the sentinel is mandatory', () {
     // If DuetFloat.toJson() ever "simplified" to just emitting `value`
     // directly, this is why it would break: dart:convert's jsonEncode

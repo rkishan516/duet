@@ -33,7 +33,9 @@ fn every_request_survives_a_text_hop() {
     for value in awkward_values() {
         for original in [
             Request::Get {
-                id: RequestId(u64::MAX),
+                // The top of the wire's id domain: i64::MAX, not u64::MAX.
+                // See duet_codec::MAX_WIRE_ID.
+                id: RequestId(duet_codec::MAX_WIRE_ID),
                 path: p("documents[3].title"),
             },
             Request::Set {
@@ -47,7 +49,7 @@ fn every_request_survives_a_text_hop() {
             },
             Request::Unsubscribe {
                 id: RequestId(3),
-                subscription: SubscriptionId(u64::MAX),
+                subscription: SubscriptionId(duet_codec::MAX_WIRE_ID),
             },
         ] {
             let text = serde_json::to_string(&encode_request(&original)).expect("encodes");
@@ -106,7 +108,7 @@ fn every_response_survives_a_text_hop() {
 fn a_push_survives_a_text_hop() {
     for value in awkward_values() {
         let original = Push::Notification(duet_core::Notification {
-            subscriber: duet_core::SubscriberId(u64::MAX),
+            subscriber: duet_core::SubscriberId(duet_codec::MAX_WIRE_ID),
             subscription: SubscriptionId(1),
             patch: duet_core::Patch {
                 path: p("a[0].b"),

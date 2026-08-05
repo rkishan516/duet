@@ -25,29 +25,27 @@ fn as_object<'a>(json: &'a Json, what: &str) -> Result<&'a JsonMap<String, Json>
         .ok_or_else(|| CodecError::BadShape(format!("{what} must be an object")))
 }
 
-/// Reads a `u64` carried as a CANONICAL decimal string: no leading `+`, no
-/// leading zeros, no surrounding space (see
-/// [`duet_codec::is_canonical_unsigned_digits`]).
+/// Reads one of the envelope's id fields, enforcing both halves of the wire's
+/// id rule via the single definition in [`duet_codec::parse_wire_id`].
 ///
-/// A bare `str::parse::<u64>()` would accept `"007"` and `"+1"`. That is not
-/// cosmetic here: `tagged()` above re-encodes every id in canonical form, so a
-/// guest that sent `"007"` would receive `"7"` back, never match it against
-/// the pending entry it keyed by the string it sent, and hang forever with no
-/// error. `duet-codec`'s own `u64_field` and the Dart guest client both
-/// already enforce this; the rule lives in `duet-codec` so all three
-/// implementations share one definition of it.
+/// **Canonical spelling**: no leading `+`, no leading zeros, no surrounding
+/// space. A bare `str::parse::<u64>()` would accept `"007"` and `"+1"`. That is
+/// not cosmetic here: `tagged()` above re-encodes every id in canonical form,
+/// so a guest that sent `"007"` would receive `"7"` back, never match it
+/// against the pending entry it keyed by the string it sent, and hang forever
+/// with no error.
 ///
-/// Gates every `u64` field the envelope carries: `id` on requests and
-/// responses, and `subscription` on both `unsubscribe` and `subscribed`.
+/// **Domain `0..=`[`duet_codec::MAX_WIRE_ID`]** (`i64::MAX`): Dart's native
+/// `int` is 64-bit *signed*, so an id above that bound is one no Dart guest can
+/// parse at all. The Rust types stay `u64`; only this decoder narrows.
+///
+/// Gates every id field the envelope carries: `id` on requests and responses,
+/// and `subscription` on both `unsubscribe` and `subscribed`.
 fn u64_field(obj: &JsonMap<String, Json>, name: &str) -> Result<u64, CodecError> {
     let s = field(obj, name)?
         .as_str()
         .ok_or_else(|| CodecError::BadShape(format!("\"{name}\" must be a decimal string")))?;
-    if !duet_codec::is_canonical_unsigned_digits(s) {
-        return Err(CodecError::BadInt(format!("\"{name}\": {s}")));
-    }
-    s.parse::<u64>()
-        .map_err(|_| CodecError::BadInt(format!("\"{name}\": {s}")))
+    duet_codec::parse_wire_id(s).ok_or_else(|| CodecError::BadInt(format!("\"{name}\": {s}")))
 }
 
 fn kind(obj: &JsonMap<String, Json>) -> Result<&str, CodecError> {
@@ -267,13 +265,15 @@ mod tests {
 
     #[test]
     fn request_ids_travel_as_strings_so_both_guests_agree() {
-        // u64 exceeds JavaScript's safe integer range exactly as i64 does.
-        let big = RequestId(u64::MAX);
+        // The largest id the wire admits still exceeds JavaScript's safe
+        // integer range (2^53) by five orders of magnitude, which is why ids
+        // are strings rather than JSON numbers.
+        let big = RequestId(duet_codec::MAX_WIRE_ID);
         let encoded = encode_request(&Request::Get {
             id: big,
             path: p("a"),
         });
-        assert_eq!(encoded["id"], json(r#""18446744073709551615""#));
+        assert_eq!(encoded["id"], json(r#""9223372036854775807""#));
         assert_eq!(
             decode_request(&encoded).expect("decodes").id(),
             big,
@@ -299,7 +299,7 @@ mod tests {
             },
             Request::Unsubscribe {
                 id: RequestId(4),
-                subscription: SubscriptionId(u64::MAX),
+                subscription: SubscriptionId(duet_codec::MAX_WIRE_ID),
             },
         ] {
             let decoded = decode_request(&encode_request(&original)).expect("decodes");
@@ -379,7 +379,9 @@ mod tests {
     fn canonical_ids_are_still_accepted() {
         // The positive control: the fix must not reject what it should accept,
         // including 0 and a value above 2^53 (the reason ids are strings at all).
-        for raw in ["0", "1", "7", "9007199254740993", "18446744073709551615"] {
+        // The top of the list is i64::MAX, not u64::MAX — see
+        // `the_wire_id_domain_stops_at_i64_max`.
+        for raw in ["0", "1", "7", "9007199254740993", "9223372036854775807"] {
             let text = format!(r#"{{"kind":"get","id":"{raw}","path":"a"}}"#);
             let json: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
             assert!(decode_request(&json).is_ok(), "id {raw:?} must be accepted");
@@ -398,7 +400,7 @@ mod tests {
                 "subscription {raw:?} must be rejected as non-canonical"
             );
         }
-        for raw in ["0", "1", "9007199254740993", "18446744073709551615"] {
+        for raw in ["0", "1", "9007199254740993", "9223372036854775807"] {
             let text = format!(r#"{{"kind":"unsubscribe","id":"1","subscription":"{raw}"}}"#);
             let json: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
             assert!(
@@ -421,6 +423,105 @@ mod tests {
                 "response id {raw:?} must be rejected as non-canonical"
             );
         }
+    }
+
+    #[test]
+    fn the_wire_id_domain_stops_at_i64_max() {
+        // Dart's native int is 64-bit SIGNED: int.tryParse("9223372036854775808")
+        // returns null, so a Dart guest cannot read an id the host could emit.
+        // Narrowing here costs nothing (ids are sequential from 1) and makes one
+        // id domain hold in every guest language.
+        for raw in ["0", "1", "9007199254740993", "9223372036854775807"] {
+            let text = format!(r#"{{"kind":"get","id":"{raw}","path":"a"}}"#);
+            let json: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
+            assert!(
+                decode_request(&json).is_ok(),
+                "id {raw:?} is within the domain"
+            );
+        }
+        for raw in [
+            "9223372036854775808",
+            "18446744073709551615",
+            "99999999999999999999",
+        ] {
+            let text = format!(r#"{{"kind":"get","id":"{raw}","path":"a"}}"#);
+            let json: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
+            assert!(
+                decode_request(&json).is_err(),
+                "id {raw:?} is outside the domain"
+            );
+        }
+    }
+
+    #[test]
+    fn the_id_domain_binds_subscription_and_response_ids_too() {
+        // `id` is only one of the envelope's u64 fields. `subscription` travels
+        // on `unsubscribe` and is echoed on `subscribed`; a response `id` is
+        // read by the guest. All of them must share one domain, or a guest
+        // would accept an id in one field that it rejects in another.
+        for raw in ["9223372036854775808", "18446744073709551615"] {
+            let unsubscribe =
+                format!(r#"{{"kind":"unsubscribe","id":"1","subscription":"{raw}"}}"#);
+            assert!(
+                decode_request(&json(&unsubscribe)).is_err(),
+                "unsubscribe subscription {raw:?} is outside the domain"
+            );
+
+            let done = format!(r#"{{"kind":"done","id":"{raw}"}}"#);
+            assert!(
+                decode_response(&json(&done)).is_err(),
+                "response id {raw:?} is outside the domain"
+            );
+
+            let subscribed = format!(
+                r#"{{"kind":"subscribed","id":"1","subscription":"{raw}","snapshot":null}}"#
+            );
+            assert!(
+                decode_response(&json(&subscribed)).is_err(),
+                "subscribed subscription {raw:?} is outside the domain"
+            );
+        }
+        // The positive control at the exact boundary, in every one of those
+        // three fields: the domain must stop AT i64::MAX, not below it.
+        assert!(
+            decode_request(&json(
+                r#"{"kind":"unsubscribe","id":"1","subscription":"9223372036854775807"}"#
+            ))
+            .is_ok()
+        );
+        assert!(decode_response(&json(r#"{"kind":"done","id":"9223372036854775807"}"#)).is_ok());
+        assert!(
+            decode_response(&json(
+                r#"{"kind":"subscribed","id":"1","subscription":"9223372036854775807","snapshot":null}"#
+            ))
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn an_id_above_the_domain_is_encoded_faithfully_and_then_refused() {
+        // The wire types stay `u64`, so a host CAN construct an id outside the
+        // domain. The encoder is deliberately neither lossy nor panicky: it
+        // emits the id verbatim. Clamping would answer a different request than
+        // the one asked; panicking would take the host down on a guest-reachable
+        // path. Instead the invariant ("ids are 0..=MAX_WIRE_ID") is documented
+        // on `RequestId`, and every decoder — including Rust's own, here —
+        // refuses the value, so an encoder that ever violated it fails loudly at
+        // the first hop rather than shipping an id only some guests can read.
+        let out_of_domain = RequestId(u64::MAX);
+        let encoded = encode_request(&Request::Get {
+            id: out_of_domain,
+            path: p("a"),
+        });
+        assert_eq!(
+            encoded["id"],
+            json(r#""18446744073709551615""#),
+            "the encoder must emit the id verbatim, never clamp it"
+        );
+        assert!(
+            decode_request(&encoded).is_err(),
+            "an out-of-domain id must not round-trip"
+        );
     }
 
     #[test]
