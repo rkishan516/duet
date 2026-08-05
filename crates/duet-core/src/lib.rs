@@ -110,6 +110,7 @@
 
 #![deny(missing_docs)]
 
+mod echo;
 pub mod lifecycle;
 pub mod path;
 pub mod policy;
