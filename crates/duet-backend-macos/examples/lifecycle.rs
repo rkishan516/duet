@@ -84,11 +84,58 @@ const GRACE_MS: u64 = 500;
 /// observes grace expiry is never racing the clock.
 const GRACE_BUFFER_MS: u64 = 200;
 
-/// The minimum acceptable drop between "view attached" and "after teardown",
-/// in kilobytes as reported by `ps -o rss=`. Spike A measured a 119,296 kB
-/// drop (223 MB attached -> 104 MB after `shutDownEngine`); 80 MB is a
-/// generous floor that still cannot pass if teardown reclaims nothing.
-const MIN_DROP_KB: i64 = 80 * 1024;
+/// The least of the engine's own cost that teardown must give back.
+///
+/// # Why a share, and not a number of kilobytes
+///
+/// This example used to assert an absolute floor of 81,920 kB. That floor sat
+/// *inside* the range of values this example legitimately produces, so whether
+/// it passed depended on which Flutter app was booted — and the example's
+/// default fixture (`spikes/spike_app`) is not the one every other example in
+/// this crate uses (`fixtures/duet_guest`). Measured on this machine, same
+/// binary, same afternoon:
+///
+/// | Fixture | runs | reclaimed (kB) | 81,920 kB floor |
+/// |---|---|---|---|
+/// | `spikes/spike_app` (`runApp`, `MaterialApp`, a `Ticker`) | 3 | 122,560–124,112 | **passes** |
+/// | `fixtures/duet_guest` (headless: no `runApp`, no widget tree) | 8 | 71,328–71,616 | **fails** |
+///
+/// Within each fixture the numbers are tight — 1,552 kB of spread across the
+/// first, 288 kB across the second. So this was never a flaky test in the
+/// usual sense of "same input, different answer". It was a test whose input
+/// was ambiguous, asserting an absolute quantity that a *different guest app*
+/// legitimately changes by 1.7×. Widening the number until both passed would
+/// have set the floor below 71 MB, at which point it could no longer fail for
+/// the reason it exists.
+///
+/// A share of the engine's own cost is the quantity that does not depend on
+/// the app, because both halves of it scale together:
+///
+/// ```text
+/// engine cost = (RSS while suspended) - (RSS before any engine existed)
+/// reclaimed   = (RSS while suspended) - (RSS after teardown)
+/// ```
+///
+/// Measured: 67.8–68.3 % for `spike_app`, 60.6 % for `duet_guest`. A 50 %
+/// floor holds for both with 10–18 points to spare, and still cannot pass if
+/// teardown reclaims nothing — which is the only thing this assertion was ever
+/// for.
+const MIN_RECLAIM_SHARE: f64 = 0.50;
+
+/// The most of teardown's reclaim that detaching the view alone may account
+/// for.
+///
+/// This is the *other* half of the claim, and the one Spike A actually
+/// established: **`shutDownEngine` is what frees memory, not removing the
+/// view.** Spike A measured 223 MB before and after a detach. An assertion
+/// that only checked the total drop would still pass if detach did all the
+/// work and teardown did none — which would mean the whole suspend/teardown
+/// distinction this framework is built on had quietly inverted.
+///
+/// Measured on this machine: detach accounts for 1.8–4.0 % of what teardown
+/// reclaims, across both fixtures. 20 % leaves five times that margin and
+/// would still catch an inversion.
+const MAX_DETACH_SHARE: f64 = 0.20;
 
 /// Path to the Flutter `App.framework` produced by `flutter build macos`.
 /// Overridable via env var for other machines, matching Spike A's fixture
@@ -491,38 +538,93 @@ fn print_report(state: &AppState) {
     // view was first attached.
     //
     // The attach sample lands ~0.3s in, before Skia and the Dart heap have
-    // warmed up — measured at ~160 MB against a settled ~223 MB. Using it
+    // warmed up — measured at ~166 MB against a settled ~226 MB. Using it
     // understates the reclaim by roughly 60 MB and answers the wrong question:
     // what matters is how much a *live, rendering* surface costs versus one
-    // that has been torn down. Spike A used the same settled baseline
-    // (223 MB -> 104 MB).
-    let settled = find_sample(state, "view detached, suspending (engine still alive)");
+    // that has been torn down. Spike A used the same settled baseline.
+    let start = find_sample(state, "process start, no surface registered");
+    let peak = find_sample(state, "after rasterizing the attached view");
+    let suspended = find_sample(state, "view detached, suspending (engine still alive)");
     let torn_down = find_sample(
         state,
         "torn down (engine shut down, if the grace period truly elapsed)",
     );
-    let delta = settled - torn_down;
-    println!(
-        "delta (settled, pre-teardown -> after teardown): {delta} kB \
-         (floor: {MIN_DROP_KB} kB / 80 MB)"
-    );
 
-    if delta >= MIN_DROP_KB {
-        println!(
-            "PASS: RSS dropped by {delta} kB after teardown, clearing the {MIN_DROP_KB} kB floor"
-        );
-    } else {
-        println!(
-            "FAIL: RSS dropped by only {delta} kB after teardown, below the {MIN_DROP_KB} kB floor"
-        );
+    // What the engine cost above an engine-less process, and what came back.
+    let engine_cost = suspended - start;
+    let reclaimed = suspended - torn_down;
+    let by_detach = peak - suspended;
+
+    // Both shares are computed against `engine_cost` and `reclaimed`, which
+    // are measured in this same run against this same app — which is exactly
+    // why they do not move when the app does. Guarded against a zero
+    // denominator rather than trusting the sample: `ps` returning -1 would
+    // otherwise produce a NaN that compares false and reports as a failure
+    // with no explanation.
+    let reclaim_share = ratio(reclaimed, engine_cost);
+    let detach_share = ratio(by_detach, reclaimed);
+
+    println!("absolute, for the record:");
+    println!("  the engine cost      {engine_cost:>8} kB above an engine-less process");
+    println!("  detaching the view   {by_detach:>8} kB back");
+    println!("  tearing down         {reclaimed:>8} kB back");
+    println!();
+    println!(
+        "teardown reclaimed {:.1}% of what the engine cost (floor {:.0}%)",
+        reclaim_share * 100.0,
+        MIN_RECLAIM_SHARE * 100.0
+    );
+    println!(
+        "detaching accounted for {:.1}% of that (ceiling {:.0}%)",
+        detach_share * 100.0,
+        MAX_DETACH_SHARE * 100.0
+    );
+    println!();
+
+    let enough = reclaim_share >= MIN_RECLAIM_SHARE;
+    let shutdown_did_it = detach_share <= MAX_DETACH_SHARE;
+    for (ok, label) in [
+        (enough, "teardown gives back most of what the engine cost"),
+        (
+            shutdown_did_it,
+            "shutDownEngine is what reclaims it, not detaching the view",
+        ),
+    ] {
+        println!("{}: {label}", if ok { "PASS" } else { "FAIL" });
     }
     println!();
 
     assert!(
-        delta >= MIN_DROP_KB,
-        "teardown must reclaim at least {MIN_DROP_KB} kB (80 MB); measured {delta} kB \
-         (settled={settled} kB, torn_down={torn_down} kB) — see FINDINGS.md"
+        enough,
+        "teardown must reclaim at least {:.0}% of the engine's own cost; measured {:.1}% \
+         ({reclaimed} kB of {engine_cost} kB, suspended={suspended} kB, \
+         torn_down={torn_down} kB, start={start} kB) — see FINDINGS.md",
+        MIN_RECLAIM_SHARE * 100.0,
+        reclaim_share * 100.0
     );
+    assert!(
+        shutdown_did_it,
+        "detaching the view must not be what reclaims memory — Spike A established that \
+         shutDownEngine is; detach accounted for {:.1}% of the reclaim ({by_detach} kB of \
+         {reclaimed} kB), over the {:.0}% ceiling",
+        detach_share * 100.0,
+        MAX_DETACH_SHARE * 100.0
+    );
+}
+
+/// `part / whole` as a share, or 0.0 if `whole` is not positive.
+///
+/// `rss_kb` returns -1 when `ps` could not be read, and a negative or zero
+/// denominator would produce an infinity or a NaN. A NaN compares false
+/// against every threshold, so it would report as a failure — correct by
+/// accident, but with a message naming a nonsense percentage. Zero fails the
+/// floor and passes the ceiling, both of which are the honest answers to "the
+/// measurement did not work".
+fn ratio(part: i64, whole: i64) -> f64 {
+    if whole <= 0 {
+        return 0.0;
+    }
+    part as f64 / whole as f64
 }
 
 /// Looks up a sample by its exact label, for the two the report needs to
