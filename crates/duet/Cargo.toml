@@ -11,11 +11,28 @@ repository.workspace = true
 # `duet-core`, `duet-runtime` and `duet-schema` is an internal boundary that
 # exists so `duet-core` can stay dependency-free, not a choice a user should
 # have to make.
-#
-# `duet-derive` arrives in increment 6, behind a `derive` feature. It is not
-# declared here yet: a feature that enables nothing is a promise the crate
-# cannot keep, and `--all-features` would advertise it.
 [dependencies]
 duet-core = { path = "../duet-core" }
+duet-derive = { path = "../duet-derive", version = "0.1.0", optional = true }
 duet-runtime = { path = "../duet-runtime" }
 duet-schema = { path = "../duet-schema" }
+
+# `derive` is off by default, and the cost of turning it on is what decides
+# that: it pulls `syn`, `quote` and `proc-macro2` into the *build*, and an
+# application that hand-writes its `SharedState` impls — the documented escape
+# hatch, and the only way to share a type Duet does not accept — should not pay
+# for a macro it never invokes. Nothing is lost by it being opt-in: the trait,
+# the schema and the typed store are all here without it.
+#
+# Everything the feature adds is host-side. A proc-macro crate and its
+# dependencies are compiled for the machine doing the building and are never
+# linked into the program, so `derive` changes no shipped binary.
+[features]
+derive = ["dep:duet-derive"]
+
+# docs.rs builds with every feature on, so `duet::SharedState`'s derive is
+# documented there even though it is off by default. `--cfg docsrs` is what
+# `#[doc(cfg(...))]` would key off if this crate ever needs the annotation.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

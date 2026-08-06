@@ -1,0 +1,13 @@
+error: `#[derive(SharedState)]` cannot describe a generic type: the schema names a struct once, and every instantiation of a generic would claim that one name.
+       Fixes: derive it on a concrete struct that wraps the instantiation you share (`struct Doc { items: Vec<i64> }`), or write `impl SharedState` for each instantiation by hand.
+ --> tests/ui/generics.rs:6:14
+  |
+6 | struct Holder<T> {
+  |              ^^^
+
+error: `#[derive(SharedState)]` cannot describe a generic type: the schema names a struct once, and every instantiation of a generic would claim that one name.
+       Fixes: derive it on a concrete struct that wraps the instantiation you share (`struct Doc { items: Vec<i64> }`), or write `impl SharedState` for each instantiation by hand.
+  --> tests/ui/generics.rs:11:16
+   |
+11 | struct Borrowed<'a> {
+   |                ^^^^

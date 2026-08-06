@@ -1,0 +1,54 @@
+[package]
+name = "duet-derive"
+description = "#[derive(SharedState)] for Duet: one Rust type definition, one schema"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+proc-macro = true
+
+# `duet-core` and `duet-codegen` are here so the derive checks a wire key with
+# the SAME code the rest of the pipeline uses, rather than with a second copy of
+# the rules that could drift:
+#
+# - `duet_core::Path::parse` is the real path parser. A `#[duet(rename = "...")]`
+#   that does not round-trip through it would mint a path literal addressing a
+#   *different* node — one segment in, two out — and re-deriving the grammar here
+#   would be a second description of it that could disagree with the first.
+# - `duet_codegen::name::lower_camel` is the one accessor-casing rule. Two keys
+#   that camel-case alike collapse onto one Dart/TypeScript accessor; the
+#   emitters already refuse that, and refusing it here names the two Rust fields
+#   instead of two schema keys, at `cargo check` instead of at `duet generate`.
+#
+# Both are compile-time only. A proc-macro crate and its dependencies are built
+# for the host and never linked into the user's program, so neither reaches a
+# shipped binary — and `duet-core` itself gains nothing: this is a dependency
+# *on* it, which is not what `cargo tree -p duet-core` reports.
+[dependencies]
+duet-codegen = { path = "../duet-codegen" }
+duet-core = { path = "../duet-core" }
+proc-macro2 = "1.0.107"
+quote = "1.0.47"
+syn = { version = "2.0.119", default-features = false, features = [
+    "clone-impls",
+    "derive",
+    "parsing",
+    "printing",
+    "proc-macro",
+] }
+
+# The facade, so the derive's own tests exercise it exactly as a user does:
+# through `duet` with the `derive` feature, never through the internal crates.
+#
+# `duet` depends on `duet-derive` optionally and `duet-derive` dev-depends on
+# `duet` — a dependency cycle Cargo permits precisely because dev-dependencies
+# are not part of the library build graph. It is the same shape `serde_derive`
+# uses, and it is what lets the byte-identical schema proof live next to the
+# macro that has to satisfy it.
+[dev-dependencies]
+duet = { path = "../duet", features = ["derive"] }
+duet-host-stdio = { path = "../duet-host-stdio" }
+trybuild = "1.0.120"

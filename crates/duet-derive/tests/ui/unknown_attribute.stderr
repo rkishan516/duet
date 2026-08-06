@@ -1,0 +1,11 @@
+error: `renmae` is not a Duet attribute — the three are `rename = "..."`, `crate = ::path` or `skip`
+ --> tests/ui/unknown_attribute.rs:7:12
+  |
+7 |     #[duet(renmae = "window_title")]
+  |            ^^^^^^
+
+error: `with` is not a Duet attribute — the three are `rename = "..."`, `crate = ::path` or `skip`
+ --> tests/ui/unknown_attribute.rs:9:12
+  |
+9 |     #[duet(with = "my_codec")]
+  |            ^^^^
