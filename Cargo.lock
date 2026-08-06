@@ -446,6 +446,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "duet-cli"
+version = "0.1.0"
+dependencies = [
+ "duet-codegen",
+]
+
+[[package]]
 name = "duet-codec"
 version = "0.1.0"
 dependencies = [
