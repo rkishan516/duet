@@ -121,7 +121,7 @@ pub use lifecycle::{Instant, InvalidTransition, LifecycleEvent, SurfaceState, tr
 pub use path::{Path, PathParseError, Segment};
 pub use policy::{Decision, Policy, PolicyInput, evaluate};
 pub use store::{Notification, Patch, Store, SubscriberId, SubscriptionId};
-pub use value::{SetError, Value};
+pub use value::{MAX_VALUE_DEPTH, SetError, Value};
 
 /// Phase 2 moves `Store` onto a dedicated core thread and marshals notifications
 /// to the main thread, so these bounds are load-bearing. Asserted here so a

@@ -109,6 +109,23 @@ pub struct Store {
 
 impl Store {
     /// Creates a store seeded with `root` and no subscriptions.
+    ///
+    /// # `root` is not depth-checked, and [`Store::set`] is
+    ///
+    /// [`Store::set`] refuses a write that would nest past
+    /// [`MAX_VALUE_DEPTH`](crate::MAX_VALUE_DEPTH), which is what makes an
+    /// unencodable store unreachable from a guest: every guest write goes
+    /// through it. This constructor is the one door left, and it is deliberately
+    /// left open — it is infallible, so bounding here would mean returning a
+    /// `Result` from a constructor that every embedder and every test calls, to
+    /// guard against a value the *embedder itself* built.
+    ///
+    /// The consequence is bounded and covered: a host that seeds an over-deep
+    /// root gets a `failed` response rather than unparseable text, because
+    /// `duet_protocol::handle_text` checks the depth of what it is about to emit
+    /// as well as of what it receives. Prefer keeping the seed shallow; the
+    /// backstop exists so that not doing so is a diagnosable error rather than a
+    /// silent one.
     pub fn new(root: Value) -> Self {
         Store {
             root,
@@ -263,14 +280,44 @@ impl Store {
     /// notifying makes that failure mode unreachable rather than merely
     /// unlikely.
     ///
+    /// # The depth bound, and why it is enforced here
+    ///
+    /// A write that would leave the tree nested past
+    /// [`MAX_VALUE_DEPTH`](crate::MAX_VALUE_DEPTH) is refused with
+    /// [`SetError::TooDeep`], before anything is mutated. Such a tree is one the
+    /// host could no longer *encode and read back*: a `get` for it would produce
+    /// text past the wire's nesting limit, which no conforming client — the
+    /// host's own decoder included — can parse.
+    ///
+    /// This is the one place the bound can hold. `self.root` is private and
+    /// `Store` is the only owner of it, so refusing here makes an unencodable
+    /// store unreachable through any write, rather than merely reporting one
+    /// after the fact. (The remaining door is [`Store::new`]'s seed; see its
+    /// documentation.)
+    ///
+    /// The resulting depth is `path.segments().len() + value.depth()`: reaching
+    /// a node `k` segments down means `k` containers already enclose it. Any
+    /// part of the tree this write does not touch was already within the bound,
+    /// so checking the written node alone is sufficient — no full-tree walk on
+    /// the write path.
+    ///
     /// # Errors
     ///
-    /// Returns whatever [`Value::set`] returns for the same `path` and
+    /// [`SetError::TooDeep`] if the write would breach the depth bound above,
+    /// otherwise whatever [`Value::set`] returns for the same `path` and
     /// `value`; see its documentation for the exact conditions. On error the
     /// tree is left completely unchanged (this is [`Value::set`]'s own
     /// guarantee) and no notifications are produced — the `Err` variant
     /// carries no `Vec`, so there is nothing to iterate or deliver.
     pub fn set(&mut self, path: &Path, value: Value) -> Result<Vec<Notification>, SetError> {
+        let depth = path.segments().len() + value.depth();
+        if depth > crate::MAX_VALUE_DEPTH {
+            return Err(SetError::TooDeep {
+                path: path.clone(),
+                depth,
+                max: crate::MAX_VALUE_DEPTH,
+            });
+        }
         self.root.set(path, value.clone())?;
         let patch = Patch {
             path: path.clone(),
@@ -1025,5 +1072,126 @@ mod tests {
         let mut store = Store::new(sample());
         let (_id, snapshot) = store.subscribe(SubscriberId(1), Path::root());
         assert_eq!(snapshot, Some(sample()));
+    }
+}
+
+#[cfg(test)]
+mod depth_tests {
+    use super::*;
+    use crate::path::Path;
+    use crate::value::{MAX_VALUE_DEPTH, Value};
+
+    /// A chain of `n` nested lists around a scalar leaf: depth `n`.
+    fn chain(n: usize) -> Value {
+        let mut v = Value::Int(1);
+        for _ in 0..n {
+            v = Value::List(vec![v]);
+        }
+        v
+    }
+
+    fn p(s: &str) -> Path {
+        Path::parse(s).expect("test path should parse")
+    }
+
+    #[test]
+    fn a_write_at_the_depth_bound_is_accepted_and_one_past_it_is_not() {
+        // The exact boundary, at the root where the path contributes nothing.
+        // A "rejects very deep writes" test at 200 levels would pass against
+        // any bound at all.
+        let mut store = Store::new(Value::Null);
+        assert!(
+            store.set(&Path::root(), chain(MAX_VALUE_DEPTH)).is_ok(),
+            "exactly {MAX_VALUE_DEPTH} containers must be accepted"
+        );
+        assert_eq!(
+            store.set(&Path::root(), chain(MAX_VALUE_DEPTH + 1)),
+            Err(SetError::TooDeep {
+                path: Path::root(),
+                depth: MAX_VALUE_DEPTH + 1,
+                max: MAX_VALUE_DEPTH,
+            })
+        );
+    }
+
+    #[test]
+    fn the_path_counts_towards_the_bound_as_well_as_the_value() {
+        // Reaching a node two segments down means two containers already
+        // enclose it, so a value of depth MAX-1 written there is over the
+        // bound even though the value alone is under it. A check that looked
+        // only at `value.depth()` would let this through and leave the tree
+        // one container too deep.
+        let mut store = Store::new(Value::map([("a", Value::map([("b", Value::Null)]))]));
+        let path = p("a.b");
+        assert_eq!(
+            store.set(&path, chain(MAX_VALUE_DEPTH - 1)),
+            Err(SetError::TooDeep {
+                path: path.clone(),
+                depth: MAX_VALUE_DEPTH + 1,
+                max: MAX_VALUE_DEPTH,
+            })
+        );
+        assert!(
+            store.set(&path, chain(MAX_VALUE_DEPTH - 2)).is_ok(),
+            "two segments plus {} containers is exactly the bound",
+            MAX_VALUE_DEPTH - 2
+        );
+    }
+
+    #[test]
+    fn a_refused_write_mutates_nothing_and_notifies_nobody() {
+        // The depth check runs before `Value::set`, so it must uphold the same
+        // guarantee every other rejection does: no partial write, no
+        // notification. A subscriber told about a value that was never stored
+        // would mirror state the host does not have.
+        let original = Value::map([("a", Value::Int(1))]);
+        let mut store = Store::new(original.clone());
+        let subscriber = SubscriberId(1);
+        store.subscribe(subscriber, Path::root());
+
+        assert!(store.set(&p("a"), chain(MAX_VALUE_DEPTH + 1)).is_err());
+        assert_eq!(
+            store.get(&Path::root()),
+            Some(&original),
+            "a refused write must leave the tree untouched"
+        );
+
+        // And the subscription is still live and still working, so the refusal
+        // did not quietly cost the subscriber its registration either.
+        let notes = store.set(&p("a"), Value::Int(2)).expect("shallow write");
+        assert_eq!(notes.len(), 1);
+    }
+
+    #[test]
+    fn the_refusal_names_the_depth_the_limit_and_the_path() {
+        let mut store = Store::new(Value::map([("a", Value::Null)]));
+        let error = store
+            .set(&p("a"), chain(MAX_VALUE_DEPTH))
+            .expect_err("must be refused");
+        let rendered = error.to_string();
+        assert!(
+            rendered.contains(&(MAX_VALUE_DEPTH + 1).to_string()),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(&MAX_VALUE_DEPTH.to_string()),
+            "{rendered}"
+        );
+        assert!(rendered.contains('a'), "{rendered}");
+    }
+
+    #[test]
+    fn the_refusal_bounds_the_guest_supplied_path_like_every_other_variant() {
+        // A guest chooses this path. Without a cap a 1 MB path becomes a 1 MB
+        // error string, a 1 MB log line and a 1 MB protocol reply — the same
+        // amplification the other `SetError` variants already refuse.
+        let path = Path::parse(&format!("a.{}", "k".repeat(100_000))).expect("path");
+        let rendered = SetError::TooDeep {
+            path,
+            depth: 62,
+            max: MAX_VALUE_DEPTH,
+        }
+        .to_string();
+        assert!(rendered.len() < 256, "got {} bytes", rendered.len());
     }
 }

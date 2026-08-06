@@ -65,7 +65,92 @@ pub enum Value {
     Map(BTreeMap<String, Value>),
 }
 
+/// The most nested containers a [`Value`] in the [`crate::Store`] may have:
+/// **61**.
+///
+/// Depth counts *container* nodes on the deepest root-to-leaf path — [`Value::List`]
+/// and [`Value::Map`]. A scalar is 0; `List([Int(1)])` is 1; an empty `List` is 1.
+///
+/// # Why the store bounds this at all
+///
+/// A [`Value`] deeper than this cannot be *encoded and read back*. The wire
+/// format admits 127 nested JSON containers (`duet_codec::MAX_JSON_DEPTH`), and
+/// the host that writes a `Value` is also the host that has to serve a `get` for
+/// it. Without this bound a host could write a value the store accepts happily
+/// and then answer every read of it with text no conforming client — including
+/// the host's own decoder — can parse. That was measured: a 200-deep `Value`
+/// produced a 3,251-byte reply `serde_json` refused to re-parse, which reaches a
+/// guest as a parse failure or, worse, as silence.
+///
+/// # Where 61 comes from — measured, not assumed
+///
+/// `Value` nesting and JSON container nesting are **not** 1:1. Every `Value`
+/// node encodes as a tagged object `{"t":…,"v":…}`, and every *container* node
+/// adds a second container for its array or object:
+///
+/// ```text
+/// List([Null])         {"t":"l","v":[{"t":"n"}]}                  3 containers
+/// List([List([Null])]) {"t":"l","v":[{"t":"l","v":[{"t":"n"}]}]}  5 containers
+/// ```
+///
+/// So a value of depth `d` encodes to at most `2d + 1` JSON containers — the
+/// `+1` being the scalar leaf's own tagged object. (A value whose deepest path
+/// ends in an *empty* container costs `2d`, so `2d + 1` is the bound.)
+///
+/// A value never travels alone. The deepest envelope carrying one is a
+/// notification push, which nests it three containers down —
+/// `{"kind":"notification","notification":{…,"patch":{"path":…,"value":…}}}` —
+/// against one for a `value` response, a `subscribed` snapshot or a `set`
+/// request. That gives the constraint:
+///
+/// ```text
+/// 2d + 1 + 3 <= 127   =>   d <= 61.5   =>   MAX_VALUE_DEPTH = 61
+/// ```
+///
+/// Measured against the real encoders rather than derived on paper: the deepest
+/// value whose push re-parses is 61, and the deepest whose `value` response
+/// re-parses is 62. The push is the binding constraint, so 61 is the number that
+/// holds for *every* message a stored value can appear in.
+///
+/// `crates/duet-protocol` owns the test that pins this arithmetic, because it is
+/// the only crate that can see both this constant and
+/// `duet_codec::MAX_JSON_DEPTH`. This crate has no dependencies and will not
+/// gain one to state a number.
+pub const MAX_VALUE_DEPTH: usize = 61;
+
 impl Value {
+    /// How many nested containers this value has on its deepest path.
+    ///
+    /// A scalar is `0`; `List([])` and `Map({})` are `1`; `List([Map({})])` is
+    /// `2`. This is the quantity [`MAX_VALUE_DEPTH`] bounds.
+    ///
+    /// # Iterative on purpose
+    ///
+    /// A recursive walk would overflow the stack on exactly the input this
+    /// exists to reject, and a Rust stack overflow is an abort, not a catchable
+    /// error — so the one function guarding against pathological nesting must
+    /// not itself be pathological. The explicit stack holds at most one entry
+    /// per node in the tree, which the caller has already paid for.
+    pub fn depth(&self) -> usize {
+        let mut deepest = 0usize;
+        let mut pending: Vec<(&Value, usize)> = vec![(self, 0)];
+        while let Some((node, enclosing)) = pending.pop() {
+            let children: &mut dyn Iterator<Item = &Value> = match node {
+                Value::List(items) => &mut items.iter(),
+                Value::Map(entries) => &mut entries.values(),
+                _ => continue,
+            };
+            let inner = enclosing + 1;
+            if inner > deepest {
+                deepest = inner;
+            }
+            for child in children {
+                pending.push((child, inner));
+            }
+        }
+        deepest
+    }
+
     /// Convenience constructor for map literals in tests and app setup.
     ///
     /// Builds a [`Value::Map`] from `(key, value)` pairs. An empty iterator
@@ -140,6 +225,19 @@ impl Value {
     /// partial path walked so far — a guest process relaying the error over
     /// IPC needs the whole address to locate the problem, not just the
     /// segment where the walk stopped.
+    ///
+    /// # This method does **not** enforce [`MAX_VALUE_DEPTH`]
+    ///
+    /// It cannot, and adding the check here would be wrong rather than merely
+    /// redundant. The bound is on the depth of the *whole tree*, and `self` is
+    /// whatever `Value` the caller happens to hold — a subtree, in general — so
+    /// this method has no way to know how many containers already enclose it.
+    /// A check here would pass a write that is over-deep in the store and refuse
+    /// one that is not.
+    ///
+    /// [`crate::Store::set`] is where the bound lives, because that is the one
+    /// place `self` is known to be the root. `Store` owns its `root` privately,
+    /// so no write can reach the store around it.
     pub fn set(&mut self, path: &Path, value: Value) -> Result<(), SetError> {
         let segments = path.segments();
         let Some((last, parents)) = segments.split_last() else {
@@ -228,6 +326,22 @@ pub enum SetError {
     /// `List`, an index segment against a `Map`, or any segment against a
     /// scalar variant.
     TypeMismatch(Path),
+    /// The write would leave the tree nested deeper than [`MAX_VALUE_DEPTH`],
+    /// so the store could no longer encode itself.
+    ///
+    /// Produced by [`crate::Store::set`], never by [`Value::set`] — see
+    /// [`Value::set`]'s own documentation for why the bound cannot be checked
+    /// there.
+    TooDeep {
+        /// The full path originally passed to `set`.
+        path: Path,
+        /// The nesting the tree would have had at that path: the number of
+        /// segments in `path` plus [`Value::depth`] of the value written.
+        depth: usize,
+        /// The most it may have — [`MAX_VALUE_DEPTH`], repeated here so a
+        /// caller rendering the error needs nothing else.
+        max: usize,
+    },
 }
 
 /// Renders the path bounded, because a guest chooses it.
@@ -262,6 +376,11 @@ impl std::fmt::Display for SetError {
                     crate::echo::truncated(path)
                 )
             }
+            SetError::TooDeep { path, depth, max } => write!(
+                f,
+                "the value at path \"{}\" would nest {depth} containers, past the limit of {max}",
+                crate::echo::truncated(path)
+            ),
         }
     }
 }
@@ -836,5 +955,101 @@ mod tests {
             rendered.contains('\u{1F600}'),
             "should show some of the real text"
         );
+    }
+}
+
+#[cfg(test)]
+mod depth_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    /// A chain of `n` nested containers, alternating list and map, around a
+    /// scalar leaf.
+    fn chain(n: usize) -> Value {
+        let mut v = Value::Int(1);
+        for i in 0..n {
+            v = if i % 2 == 0 {
+                Value::List(vec![v])
+            } else {
+                Value::map([("a", v)])
+            };
+        }
+        v
+    }
+
+    #[test]
+    fn a_scalar_nests_nothing() {
+        for scalar in [
+            Value::Null,
+            Value::Bool(true),
+            Value::Int(0),
+            Value::Float(1.0),
+            Value::Str("hi".into()),
+            Value::Bytes(vec![1, 2, 3]),
+        ] {
+            assert_eq!(scalar.depth(), 0, "{scalar:?} encloses no container");
+        }
+    }
+
+    #[test]
+    fn an_empty_container_is_one_deep() {
+        // It is still a container: `{"t":"l","v":[]}` costs two JSON
+        // containers, not zero. A `depth` that returned 0 here would let a
+        // chain of empty containers past the bound.
+        assert_eq!(Value::List(Vec::new()).depth(), 1);
+        assert_eq!(Value::map([]).depth(), 1);
+    }
+
+    #[test]
+    fn depth_counts_nesting_not_size() {
+        assert_eq!(Value::List(vec![Value::Int(1); 10_000]).depth(), 1);
+        assert_eq!(chain(1).depth(), 1);
+        assert_eq!(chain(2).depth(), 2);
+        assert_eq!(chain(7).depth(), 7);
+    }
+
+    #[test]
+    fn depth_is_the_deepest_branch_not_the_first_or_the_last() {
+        // A walk that stopped at the first leaf, or that overwrote its running
+        // maximum with the last branch it saw, would pass a single-branch test.
+        let lopsided = Value::List(vec![Value::Int(1), chain(5), Value::Int(2)]);
+        assert_eq!(lopsided.depth(), 6);
+
+        let mut entries = BTreeMap::new();
+        entries.insert("a".to_string(), chain(4));
+        entries.insert("z".to_string(), Value::Int(1));
+        assert_eq!(Value::Map(entries).depth(), 5);
+    }
+
+    #[test]
+    fn the_walk_survives_a_value_deep_enough_to_overflow_a_recursive_one() {
+        // The reason `depth` is iterative. A recursive walk aborts here — a
+        // stack overflow is not a catchable error in Rust — on exactly the
+        // shape the bound exists to reject.
+        //
+        // `mem::forget` is load-bearing, not a shortcut. `Value` derives
+        // `Drop`, and a derived `Drop` is RECURSIVE: letting this value fall out
+        // of scope aborts the test process while proving nothing about `depth`.
+        // (Measured: 20 000 levels is already enough to overflow a test
+        // thread's stack on the way out.) Leaking one value in one test is the
+        // price of testing the walk at a depth that would actually catch a
+        // recursive implementation.
+        //
+        // That recursive `Drop` is a real, pre-existing hazard in this type and
+        // this bound is what keeps it out of reach: nothing deeper than
+        // `MAX_VALUE_DEPTH` can enter the store, so nothing deeper than that is
+        // ever dropped by the host on a guest's behalf.
+        let deep = chain(100_000);
+        assert_eq!(deep.depth(), 100_000);
+        std::mem::forget(deep);
+    }
+
+    #[test]
+    fn the_bound_is_the_deepest_value_whose_every_envelope_still_fits() {
+        // Restated as a literal so reading this number never requires deriving
+        // it. `crates/duet-protocol` holds the test that checks the arithmetic
+        // against `duet_codec::MAX_JSON_DEPTH` — this crate has no dependencies
+        // and will not gain one to state a number.
+        assert_eq!(MAX_VALUE_DEPTH, 61);
     }
 }

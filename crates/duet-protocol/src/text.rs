@@ -21,6 +21,23 @@ use crate::message::{Push, RequestId, Response};
 /// `subscriber` is the surface's own, supplied by the host. A `subscriber`
 /// field appearing in the message is **ignored** — [`crate::Request`] has no
 /// such field, so a guest cannot subscribe as another guest.
+///
+/// # The reply is depth-checked too, not only the request
+///
+/// The nesting limit guards text arriving *from* a guest. Nothing in the type
+/// system stops the host writing a `Value` whose encoding exceeds it, and a
+/// `get` for such a value would answer with text no conforming client — the
+/// host's own [`crate::decode_response`] included — can parse. Measured before
+/// this guard existed: a 200-deep `Value` produced a 3,251-byte reply
+/// `serde_json` refused to re-parse.
+///
+/// [`duet_core::Store::set`] refuses to store a value that deep, which is what
+/// makes the situation unreachable through any write. This check is the backstop
+/// for the door that leaves open — a `Store` *seeded* over-deep by its embedder,
+/// where the value was never written at all. Turning that into a
+/// [`Response::Failed`] costs one linear scan of text already produced, and buys
+/// the guarantee outright: **`handle_text` never returns text it could not
+/// decode itself**.
 pub fn handle_text(store: &StoreHandle, subscriber: SubscriberId, text: &str) -> String {
     let response = match decode(text) {
         Ok(request) => crate::dispatch(store, subscriber, request),
@@ -30,7 +47,21 @@ pub fn handle_text(store: &StoreHandle, subscriber: SubscriberId, text: &str) ->
     // the single encoding step. Note `wry`'s `evaluate_script_with_callback`
     // re-serializes anything a script *returns*, which is why responses are
     // pushed rather than returned — see `duet_webview::response_script`.
-    serde_json::to_string(&crate::encode_response(&response))
+    let encoded = serde_json::to_string(&crate::encode_response(&response))
+        .unwrap_or_else(|_| FALLBACK_FAILURE.to_string());
+    if !duet_codec::exceeds_max_json_depth(&encoded) {
+        return encoded;
+    }
+    // The failure keeps the id the request carried, so the guest fails that one
+    // call rather than waiting on a reply that would never arrive.
+    let refusal = Response::Failed {
+        id: response.id(),
+        message: format!(
+            "the stored value nests deeper than the {} JSON containers this wire admits",
+            duet_codec::MAX_JSON_DEPTH
+        ),
+    };
+    serde_json::to_string(&crate::encode_response(&refusal))
         .unwrap_or_else(|_| FALLBACK_FAILURE.to_string())
 }
 
@@ -108,8 +139,27 @@ fn decode(text: &str) -> Result<crate::Request, (RequestId, String)> {
 /// `duet_webview::push_script`); a Flutter guest receives it verbatim on its
 /// platform channel, which is why the encoding lives here rather than in a
 /// transport crate.
+///
+/// # Over-deep pushes become `null`, and that is the honest answer
+///
+/// A push carries no request id, so there is no `failed` reply to send in its
+/// place — a guest correlates nothing and can be told nothing. `null` is
+/// therefore the only remaining option, and every guest's push handler already
+/// drops what it cannot decode. It is still strictly better than emitting text
+/// that nests past the wire's limit, which a guest would meet as a parse error
+/// on an unrelated code path.
+///
+/// A notification is the deepest envelope this format has, which is exactly why
+/// [`duet_core::MAX_VALUE_DEPTH`] is derived from it: with that bound enforced
+/// on the way into the store, no push built from a stored patch can reach this
+/// branch.
 pub fn push_text(push: &Push) -> String {
-    serde_json::to_string(&crate::encode_push(push)).unwrap_or_else(|_| "null".to_string())
+    let encoded =
+        serde_json::to_string(&crate::encode_push(push)).unwrap_or_else(|_| "null".to_string());
+    if duet_codec::exceeds_max_json_depth(&encoded) {
+        return "null".to_string();
+    }
+    encoded
 }
 
 #[cfg(test)]
@@ -350,6 +400,157 @@ mod tests {
         );
 
         rt.shutdown().expect("shutdown should succeed");
+    }
+
+    /// A chain of `n` nested lists around a scalar leaf: `Value::depth() == n`.
+    fn chain(n: usize) -> Value {
+        let mut v = Value::Int(1);
+        for _ in 0..n {
+            v = Value::List(vec![v]);
+        }
+        v
+    }
+
+    #[test]
+    fn the_value_depth_bound_is_exactly_what_every_envelope_can_carry() {
+        // The arithmetic behind `duet_core::MAX_VALUE_DEPTH`, checked against
+        // the real encoders in the one crate that can see both constants.
+        // Stating 61 in `duet-core` and 127 in `duet-codec` and hoping they
+        // stay consistent is how the guests' off-by-one happened in the first
+        // place.
+        //
+        // A `Value` costs two JSON containers per level of its own nesting; the
+        // deepest envelope carrying one is a notification push, at three more.
+        // So the bound is tested where it binds, and the assertion is
+        // decodability rather than length.
+        for (depth, must_survive) in [
+            (duet_core::MAX_VALUE_DEPTH, true),
+            (duet_core::MAX_VALUE_DEPTH + 1, false),
+        ] {
+            let push = Push::Notification(duet_core::Notification {
+                subscriber: SubscriberId(1),
+                subscription: duet_core::SubscriptionId(1),
+                patch: duet_core::Patch {
+                    path: Path::parse("a").expect("path"),
+                    value: chain(depth),
+                },
+            });
+            let text = serde_json::to_string(&crate::encode_push(&push)).expect("serializes");
+            let within = !duet_codec::exceeds_max_json_depth(&text);
+            assert_eq!(
+                within,
+                must_survive,
+                "a value of depth {depth} in a notification push: expected \
+                 within-limit={must_survive}, and the limit is \
+                 {} containers",
+                duet_codec::MAX_JSON_DEPTH
+            );
+            if must_survive {
+                let json: serde_json::Value =
+                    serde_json::from_str(&text).expect("must re-parse at the bound");
+                crate::decode_push(&json).expect("must re-decode at the bound");
+            }
+        }
+    }
+
+    #[test]
+    fn a_value_too_deep_to_encode_cannot_be_written_at_all() {
+        // Option (a): the store refuses it, so no `get` can ever be asked to
+        // encode one. This is the guarantee that makes the reply unbreakable
+        // rather than merely diagnosable.
+        let rt = rt();
+        let handle = rt.handle();
+        let path = Path::parse("editor").expect("path");
+
+        // `editor` is one segment down, so one container already encloses the
+        // node being written and the value itself may be one shallower than the
+        // bound. Writing the bound's worth of value HERE is already one too
+        // deep — the same accounting `Store::set` does.
+        assert!(
+            handle
+                .set(&path, chain(duet_core::MAX_VALUE_DEPTH - 1))
+                .is_ok(),
+            "a value at exactly the bound must still be writable"
+        );
+        let refused = handle
+            .set(&path, chain(duet_core::MAX_VALUE_DEPTH))
+            .expect_err("one past the bound must be refused");
+        assert!(
+            refused.to_string().contains("nest"),
+            "the refusal must say why, got {refused}"
+        );
+        rt.shutdown().expect("shutdown should succeed");
+    }
+
+    #[test]
+    fn a_store_seeded_over_deep_still_answers_with_decodable_text() {
+        // Option (b): the backstop for the one door option (a) leaves open —
+        // `Store::new`'s seed, which is infallible and so cannot refuse
+        // anything. Before this guard, the host wrote a 200-deep value and
+        // `get` returned 3,251 bytes that `serde_json` could NOT re-parse; a
+        // guest met that as a parse failure or as silence.
+        //
+        // The assertion is decodability, not length: a reply that happens to be
+        // short proves nothing, and a reply that is well-formed JSON but not a
+        // `Response` is just as unusable to a guest.
+        let rt = Runtime::spawn(Value::map([("editor", chain(200))]), NullSink);
+        let reply = handle_text(
+            &rt.handle(),
+            SubscriberId(1),
+            r#"{"kind":"get","id":"7","path":"editor"}"#,
+        );
+
+        let json: serde_json::Value = serde_json::from_str(&reply)
+            .unwrap_or_else(|e| panic!("the reply must be well-formed JSON: {e}\n{reply}"));
+        let decoded = crate::decode_response(&json)
+            .unwrap_or_else(|e| panic!("the reply must be decodable by a guest: {e}\n{reply}"));
+
+        match decoded {
+            Response::Failed { id, message } => {
+                assert_eq!(
+                    id,
+                    RequestId(7),
+                    "the failure must name the request it answers, or the guest \
+                     cannot fail that one call"
+                );
+                assert!(
+                    message.contains(&duet_codec::MAX_JSON_DEPTH.to_string()),
+                    "the failure must name the limit it hit, got {message}"
+                );
+            }
+            other => panic!("expected a failed response, got {other:?}"),
+        }
+        rt.shutdown().expect("shutdown should succeed");
+    }
+
+    #[test]
+    fn an_over_deep_push_becomes_null_rather_than_unparseable_text() {
+        // A push carries no id, so there is no `failed` to send instead — but
+        // emitting text past the wire's limit would surface in a guest as a
+        // parse error on an unrelated code path. `null` is what every guest's
+        // push handler already drops.
+        let note = duet_core::Notification {
+            subscriber: SubscriberId(1),
+            subscription: duet_core::SubscriptionId(1),
+            patch: duet_core::Patch {
+                path: Path::parse("a").expect("path"),
+                value: chain(200),
+            },
+        };
+        assert_eq!(push_text(&Push::Notification(note)), "null");
+
+        // And a push within the bound is untouched.
+        let ok = duet_core::Notification {
+            subscriber: SubscriberId(1),
+            subscription: duet_core::SubscriptionId(1),
+            patch: duet_core::Patch {
+                path: Path::parse("a").expect("path"),
+                value: chain(duet_core::MAX_VALUE_DEPTH),
+            },
+        };
+        let text = push_text(&Push::Notification(ok));
+        let json: serde_json::Value = serde_json::from_str(&text).expect("well-formed JSON");
+        crate::decode_push(&json).expect("a push at the bound must be decodable");
     }
 
     /// A guest that speaks the webview IPC channel may be running untrusted
