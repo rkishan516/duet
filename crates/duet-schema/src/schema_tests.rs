@@ -408,3 +408,122 @@ fn every_ty_arm_reaches_the_renderer_through_a_whole_document() {
         }
     }
 }
+
+#[test]
+fn build_validates_a_hand_assembled_schema_the_same_way_of_does() {
+    let schema = Schema::build(
+        Ty::Named("App".to_string()),
+        vec![TypeDef {
+            name: "App".to_string(),
+            fields: vec![FieldDef::new("counter", Ty::Int)],
+        }],
+    )
+    .expect("a legal schema");
+    assert_eq!(schema.root(), &Ty::Named("App".to_string()));
+    assert_eq!(schema.types().len(), 1);
+}
+
+#[test]
+fn build_sorts_types_by_name_whatever_order_they_arrive_in() {
+    // `render`'s byte-stability must not depend on how the caller assembled the
+    // list, or a schema read back from JSON would re-render differently from
+    // the file it was read from.
+    let leaf = TypeDef {
+        name: "Editor".to_string(),
+        fields: vec![FieldDef::new("zoom", Ty::Float)],
+    };
+    let root = TypeDef {
+        name: "App".to_string(),
+        fields: vec![FieldDef::new("editor", Ty::Named("Editor".to_string()))],
+    };
+    let forwards = Schema::build(
+        Ty::Named("App".to_string()),
+        vec![root.clone(), leaf.clone()],
+    )
+    .expect("a legal schema");
+    let backwards =
+        Schema::build(Ty::Named("App".to_string()), vec![leaf, root]).expect("a legal schema");
+    assert_eq!(forwards, backwards);
+    assert_eq!(forwards.render(), backwards.render());
+}
+
+#[test]
+fn build_rejects_two_definitions_sharing_a_name() {
+    // `Registry` is keyed by name and cannot produce this; a parsed document
+    // can, and `resolve`'s by-name map would silently keep only one.
+    let errors = Schema::build(
+        Ty::Named("App".to_string()),
+        vec![
+            TypeDef {
+                name: "App".to_string(),
+                fields: vec![FieldDef::new("counter", Ty::Int)],
+            },
+            TypeDef {
+                name: "App".to_string(),
+                fields: vec![FieldDef::new("title", Ty::Str)],
+            },
+        ],
+    )
+    .expect_err("two definitions on one name");
+    assert!(
+        errors.0.contains(&SchemaError::NameCollision {
+            name: "App".to_string()
+        }),
+        "{errors}"
+    );
+}
+
+#[test]
+fn build_rejects_two_fields_on_one_key() {
+    let errors = Schema::build(
+        Ty::Named("App".to_string()),
+        vec![TypeDef {
+            name: "App".to_string(),
+            fields: vec![
+                FieldDef::new("zoom", Ty::Int),
+                FieldDef::new("zoom", Ty::Str),
+            ],
+        }],
+    )
+    .expect_err("two fields on one key");
+    assert_eq!(
+        errors.0,
+        vec![SchemaError::DuplicateKey {
+            type_name: "App".to_string(),
+            key: "zoom".to_string(),
+        }]
+    );
+}
+
+#[test]
+fn build_rejects_a_cycle_a_registry_could_never_have_produced() {
+    let errors = Schema::build(
+        Ty::Named("Node".to_string()),
+        vec![TypeDef {
+            name: "Node".to_string(),
+            fields: vec![FieldDef::new(
+                "next",
+                Ty::Named("Node".to_string()).optional(),
+            )],
+        }],
+    )
+    .expect_err("a self-referential type");
+    assert_eq!(
+        errors.0,
+        vec![SchemaError::Recursive {
+            chain: vec!["Node".to_string(), "Node".to_string()],
+        }]
+    );
+}
+
+#[test]
+fn build_rejects_a_dangling_reference() {
+    let errors = Schema::build(Ty::Named("Missing".to_string()), Vec::new())
+        .expect_err("a reference to nothing");
+    assert_eq!(
+        errors.0,
+        vec![SchemaError::UnknownType {
+            name: "Missing".to_string()
+        }]
+    );
+}
