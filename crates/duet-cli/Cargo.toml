@@ -1,0 +1,25 @@
+[package]
+name = "duet-cli"
+description = "The `duet` command: generates typed Dart and TypeScript clients from a Duet schema"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# The binary is `duet`, not `duet-cli`. The package cannot be called `duet`
+# because the facade library already is, and a user types the command far more
+# often than they type the crate name.
+[[bin]]
+name = "duet"
+path = "src/main.rs"
+
+# ONE dependency, and it is the library this tool is a front end for.
+#
+# There is deliberately no argument-parsing crate here. See `args` for the
+# reasoning; the short version is that this workspace treats a dependency as a
+# cost to be argued for — `duet-core` has none at all, `packages/duet-js` has no
+# runtime dependency, and `duet-host-stdio` already hand-rolls its own argv — and
+# a two-flag tool does not clear that bar.
+[dependencies]
+duet-codegen = { path = "../duet-codegen" }

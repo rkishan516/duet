@@ -98,9 +98,21 @@ Plus `trybuild` compile-fail cases for every rejection above.
 
 ---
 
-## Increment 7 — `crates/duet-cli`
+## Increment 7 — `crates/duet-cli` ✅ DONE
 
-`duet generate`, `duet generate --check`. Thin: everything it does is a library call the earlier increments proved. Plus the CI `--check` step. First increment a third party can use.
+`duet generate`, `duet generate --check`. Thin, as intended: every transformation is a `duet-codegen` call the earlier increments already gate.
+
+**Shipped.** 1034 Rust / 414 Dart / 460 TypeScript. `duet-cli` at 97.95% lines; workspace total 96.14%.
+
+Decisions taken, each with a test that would fail if it were reversed:
+
+- **Argument parsing is hand-rolled, not `clap`.** One subcommand and four flags did not clear the bar this workspace sets for a dependency — `duet-core` has none by design and CI asserts it, `packages/duet-js` has no runtime dependency and CI asserts that too, and `duet-host-stdio` already hand-rolls its own argv. What is given up is named in `args`: completions, near-miss suggestions, coloured errors. Every parser arm is pinned, because the failure mode of hand-rolled argv is not a crash but accepting something and quietly doing the wrong thing.
+- **`--dart` and `--ts` are each optional; at least one is required.** A run that generated nothing would exit 0 and look exactly like a run that succeeded — the worst outcome a generator has.
+- **Four exit codes.** `3` for a stale file is distinct from `1` for a failed run, so a CI job can tell a schema that no longer parses from a client that merely needs regenerating.
+- **The regeneration command is canonical, not argv-shaped, and never carries `--check`.** It is written into every generated header *and* printed by a failing `--check`, so flag order cannot change the bytes and the printed fix is never the invocation that writes nothing.
+- **Writing is two-phase**: every file staged to a temporary beside its target, nothing renamed until all are staged. A target that is itself a directory (`--dart lib/`) is pre-flighted, because it is the one mistake that stages cleanly and fails at the rename — a test caught the first version replacing the Dart client before objecting to the TypeScript one.
+
+The CI `--check` step runs against `examples/generated/`, not the committed goldens under `packages/*/test/generated/`: those override the TypeScript import specifiers to reach into `packages/duet-js/src`, since they live inside that package and it cannot import itself by name before a build. `examples/generated/` uses the **defaults**, so the step is the only thing in CI exercising the published `duet-protocol` specifiers a third party gets.
 
 ---
 
@@ -117,9 +129,9 @@ Plus `trybuild` compile-fail cases for every rejection above.
 
 ## Done criteria
 
-- [ ] One `#[derive(SharedState)]` type yields typed Rust, Dart and TypeScript clients
-- [ ] The derive's schema output is byte-identical to the hand-written specification
-- [ ] Generated clients are proven against a real host over the real wire, not only against goldens
-- [ ] Every rejection has a `trybuild` case and a message naming the fix
-- [ ] A stale schema or stale generated file fails CI
-- [ ] `duet-core` remains zero-dependency
+- [x] One `#[derive(SharedState)]` type yields typed Rust, Dart and TypeScript clients
+- [x] The derive's schema output is byte-identical to the hand-written specification
+- [x] Generated clients are proven against a real host over the real wire, not only against goldens
+- [x] Every rejection has a `trybuild` case and a message naming the fix
+- [x] A stale schema or stale generated file fails CI — now four ways, the fourth being `duet generate --check`, the only one a user outside this workspace can run
+- [x] `duet-core` remains zero-dependency

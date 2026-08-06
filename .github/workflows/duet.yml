@@ -19,6 +19,10 @@ on:
       # edited alone would otherwise leave two guest packages generated from a
       # file that no longer exists in that form.
       - 'schema/**'
+      # The clients `duet generate --check` is run against in the `rust` job.
+      # Same reasoning again: edited alone, they would go stale with nothing
+      # running the one step that compares them.
+      - 'examples/**'
       - 'packages/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -118,6 +122,38 @@ jobs:
       # regeneration cannot quietly empty the check.
       - name: Test single-threaded (includes all three staleness checks)
         run: cargo test --workspace --exclude duet-backend-macos --locked -- --test-threads=1
+      # The fourth staleness check, and the only one a user outside this
+      # workspace can reproduce.
+      #
+      # The other three are `cargo test` assertions. They are the stronger
+      # gates — they compare against fixtures, negative corpora and a real host
+      # — but they are unavailable to somebody who has `duet` installed and a
+      # schema of their own, and they say nothing about whether the CLI can be
+      # driven from a shell at all. `crates/duet-cli/tests/cli.rs` covers the
+      # binary's behaviour; this covers the invocation, in the exact shape the
+      # README tells a newcomer to put in their own CI.
+      #
+      # It is pointed at `examples/generated/` rather than at the committed
+      # goldens under `packages/*/test/generated/`, for a reason worth stating
+      # so nobody "fixes" it later: those goldens are generated with the
+      # TypeScript import specifiers overridden to reach into
+      # `packages/duet-js/src`, because they live inside that package and it
+      # cannot import itself by name before a build. Teaching the CLI to
+      # reproduce them would mean two more flags on a two-flag tool, serving
+      # one in-repo quirk. `examples/generated/` is instead generated with the
+      # **defaults** — the published `duet-protocol` specifiers a third party
+      # gets — so this step checks the path nothing else here exercises.
+      #
+      # Exit 3 means stale and exit 1 means broken; `set -e` fails on either,
+      # and the tool prints the differing line and the command that fixes it.
+      - name: Assert the committed example clients are what duet generates
+        run: |
+          set -euo pipefail
+          cargo run -p duet-cli --locked --quiet -- generate \
+            --schema schema/app.json \
+            --dart examples/generated/app.duet.dart \
+            --ts examples/generated/app.duet.ts \
+            --check
 
   # The pure-Dart client. This job is the entire reason `packages/duet` and
   # `packages/duet_flutter` are separate packages: `package:flutter/services.dart`
