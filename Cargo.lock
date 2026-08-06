@@ -417,6 +417,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "duet"
+version = "0.1.0"
+dependencies = [
+ "duet-core",
+ "duet-runtime",
+ "duet-schema",
+]
+
+[[package]]
 name = "duet-backend-macos"
 version = "0.1.0"
 dependencies = [

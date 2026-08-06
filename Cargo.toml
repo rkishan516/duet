@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/duet",
     "crates/duet-core",
     "crates/duet-runtime",
     "crates/duet-codec",
