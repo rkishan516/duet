@@ -1,0 +1,23 @@
+[package]
+name = "duet-codegen"
+description = "Reads a Duet schema and emits typed Dart and TypeScript clients"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# `serde_json` is here and deliberately NOT in `duet-schema`.
+#
+# `Schema::render` is a hand-rolled writer; this crate's reader is a
+# `serde_json` one. The two share no code, so `render -> read -> compare` is a
+# cross-check between two implementations rather than a round trip through one.
+# The moment either crate gains the other's dependency that stops being true, so
+# the split is load-bearing rather than tidy.
+[dependencies]
+duet-core = { path = "../duet-core" }
+duet-schema = { path = "../duet-schema" }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+
+[dev-dependencies]
+duet-runtime = { path = "../duet-runtime" }

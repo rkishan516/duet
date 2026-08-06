@@ -1,0 +1,26 @@
+{
+  "root": {
+    "kind": "named",
+    "name": "App"
+  },
+  "types": [
+    {
+      "fields": [
+        {
+          "key": "tags",
+          "type": {
+            "kind": "list",
+            "of": {
+              "kind": "optional",
+              "of": {
+                "kind": "string"
+              }
+            }
+          }
+        }
+      ],
+      "name": "App"
+    }
+  ],
+  "version": 1
+}

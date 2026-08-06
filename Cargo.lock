@@ -453,6 +453,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "duet-codegen"
+version = "0.1.0"
+dependencies = [
+ "duet-core",
+ "duet-runtime",
+ "duet-schema",
+ "serde_json",
+]
+
+[[package]]
 name = "duet-core"
 version = "0.1.0"
 

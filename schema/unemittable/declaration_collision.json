@@ -1,0 +1,32 @@
+{
+  "root": {
+    "kind": "named",
+    "name": "App"
+  },
+  "types": [
+    {
+      "fields": [
+        {
+          "key": "editor",
+          "type": {
+            "kind": "named",
+            "name": "AppEditorClient"
+          }
+        }
+      ],
+      "name": "App"
+    },
+    {
+      "fields": [
+        {
+          "key": "zoom",
+          "type": {
+            "kind": "float"
+          }
+        }
+      ],
+      "name": "AppEditorClient"
+    }
+  ],
+  "version": 1
+}

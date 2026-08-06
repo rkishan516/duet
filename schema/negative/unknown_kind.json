@@ -1,0 +1,20 @@
+{
+  "root": {
+    "kind": "named",
+    "name": "App"
+  },
+  "types": [
+    {
+      "fields": [
+        {
+          "key": "big",
+          "type": {
+            "kind": "u64"
+          }
+        }
+      ],
+      "name": "App"
+    }
+  ],
+  "version": 1
+}

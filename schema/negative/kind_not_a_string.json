@@ -1,0 +1,12 @@
+{
+  "root": {
+    "kind": 3
+  },
+  "types": [
+    {
+      "fields": [],
+      "name": "App"
+    }
+  ],
+  "version": 1
+}

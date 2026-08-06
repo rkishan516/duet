@@ -1,0 +1,230 @@
+{
+  "root": {
+    "kind": "named",
+    "name": "App"
+  },
+  "types": [
+    {
+      "fields": [
+        {
+          "key": "deep",
+          "type": {
+            "kind": "list",
+            "of": {
+              "kind": "list",
+              "of": {
+                "kind": "list",
+                "of": {
+                  "kind": "list",
+                  "of": {
+                    "kind": "list",
+                    "of": {
+                      "kind": "list",
+                      "of": {
+                        "kind": "list",
+                        "of": {
+                          "kind": "list",
+                          "of": {
+                            "kind": "list",
+                            "of": {
+                              "kind": "list",
+                              "of": {
+                                "kind": "list",
+                                "of": {
+                                  "kind": "list",
+                                  "of": {
+                                    "kind": "list",
+                                    "of": {
+                                      "kind": "list",
+                                      "of": {
+                                        "kind": "list",
+                                        "of": {
+                                          "kind": "list",
+                                          "of": {
+                                            "kind": "list",
+                                            "of": {
+                                              "kind": "list",
+                                              "of": {
+                                                "kind": "list",
+                                                "of": {
+                                                  "kind": "list",
+                                                  "of": {
+                                                    "kind": "list",
+                                                    "of": {
+                                                      "kind": "list",
+                                                      "of": {
+                                                        "kind": "list",
+                                                        "of": {
+                                                          "kind": "list",
+                                                          "of": {
+                                                            "kind": "list",
+                                                            "of": {
+                                                              "kind": "list",
+                                                              "of": {
+                                                                "kind": "list",
+                                                                "of": {
+                                                                  "kind": "list",
+                                                                  "of": {
+                                                                    "kind": "list",
+                                                                    "of": {
+                                                                      "kind": "list",
+                                                                      "of": {
+                                                                        "kind": "list",
+                                                                        "of": {
+                                                                          "kind": "list",
+                                                                          "of": {
+                                                                            "kind": "list",
+                                                                            "of": {
+                                                                              "kind": "list",
+                                                                              "of": {
+                                                                                "kind": "list",
+                                                                                "of": {
+                                                                                  "kind": "list",
+                                                                                  "of": {
+                                                                                    "kind": "list",
+                                                                                    "of": {
+                                                                                      "kind": "list",
+                                                                                      "of": {
+                                                                                        "kind": "list",
+                                                                                        "of": {
+                                                                                          "kind": "list",
+                                                                                          "of": {
+                                                                                            "kind": "list",
+                                                                                            "of": {
+                                                                                              "kind": "list",
+                                                                                              "of": {
+                                                                                                "kind": "list",
+                                                                                                "of": {
+                                                                                                  "kind": "list",
+                                                                                                  "of": {
+                                                                                                    "kind": "list",
+                                                                                                    "of": {
+                                                                                                      "kind": "list",
+                                                                                                      "of": {
+                                                                                                        "kind": "list",
+                                                                                                        "of": {
+                                                                                                          "kind": "list",
+                                                                                                          "of": {
+                                                                                                            "kind": "list",
+                                                                                                            "of": {
+                                                                                                              "kind": "list",
+                                                                                                              "of": {
+                                                                                                                "kind": "list",
+                                                                                                                "of": {
+                                                                                                                  "kind": "list",
+                                                                                                                  "of": {
+                                                                                                                    "kind": "list",
+                                                                                                                    "of": {
+                                                                                                                      "kind": "list",
+                                                                                                                      "of": {
+                                                                                                                        "kind": "list",
+                                                                                                                        "of": {
+                                                                                                                          "kind": "list",
+                                                                                                                          "of": {
+                                                                                                                            "kind": "list",
+                                                                                                                            "of": {
+                                                                                                                              "kind": "list",
+                                                                                                                              "of": {
+                                                                                                                                "kind": "list",
+                                                                                                                                "of": {
+                                                                                                                                  "kind": "list",
+                                                                                                                                  "of": {
+                                                                                                                                    "kind": "list",
+                                                                                                                                    "of": {
+                                                                                                                                      "kind": "list",
+                                                                                                                                      "of": {
+                                                                                                                                        "kind": "list",
+                                                                                                                                        "of": {
+                                                                                                                                          "kind": "list",
+                                                                                                                                          "of": {
+                                                                                                                                            "kind": "list",
+                                                                                                                                            "of": {
+                                                                                                                                              "kind": "list",
+                                                                                                                                              "of": {
+                                                                                                                                                "kind": "list",
+                                                                                                                                                "of": {
+                                                                                                                                                  "kind": "list",
+                                                                                                                                                  "of": {
+                                                                                                                                                    "kind": "list",
+                                                                                                                                                    "of": {
+                                                                                                                                                      "kind": "list",
+                                                                                                                                                      "of": {
+                                                                                                                                                        "kind": "int"
+                                                                                                                                                      }
+                                                                                                                                                    }
+                                                                                                                                                  }
+                                                                                                                                                }
+                                                                                                                                              }
+                                                                                                                                            }
+                                                                                                                                          }
+                                                                                                                                        }
+                                                                                                                                      }
+                                                                                                                                    }
+                                                                                                                                  }
+                                                                                                                                }
+                                                                                                                              }
+                                                                                                                            }
+                                                                                                                          }
+                                                                                                                        }
+                                                                                                                      }
+                                                                                                                    }
+                                                                                                                  }
+                                                                                                                }
+                                                                                                              }
+                                                                                                            }
+                                                                                                          }
+                                                                                                        }
+                                                                                                      }
+                                                                                                    }
+                                                                                                  }
+                                                                                                }
+                                                                                              }
+                                                                                            }
+                                                                                          }
+                                                                                        }
+                                                                                      }
+                                                                                    }
+                                                                                  }
+                                                                                }
+                                                                              }
+                                                                            }
+                                                                          }
+                                                                        }
+                                                                      }
+                                                                    }
+                                                                  }
+                                                                }
+                                                              }
+                                                            }
+                                                          }
+                                                        }
+                                                      }
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "name": "App"
+    }
+  ],
+  "version": 1
+}

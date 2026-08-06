@@ -1,0 +1,20 @@
+{
+  "root": {
+    "kind": "named",
+    "name": "App"
+  },
+  "types": [
+    {
+      "fields": [
+        {
+          "key": "tags",
+          "type": {
+            "kind": "list"
+          }
+        }
+      ],
+      "name": "App"
+    }
+  ],
+  "version": 1
+}

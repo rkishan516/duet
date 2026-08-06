@@ -1,0 +1,43 @@
+{
+  "root": {"kind": "named", "name": "Wide"},
+  "types": [
+    {
+      "fields": [
+        {"key": "zoom", "type": {"kind": "float"}},
+        {"key": "theme", "type": {"kind": "string"}}
+      ],
+      "name": "Editor"
+    },
+    {
+      "fields": [
+        {"key": "inner", "type": {"kind": "named", "name": "Editor"}},
+        {"key": "depth", "type": {"kind": "int"}}
+      ],
+      "name": "Outer"
+    },
+    {
+      "fields": [
+        {"key": "flag", "type": {"kind": "bool"}},
+        {"key": "count", "type": {"kind": "int"}},
+        {"key": "ratio", "type": {"kind": "float"}},
+        {"key": "label", "type": {"kind": "string"}},
+        {"key": "blob", "type": {"kind": "bytes"}},
+        {"key": "anything", "type": {"kind": "dynamic"}},
+        {"key": "maybe_label", "type": {"kind": "optional", "of": {"kind": "string"}}},
+        {"key": "maybe_ratios", "type": {"kind": "optional", "of": {"kind": "list", "of": {"kind": "float"}}}},
+        {"key": "maybe_editor", "type": {"kind": "optional", "of": {"kind": "named", "name": "Editor"}}},
+        {"key": "tags", "type": {"kind": "list", "of": {"kind": "string"}}},
+        {"key": "matrix", "type": {"kind": "list", "of": {"kind": "list", "of": {"kind": "int"}}}},
+        {"key": "lookup", "type": {"kind": "map", "of": {"kind": "int"}}},
+        {"key": "editors", "type": {"kind": "map", "of": {"kind": "named", "name": "Editor"}}},
+        {"key": "blobs", "type": {"kind": "list", "of": {"kind": "bytes"}}},
+        {"key": "loose", "type": {"kind": "map", "of": {"kind": "dynamic"}}},
+        {"key": "flags", "type": {"kind": "list", "of": {"kind": "bool"}}},
+        {"key": "outer", "type": {"kind": "named", "name": "Outer"}},
+        {"key": "snake_case_field", "type": {"kind": "string"}}
+      ],
+      "name": "Wide"
+    }
+  ],
+  "version": 1
+}

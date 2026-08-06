@@ -1,0 +1,21 @@
+{
+  "root": {
+    "kind": "named",
+    "name": "App"
+  },
+  "types": [
+    {
+      "fields": [
+        {
+          "key": "counter",
+          "type": {
+            "kind": "int"
+          },
+          "doc": "x"
+        }
+      ],
+      "name": "App"
+    }
+  ],
+  "version": 1
+}
