@@ -37,7 +37,7 @@
 //! It is a much smaller window than the one part 3 closes. Every failure with a
 //! plausible cause happens during staging: a read-only directory, a full disk,
 //! a path that cannot be created — and a target that is itself a directory,
-//! which [`stage`] pre-flights precisely because it is the one mistake that
+//! which staging pre-flights precisely because it is the one mistake that
 //! would otherwise stage cleanly and fail at the rename. `--dart lib/` is easy
 //! to type, and the first version of this module let it replace the TypeScript
 //! client before objecting. A rename that fails for any other reason means the

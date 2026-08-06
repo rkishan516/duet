@@ -18,9 +18,9 @@
 //!
 //! 2. **The `--help` text is the one place a newcomer meets Duet**, so it is
 //!    written rather than generated. `clap`'s derived help would need
-//!    `long_about` overrides on every item to say anything like what [`help`]
-//!    says, at which point the generator is only laying out text somebody wrote
-//!    anyway.
+//!    `long_about` overrides on every item to say anything like what
+//!    [`crate::help`] says, at which point the generator is only laying out
+//!    text somebody wrote anyway.
 //!
 //! 3. **`clap`'s value taken for free is exactly what is cheapest to test.**
 //!    Hand-rolled parsing earns its keep only if every arm is pinned, and every
