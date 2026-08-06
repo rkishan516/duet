@@ -21,12 +21,15 @@ into typed client code, so no guest hand-writes a path string.
 
 USAGE
     duet generate --schema <path> [--dart <path>] [--ts <path>] [--check]
+    duet dev --flutter <dir> [--flutter-root <dir>] -- <host command>
     duet --help
     duet --version
 
 COMMANDS
     generate    Emit a typed Dart and/or TypeScript client from a schema.
                 Run `duet generate --help` for its flags.
+    dev         Run the host and hot-reload its Dart guest whenever a file
+                under lib/ is saved. Run `duet dev --help` for its flags.
 
 EXIT CODES
     0    the files were written, or --check found them up to date
@@ -80,6 +83,53 @@ The TypeScript output imports the runtime from `duet-protocol` and
 are the published packages, so generated code compiles wherever they resolve.
 ";
 
+/// `duet dev --help`.
+pub const DEV_HELP: &str = "\
+duet dev — run the host, and hot-reload its Dart guest on save.
+
+Starts the host, watches the Flutter project's lib/ directory, and on every
+save recompiles just what changed and applies it to the running Dart isolate.
+State is not lost: this is hot reload, not restart. The Rust store keeps its
+contents because the host is never restarted, and the Dart heap keeps its
+because `reloadSources` patches the isolate in place.
+
+USAGE
+    duet dev --flutter <dir> [--flutter-root <dir>] [--entrypoint <uri>] \\
+        -- <host command>
+
+FLAGS
+    --flutter <dir>        The Flutter project: the directory holding
+                           pubspec.yaml and .dart_tool/. Required.
+    --flutter-root <dir>   The Flutter SDK checkout. Defaults to $FLUTTER_ROOT.
+    --entrypoint <uri>     The Dart entrypoint, as a package: URI. Defaults to
+                           the project's own package plus lib/main.dart.
+    -h, --help             Print this.
+
+Everything after `--` is the command that runs the host, passed through
+unsplit. `dev` starts the host itself rather than attaching to a running one,
+because that is how it reads the Dart VM service URI: the engine prints it to
+stdout from native code, and a child process's stdout is an ordinary pipe.
+Nothing is redirected, and the VM service keeps its authentication code.
+
+EXAMPLES
+    A Duet host built by cargo:
+        duet dev --flutter ./flutter -- cargo run -p my-host
+
+    Passing flags on to the host command:
+        duet dev --flutter ./flutter -- cargo run -p my-host --features dev
+
+REQUIREMENTS
+    The host must be a debug/JIT build. A release/AOT engine has no Dart VM
+    service, so there is nothing to reload through. `flutter pub get` must have
+    run in the project, which is what writes the package map the incremental
+    compiler needs.
+
+A change hot reload cannot express — a class's shape, an enum's values, a const
+class's fields — is reported as such, and needs the host restarted. A Dart file
+that does not compile is reported with the compiler's own diagnostics and the
+host keeps running.
+";
+
 /// `duet --version`.
 ///
 /// The version is this crate's, which is the workspace's, which is the version
@@ -100,9 +150,38 @@ mod tests {
         for flag in ["--schema", "--dart", "--ts", "--check"] {
             assert!(GENERATE_HELP.contains(flag), "{flag} is undocumented");
         }
+        for flag in crate::args::DEV_FLAGS {
+            assert!(DEV_HELP.contains(flag), "{flag} is undocumented");
+        }
         assert!(HELP.contains("duet generate --schema"));
         assert!(HELP.contains("--help"));
         assert!(HELP.contains("--version"));
+    }
+
+    #[test]
+    fn the_top_level_help_names_every_command_the_parser_dispatches() {
+        // A command that exists and is not listed is one nobody discovers.
+        for command in ["generate", "dev"] {
+            assert!(
+                HELP.contains(&format!("    {command}    ")),
+                "the `{command}` command is missing from COMMANDS"
+            );
+        }
+    }
+
+    #[test]
+    fn the_dev_help_says_the_host_must_be_a_debug_build() {
+        // The single most likely way for `duet dev` to fail for a new user: a
+        // release/AOT host has no VM service at all, and the failure at that
+        // point is a timeout with no obvious cause.
+        assert!(
+            DEV_HELP.contains("JIT"),
+            "the JIT requirement is undocumented"
+        );
+        assert!(
+            DEV_HELP.contains("pub get"),
+            "the pub get requirement is undocumented"
+        );
     }
 
     #[test]
@@ -117,7 +196,7 @@ mod tests {
 
     #[test]
     fn every_help_text_ends_with_exactly_one_newline() {
-        for text in [HELP, GENERATE_HELP, &version()] {
+        for text in [HELP, GENERATE_HELP, DEV_HELP, &version()] {
             assert!(text.ends_with('\n'), "{text:?}");
             assert!(!text.ends_with("\n\n"), "{text:?}");
         }

@@ -504,3 +504,83 @@ fn the_four_exit_codes_are_reachable_and_distinct() {
     assert_eq!(run(&["generate"]).code, 2);
     assert_eq!(run_in(&scratch.0, &check).code, 3);
 }
+
+// ===================== duet dev =====================
+//
+// A whole `duet dev` session needs a Flutter SDK and a real engine, which this
+// suite has neither of. What the *binary* adds over the library tests is argv
+// and exit codes, so that is what these check.
+
+#[test]
+fn dev_help_reaches_stdout_and_exits_zero() {
+    let run = run(&["dev", "--help"]);
+    assert_eq!(run.code, 0, "stderr: {}", run.err);
+    assert!(run.err.is_empty(), "help is not a diagnostic: {}", run.err);
+    assert!(run.out.starts_with("duet dev —"), "got {:?}", run.out);
+    assert!(
+        run.out.contains("--flutter"),
+        "the required flag must be documented: {}",
+        run.out
+    );
+}
+
+#[test]
+fn the_top_level_help_advertises_dev() {
+    // A command nobody can discover is a command nobody uses.
+    let run = run(&["--help"]);
+    assert_eq!(run.code, 0);
+    assert!(run.out.contains("duet dev --flutter"), "got {}", run.out);
+}
+
+#[test]
+fn a_dev_invocation_missing_its_host_command_exits_two_and_says_how_to_write_it() {
+    // Exit 2 is "the command line was wrong", which is what a script needs to
+    // tell a typo from an environment problem.
+    let run = run(&["dev", "--flutter", "some/project"]);
+    assert_eq!(
+        run.code,
+        i32::from(duet_cli::EXIT_USAGE),
+        "stdout: {}",
+        run.out
+    );
+    assert!(run.out.is_empty());
+    assert!(
+        run.err.contains("--"),
+        "the message should show the separator: {}",
+        run.err
+    );
+    assert!(
+        run.err.contains("Run `duet --help`"),
+        "usage errors point at help: {}",
+        run.err
+    );
+}
+
+#[test]
+fn a_dev_invocation_missing_its_project_exits_two() {
+    let run = run(&["dev", "--", "cargo", "run"]);
+    assert_eq!(run.code, i32::from(duet_cli::EXIT_USAGE));
+    assert!(run.err.contains("--flutter"), "got {}", run.err);
+}
+
+#[test]
+fn a_dev_run_against_a_nonexistent_flutter_sdk_exits_one_and_names_the_stage() {
+    // Exit 1 is "the run failed": an environment problem, not a typo. The
+    // stage is what turns this from "it did not work" into something with a
+    // next step.
+    let run = run(&[
+        "dev",
+        "--flutter",
+        "definitely/not/a/project",
+        "--flutter-root",
+        "definitely/not/flutter",
+        "--",
+        "true",
+    ]);
+    assert_eq!(run.code, 1, "stdout: {}", run.out);
+    assert!(
+        run.err.contains("[locate-sdk]"),
+        "the failing stage belongs in the message: {}",
+        run.err
+    );
+}

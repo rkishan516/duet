@@ -14,12 +14,21 @@ repository.workspace = true
 name = "duet"
 path = "src/main.rs"
 
-# ONE dependency, and it is the library this tool is a front end for.
+# TWO dependencies, and both are libraries this tool is a front end for:
+# `duet-codegen` is `duet generate`, `duet-dev` is `duet dev`.
+#
+# Neither brings anything of its own beyond `serde_json`, which `duet-codegen`
+# already carried — so adding `duet dev` did not widen this tool's dependency
+# tree by a single crate. That was a constraint on `duet-dev`'s design, not a
+# happy accident: it hand-rolls its WebSocket client and its file watcher
+# precisely so that installing the framework's front door stays cheap. See
+# `crates/duet-dev/Cargo.toml` for the full argument.
 #
 # There is deliberately no argument-parsing crate here. See `args` for the
 # reasoning; the short version is that this workspace treats a dependency as a
 # cost to be argued for — `duet-core` has none at all, `packages/duet-js` has no
 # runtime dependency, and `duet-host-stdio` already hand-rolls its own argv — and
-# a two-flag tool does not clear that bar.
+# a two-command tool does not clear that bar.
 [dependencies]
 duet-codegen = { path = "../duet-codegen" }
+duet-dev = { path = "../duet-dev" }

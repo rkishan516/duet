@@ -130,6 +130,7 @@ fn an_unknown_flag_lists_the_flags_that_exist() {
     assert_eq!(
         error,
         UsageError::UnknownFlag {
+            command: "generate",
             found: "--swift".to_string()
         }
     );
@@ -147,6 +148,7 @@ fn a_positional_argument_is_refused_rather_than_guessed_at() {
     assert_eq!(
         error,
         UsageError::UnexpectedArgument {
+            command: "generate",
             found: "schema/app.json".to_string()
         }
     );
@@ -159,6 +161,7 @@ fn a_lone_dash_is_a_positional_argument_not_a_flag() {
     assert_eq!(
         error,
         UsageError::UnexpectedArgument {
+            command: "generate",
             found: "-".to_string()
         }
     );
@@ -228,6 +231,7 @@ fn the_unknown_flag_message_lists_exactly_the_flags_the_parser_takes() {
     // The list in the message is written out; this is what stops it drifting
     // from `PATH_FLAGS` when a flag is added or removed.
     let message = UsageError::UnknownFlag {
+        command: "generate",
         found: "--x".to_string(),
     }
     .to_string();
@@ -368,9 +372,11 @@ fn every_usage_error_says_something_and_none_of_them_panics() {
             found: "x".to_string(),
         },
         UsageError::UnknownFlag {
+            command: "generate",
             found: "--x".to_string(),
         },
         UsageError::UnexpectedArgument {
+            command: "generate",
             found: "x".to_string(),
         },
         UsageError::RepeatedFlag { flag: "--ts" },
@@ -382,9 +388,240 @@ fn every_usage_error_says_something_and_none_of_them_panics() {
         },
         UsageError::NoSchema,
         UsageError::NoOutput,
+        UsageError::NoProject,
+        UsageError::NoHostCommand,
     ];
     for error in &errors {
         assert!(!error.to_string().is_empty(), "{error:?}");
         assert!(std::error::Error::source(error).is_none());
     }
+}
+
+// ===================== duet dev =====================
+
+/// The parse of `arguments`, or a panic naming what came back instead.
+fn dev_of(arguments: &[&str]) -> Dev {
+    match parse(arguments) {
+        Ok(Invocation::Dev(request)) => request,
+        other => panic!("{arguments:?} should parse as a dev: {other:?}"),
+    }
+}
+
+#[test]
+fn the_canonical_dev_invocation_parses() {
+    let request = dev_of(&[
+        "dev",
+        "--flutter",
+        "fixtures/duet_guest",
+        "--flutter-root",
+        "/opt/flutter",
+        "--",
+        "cargo",
+        "run",
+    ]);
+    assert_eq!(request.project, PathBuf::from("fixtures/duet_guest"));
+    assert_eq!(request.flutter_root, Some(PathBuf::from("/opt/flutter")));
+    assert_eq!(request.entrypoint, None);
+    assert_eq!(request.host, vec!["cargo".to_string(), "run".to_string()]);
+}
+
+#[test]
+fn everything_after_the_separator_belongs_to_the_host_even_when_it_looks_like_a_flag() {
+    // The whole reason for `--`. A host command routinely carries its own
+    // flags, and `--release` or `--flutter` reaching this parser would be
+    // rejected as unknown — or, far worse, silently consumed.
+    let request = dev_of(&[
+        "dev",
+        "--flutter",
+        "app",
+        "--",
+        "cargo",
+        "run",
+        "--release",
+        "--flutter",
+        "-h",
+        "--",
+    ]);
+    assert_eq!(request.project, PathBuf::from("app"));
+    assert_eq!(
+        request.host,
+        vec!["cargo", "run", "--release", "--flutter", "-h", "--"]
+    );
+}
+
+#[test]
+fn a_host_argument_containing_spaces_survives_as_one_argument() {
+    // The reason `host` is a `Vec` rather than a string to be split: a path
+    // with a space in it is normal on macOS, and splitting would break it in a
+    // way no quoting the developer tried could fix.
+    let request = dev_of(&["dev", "--flutter", "app", "--", "/My Apps/host", "--x y"]);
+    assert_eq!(request.host, vec!["/My Apps/host", "--x y"]);
+}
+
+#[test]
+fn the_entrypoint_can_be_overridden() {
+    let request = dev_of(&[
+        "dev",
+        "--flutter",
+        "app",
+        "--entrypoint",
+        "package:app/other.dart",
+        "--",
+        "true",
+    ]);
+    assert_eq!(
+        request.entrypoint,
+        Some("package:app/other.dart".to_string())
+    );
+}
+
+#[test]
+fn dev_flags_accept_the_inline_form_too() {
+    // `--flag=value` is the only way to spell a path that begins with `-`, so
+    // it has to work here for the same reason it works for `generate`.
+    let request = dev_of(&["dev", "--flutter=app", "--flutter-root=/opt/f", "--", "x"]);
+    assert_eq!(request.project, PathBuf::from("app"));
+    assert_eq!(request.flutter_root, Some(PathBuf::from("/opt/f")));
+}
+
+#[test]
+fn dev_without_a_project_is_refused() {
+    assert_eq!(
+        usage_of(&["dev", "--", "cargo", "run"]),
+        UsageError::NoProject
+    );
+}
+
+#[test]
+fn dev_without_a_host_command_is_refused_both_ways_of_omitting_it() {
+    // A `duet dev` with nothing to run would start a compiler, watch a
+    // directory, and never reload anything — a session that looks like it is
+    // working and is not.
+    assert_eq!(
+        usage_of(&["dev", "--flutter", "app"]),
+        UsageError::NoHostCommand,
+        "no separator at all"
+    );
+    assert_eq!(
+        usage_of(&["dev", "--flutter", "app", "--"]),
+        UsageError::NoHostCommand,
+        "a separator with nothing after it"
+    );
+}
+
+#[test]
+fn a_repeated_dev_flag_is_refused() {
+    // Same reasoning as `generate`: taking the last silently discards the
+    // first, which is a footgun in a script that appends arguments.
+    for (arguments, flag) in [
+        (
+            vec!["dev", "--flutter", "a", "--flutter", "b", "--", "x"],
+            "--flutter",
+        ),
+        (
+            vec![
+                "dev",
+                "--flutter",
+                "a",
+                "--flutter-root",
+                "x",
+                "--flutter-root",
+                "y",
+                "--",
+                "x",
+            ],
+            "--flutter-root",
+        ),
+        (
+            vec![
+                "dev",
+                "--flutter",
+                "a",
+                "--entrypoint",
+                "p:a/b.dart",
+                "--entrypoint",
+                "p:a/c.dart",
+                "--",
+                "x",
+            ],
+            "--entrypoint",
+        ),
+    ] {
+        assert_eq!(
+            usage_of(&arguments),
+            UsageError::RepeatedFlag { flag },
+            "{arguments:?}"
+        );
+    }
+}
+
+#[test]
+fn a_flag_dev_does_not_define_is_refused_and_the_message_names_dev() {
+    // A `generate` flag typed into `dev` is the likeliest mistake, and a
+    // message listing `generate`'s flags would be actively confusing.
+    let error = usage_of(&["dev", "--flutter", "a", "--schema", "s.json", "--", "x"]);
+    assert_eq!(
+        error,
+        UsageError::UnknownFlag {
+            command: "dev",
+            found: "--schema".to_string()
+        }
+    );
+    let message = error.to_string();
+    assert!(message.contains("`dev`"), "got {message}");
+    assert!(
+        message.contains("--flutter"),
+        "it should list dev's own flags: {message}"
+    );
+    assert!(
+        !message.contains("--schema flag; it takes --schema"),
+        "it must not list generate's flags: {message}"
+    );
+}
+
+#[test]
+fn a_positional_argument_before_the_separator_is_refused_and_points_at_it() {
+    // The most likely spelling mistake: forgetting `--` entirely. The message
+    // has to say so, or the developer will try quoting instead.
+    let error = usage_of(&["dev", "--flutter", "a", "cargo", "run"]);
+    assert_eq!(
+        error,
+        UsageError::UnexpectedArgument {
+            command: "dev",
+            found: "cargo".to_string()
+        }
+    );
+    assert!(
+        error.to_string().contains("`--`"),
+        "the message should point at the separator: {error}"
+    );
+}
+
+#[test]
+fn dev_help_is_reachable_both_ways_and_wins_over_a_missing_project() {
+    // `duet dev --help` must print help, not complain that `--flutter` is
+    // missing — which is exactly what somebody reaching for help does not have.
+    for arguments in [
+        vec!["dev", "--help"],
+        vec!["dev", "-h"],
+        vec!["dev", "--flutter", "a", "--help"],
+    ] {
+        assert_eq!(
+            parse(&arguments),
+            Ok(Invocation::DevHelp),
+            "{arguments:?} should print the dev help"
+        );
+    }
+}
+
+#[test]
+fn the_unknown_command_message_names_both_commands() {
+    // It named only `generate` before `dev` existed; a message that still did
+    // would hide the new command from everyone who mistyped it.
+    let message = UsageError::UnknownCommand {
+        found: "develop".to_string(),
+    }
+    .to_string();
+    assert!(message.contains("generate"), "got {message}");
+    assert!(message.contains("dev"), "got {message}");
 }
