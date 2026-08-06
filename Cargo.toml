@@ -11,6 +11,7 @@ members = [
     "crates/duet-host",
     "crates/duet-backend-macos",
     "crates/duet-protocol",
+    "crates/duet-host-stdio",
     "crates/duet-webview",
 ]
 # Phase 0 spikes are throwaway experiments with their own dependencies.

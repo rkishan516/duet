@@ -1,0 +1,31 @@
+[package]
+name = "duet-host-stdio"
+description = "A Duet host that speaks the protocol over stdin and stdout, for cross-language conformance runs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# `duet-codegen` is here for one function: `read_schema`. This crate embeds the
+# repository's schema fixtures with `include_str!` and needs to parse them back
+# into a `Schema`, and `duet-schema` deliberately ships a writer without a
+# reader — see that crate's manifest for why the split is load-bearing. A host
+# binary depending on a code generator would be odd for a shipped product; this
+# is a conformance harness, and the alternative is a second schema reader that
+# could disagree with the one the goldens are generated through.
+[dependencies]
+duet-codegen = { path = "../duet-codegen" }
+duet-core = { path = "../duet-core" }
+duet-protocol = { path = "../duet-protocol" }
+duet-runtime = { path = "../duet-runtime" }
+duet-schema = { path = "../duet-schema" }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+
+# Test-only: `tests/framing.rs` builds the values whose encodings it inspects.
+# The host itself never touches the value codec — `duet-protocol` owns every
+# encode and decode on the wire — and keeping that true is what makes the
+# framing test an outside measurement rather than a self-report.
+[dev-dependencies]
+duet-codec = { path = "../duet-codec" }
