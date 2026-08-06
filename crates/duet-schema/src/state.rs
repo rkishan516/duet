@@ -154,8 +154,13 @@ pub trait SharedState: Sized {
 #[diagnostic::on_unimplemented(
     message = "`{Self}` may lower to `Value::Null`, so it cannot go inside an `Option`",
     label = "`Option<{Self}>` would collapse `Some(null)` and `None` into one value",
-    note = "If `{Self}` is `Option<T>`, flatten it: nested options have no representation in the store.\n\
-            If `{Self}` is `duet_core::Value`, drop the `Option`: a `Value` can already be `Value::Null`.\n\
-            If `{Self}` is your own type, add an empty `impl NotNullable for {Self}` next to its `SharedState` impl."
+    // Stable `on_unimplemented` has no conditional `on(...)` arm, so all three
+    // lines are shown whatever `{Self}` turns out to be. They are worded to read
+    // correctly in every case rather than as a chain of "if Self is ..." tests,
+    // which reads oddly once the compiler has substituted a concrete type into
+    // both halves of the condition.
+    note = "Nested options have no representation in the store: flatten `Option<Option<T>>` to `Option<T>`.\n\
+            A `duet_core::Value` can already be `Value::Null`, so an `Option` around one is the same collapse.\n\
+            For a type of your own, add an empty `impl NotNullable for {Self}` next to its `SharedState` impl."
 )]
 pub trait NotNullable {}
