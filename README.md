@@ -200,6 +200,34 @@ Exit codes: `0` written or up to date, `1` the run failed, `2` the command line
 was wrong, `3` a file is stale. `3` is separate from `1` so a CI job can tell a
 schema that no longer parses from a client that merely needs regenerating.
 
+## 6. Iterate on it
+
+```console
+$ duet dev --flutter ./flutter -- cargo run -p my-host
+```
+
+Starts the host, watches `flutter/lib/`, and on every save recompiles just what
+changed and applies it to the running Dart isolate:
+
+```
+[duet dev] reloaded in 43 ms (recompile 7 ms, reload 21 ms, reassemble 13 ms) — 4 librar(y/ies) reloaded, 544 kept
+```
+
+**Nothing is lost.** The Rust host is never restarted, so the store keeps its
+contents; `reloadSources` patches the isolate in place, so the Dart heap keeps
+its `State` objects. That is measured rather than asserted — `cargo run -p
+duet-backend-macos --example hot_reload` writes a value into the store, edits a
+real `.dart` file, reloads ten times, and checks the value is still there.
+
+A Dart file that does not compile is reported with the compiler's own
+diagnostics and the host keeps running. A change hot reload cannot express — a
+class's shape, an enum's values — is reported as needing a restart, rather than
+silently not taking effect.
+
+The host must be a debug/JIT build: a release/AOT engine has no Dart VM service
+to reload through. Everything after `--` is the host command, passed through
+unsplit.
+
 ## What is in the box
 
 | Crate | What it is |
@@ -213,7 +241,8 @@ schema that no longer parses from a client that merely needs regenerating.
 | `duet-supervisor` / `duet-host` / `duet-webview` | Surface lifecycle, window backends, the `wry` guest. |
 | `duet-backend-macos` | The macOS backend: a real Flutter engine and a real webview. |
 | `duet-codegen` | Schema in, Dart and TypeScript out. |
-| `duet-cli` | The `duet` command. |
+| `duet-dev` | Hot reload: `frontend_server`, the Dart VM service, a file watcher. |
+| `duet-cli` | The `duet` command: `generate` and `dev`. |
 
 | Package | What it is |
 |---|---|
@@ -223,12 +252,20 @@ schema that no longer parses from a client that merely needs regenerating.
 
 ## Status
 
-Phase 4 complete: one derive yields typed clients in three languages, proven
+Phase 5 complete: one derive yields typed clients in three languages, proven
 byte-identical against a hand-written specification and against a live host over
-a real process boundary. macOS is the implemented backend.
+a real process boundary — and `duet dev` hot-reloads a running Flutter guest
+without losing the store. macOS is the implemented backend.
 
-Not yet: `duet dev` with hot reload, `#[command]` RPC codegen, collection
-handles, and the wider type surface (narrowing integers, tuples, data enums).
+Hot reload, measured against a real engine: **median 43 ms** from saving a
+`.dart` file to the change being visible in a rendered frame *and* readable
+back out of the Rust store, over 30 reloads in three runs. The store's contents
+survive every one — that is asserted, not assumed, by
+`cargo run -p duet-backend-macos --example hot_reload`.
+
+Not yet: the web half of `duet dev` (Vite HMR), `#[command]` RPC codegen,
+collection handles, and the wider type surface (narrowing integers, tuples,
+data enums).
 
 ## Building it
 

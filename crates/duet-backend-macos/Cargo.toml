@@ -25,6 +25,10 @@ objc2-app-kit = "0.3.2"
 objc2-foundation = "0.3.2"
 
 [dev-dependencies]
+# `examples/hot_reload.rs` drives the real reload driver against a real engine.
+# A dev-dependency, not a dependency: the backend itself has nothing to do with
+# hot reload, which is a tool-time concern owned by `duet dev`.
+duet-dev = { path = "../duet-dev" }
 # Only `examples/webview_state.rs` needs this: it parses the JSON that
 # `WebviewSurface::eval_with_callback` reads back out of the guest. The
 # library itself does not depend on serde_json — `duet-webview` owns all the

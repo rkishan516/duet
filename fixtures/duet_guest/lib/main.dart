@@ -9,8 +9,9 @@
 //
 // All this file does is shake hands with the host and choose a driver:
 //
-//   lib/solo_driver.dart -> the single-guest proof (`example flutter_state`)
-//   lib/duet_driver.dart -> the two-guest proof   (`example two_guests`)
+//   lib/solo_driver.dart   -> the single-guest proof (`example flutter_state`)
+//   lib/duet_driver.dart   -> the two-guest proof   (`example two_guests`)
+//   lib/reload_driver.dart -> the hot-reload proof  (`example hot_reload`)
 //
 // See `lib/guest_support.dart` for why the choice is made from a value in the
 // shared store rather than from a second entry point, and why an absent or
@@ -24,6 +25,7 @@ import 'package:flutter/widgets.dart';
 
 import 'duet_driver.dart';
 import 'guest_support.dart';
+import 'reload_driver.dart';
 import 'solo_driver.dart';
 
 Future<void> main() async {
@@ -40,30 +42,33 @@ Future<void> main() async {
     return;
   }
 
-  if (await _hostWantsTheDuetDriver(duet)) {
-    guestLog('host mode is "$kDuetMode": running the two-guest driver');
-    await runDuetGuest(duet);
-  } else {
-    guestLog('host mode is not "$kDuetMode": running the solo driver');
-    await runSoloGuest(duet);
+  switch (await _mode(duet)) {
+    case kDuetMode:
+      guestLog('host mode is "$kDuetMode": running the two-guest driver');
+      await runDuetGuest(duet);
+    case kReloadMode:
+      guestLog('host mode is "$kReloadMode": running the hot-reload driver');
+      await runReloadGuest(duet);
+    default:
+      guestLog('host mode names no driver: running the solo driver');
+      await runSoloGuest(duet);
   }
 }
 
-/// Reads [kModePath] and reports whether the host asked for the two-guest
-/// driver.
+/// Reads [kModePath] and reports which driver the host asked for.
 ///
 /// Total: any failure — a host that rejected the read, a value of the wrong
 /// shape, a path that does not exist — falls back to the solo driver rather
 /// than throwing. A guest that crashed here would take the isolate down before
-/// either driver ran, which is a far worse outcome than running the wrong one:
+/// any driver ran, which is a far worse outcome than running the wrong one:
 /// the Rust side asserts on what the driver publishes and would fail loudly
 /// either way.
-Future<bool> _hostWantsTheDuetDriver(DuetClient duet) async {
+Future<String> _mode(DuetClient duet) async {
   try {
     final DuetValue? mode = await duet.get(kModePath);
-    return mode is DuetStr && mode.value == kDuetMode;
+    return mode is DuetStr ? mode.value : '';
   } on Object catch (e) {
     guestLog('ERROR reading "$kModePath", assuming the solo driver: $e');
-    return false;
+    return '';
   }
 }

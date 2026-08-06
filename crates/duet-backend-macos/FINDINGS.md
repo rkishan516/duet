@@ -391,6 +391,15 @@ All figures in kB, via `ps -o rss=`:
 
 ### The measured delta, and the assertion's actual result — reported honestly
 
+> **SUPERSEDED, 2026-08-06.** Everything measured below is still exactly what
+> was measured. What this section got *wrong* is the diagnosis: it treated the
+> failure as a consequence of which sample the delta was taken from. It is not.
+> Wider evidence — 3 runs against `spikes/spike_app` and 8 against
+> `fixtures/duet_guest`, same binary, same afternoon — shows the reclaim is
+> **bimodal by fixture app**, 71 MB against 123 MB, with the 81,920 kB floor
+> sitting between the two clusters. See **F24** at the foot of this document
+> for the evidence and for what replaced the assertion.
+
 `print_report` (`examples/lifecycle.rs`) computes its delta as **"renderer
 started, view attached"** (the *first* post-attach sample, taken before the
 Dart isolate/Skia warm-up that F2 already documented continues after attach)
@@ -1289,3 +1298,187 @@ DUET_APP_FRAMEWORK_PATH=fixtures/duet_guest/build/macos/Build/Products/Debug/App
 All three were run to completion this session, each at least twice, with
 identical PASS/FAIL outcomes and identical notification counts across runs.
 None hung, none needed the `DEADLINE` fallback to terminate.
+
+---
+
+## Phase 5 — hot reload, and a correction to the lifecycle RSS record
+
+### F24 — The `lifecycle` RSS assertion was not flaky. It was ambiguous, and the record said the wrong thing.
+
+**The claim being corrected.** F5 above records four `lifecycle` runs
+reclaiming 57–64 MB against an 81,920 kB floor and calls the assertion a
+consistent failure, attributing it to which sample the delta was taken from.
+Since then, values on both sides of that floor have been observed on this same
+machine — 122,976 kB and 124,800 kB passing, ~69,264 kB and ~70,144 kB failing.
+That looks like flakiness, and "flaky" was the working hypothesis when this
+investigation started.
+
+**It is not flaky.** It is bimodal, and the mode is selected by which Flutter
+app the example boots. Measured this session, same binary, same afternoon,
+`DUET_APP_FRAMEWORK_PATH` the only difference:
+
+| Fixture | runs | suspended kB | torn down kB | reclaimed kB | vs the 81,920 kB floor |
+|---|---:|---:|---:|---:|---|
+| `spikes/spike_app` — `runApp`, `MaterialApp`, a running `Ticker` | 3 | 226,880 / 225,312 / 226,192 | 103,008 / 102,752 / 102,080 | 123,872 / 122,560 / 124,112 | **passes**, 3/3 |
+| `fixtures/duet_guest` — headless: no `runApp`, no widget tree | 8 | 162,400 … 162,624 | 90,304 … 91,232 | 71,328 … 71,616 | **fails**, 8/8 |
+
+Look at the spread *within* each cluster: **1,552 kB** across the first,
+**288 kB** across the second — 0.4 % of the value being measured. A flaky test
+gives different answers to the same question. This one gave a very stable
+answer to each of two different questions, and nothing said which was being
+asked.
+
+**Why the two differ.** A live Flutter engine's RSS is dominated by what the
+Dart heap and Skia actually allocate, and that is a property of the *guest
+app*, not of the embedder. `spike_app` builds a full `MaterialApp` and runs a
+`Ticker`; `duet_guest`'s solo driver builds no widget tree at all. The engine
+costs 183 MB in the first case and 115 MB in the second, so teardown has
+correspondingly more or less to give back. Nothing about `shutDownEngine`
+changed.
+
+**Why the ambiguity existed.** `examples/lifecycle.rs` defaults
+`DUET_APP_FRAMEWORK_PATH` to `spikes/spike_app/…`, while every other example in
+this crate — and the run commands in this document — use
+`fixtures/duet_guest/…`. So the example passed when run bare and failed when
+run the way the surrounding documentation says to run it.
+
+#### What replaced the assertion, and why not simply a wider number
+
+Widening the floor until both clusters passed would have put it below 71 MB.
+At that point it could no longer fail for the reason it exists — a floor that
+every possible measurement clears is not a gate, and this project should not
+ship one.
+
+The absolute number is the wrong quantity because it is app-dependent. Two
+quantities are not, because both of their halves scale with the app together:
+
+```text
+engine cost = (RSS while suspended) - (RSS before any engine existed)
+reclaimed   = (RSS while suspended) - (RSS after teardown)
+by detach   = (RSS at peak, warmed up) - (RSS while suspended)
+```
+
+`examples/lifecycle.rs` now asserts two shares instead of one absolute:
+
+1. **`reclaimed / engine_cost >= 50 %`** — teardown gives back most of what the
+   engine cost.
+2. **`by_detach / reclaimed <= 20 %`** — and it is `shutDownEngine` doing it,
+   not removing the view.
+
+The second is new, and it pins the finding Spike A actually established
+(`spikes/spike-a-macos/FINDINGS.md`: removing the view alone reclaimed
+essentially nothing, 223 MB before and after). The old single assertion would
+have passed unchanged if detach had started doing all the work and teardown
+none — which would mean the suspend/teardown distinction this whole framework
+is built on had silently inverted.
+
+Measured against both fixtures, after the change:
+
+| Fixture | runs | reclaimed share | detach share | Result |
+|---|---:|---:|---:|---|
+| `fixtures/duet_guest` | 3 | 60.7 %, 60.3 %, 60.5 % | 4.2 %, 4.1 %, 4.1 % | PASS 3/3 |
+| `spikes/spike_app` | 3 | 67.4 %, 68.4 %, 66.2 % | 1.5 %, 1.9 %, 2.3 % | PASS 3/3 |
+
+10–18 points of margin on the floor, and roughly five times the margin on the
+ceiling, across a 1.7× difference in the absolute reclaim. The absolute
+kilobyte figures are still printed on every run, for the record — they are just
+no longer what the gate turns on.
+
+**Both fixtures are kept.** `spike_app` remains the example's default because
+it is the only fixture with a running `Ticker`, which is what makes it the
+regression guard for F1's backing-store storm; `duet_guest` is what the
+documented commands use. The assertion now holds for either, which is the
+property that was missing.
+
+### F25 — Hot reload works against this backend, and the shared store survives it
+
+`examples/hot_reload.rs` boots a real engine with a real attached view, writes
+into the Duet store, edits `fixtures/duet_guest/lib/reload_driver.dart` on
+disk, and drives `duet_dev::ReloadDriver`. Ten iterations, three independent
+runs, all PASS:
+
+| Claim | Evidence |
+|---|---|
+| every reload applied | 10/10 `reloadSources` reported `success: true` |
+| each was incremental, not a full reload | 4 libraries received against **544 kept**, every iteration |
+| the Dart change reached a rendered frame | 10/10 new markers came back out of the store after `build()` put them in a frame |
+| **the Duet store's contents survived** | `hostWitness` written as `Int(4242)` before the first reload, reads back `Int(4242)` after the tenth |
+| reload, not restart | the guest's `initState`-assigned nonce identical across all ten; its frame counter climbed 1 → 3 → 5 → … → 21, never resetting |
+
+**Latency**, from `std::fs::write` of the Dart source to the new marker being
+readable from the Rust store, having been built into a rendered frame:
+
+| Run | n | min | median | max | mean |
+|---|---:|---:|---:|---:|---:|
+| 1 | 10 | 38.1 ms | 40.0 ms | 59.1 ms | 42.2 ms |
+| 2 | 10 | 39.7 ms | 43.0 ms | 58.6 ms | 43.6 ms |
+| 3 | 10 | 39.3 ms | 43.0 ms | 57.5 ms | 44.6 ms |
+
+Spike C measured a 123.3 ms median for the same edit-to-frame path. This is
+**faster**, and the reason is not that the machinery improved: Spike C's
+fixture rebuilt a whole `MaterialApp` with a `Ticker` running, and this one
+rebuilds three widgets, so the rebuild-and-paint leg is much cheaper. The leg
+`duet-dev` actually controls — the incremental recompile — is comparable at
+6–19 ms against Spike C's 8.8–21.8 ms. Read the number as "the productionised
+driver adds no measurable overhead to Spike C's recipe", not as a speedup.
+
+**"Rendered" means rendered in-process.** Same limitation as every other
+finding in this document: this machine has no reachable on-screen WindowServer
+for spawned processes, so the frame is real engine output but nothing observes
+a monitor. The evidence PNG is rasterized with
+`cacheDisplayInRect:toBitmapImageRep:`, exactly as F2's is.
+
+### F26 — Spike C's fd-1 redirect is retired, two ways, and neither touches a file descriptor
+
+Spike C recovered the VM service URI by `dup2`-ing its own fd 1 onto a pipe.
+Its own module docs flag the cost, and spec §8.2 asks for something better
+before this ships in the CLI. The cost is real: once fd 1 is redirected,
+*everything* the process writes to stdout goes into that pipe — including a
+`duet-host-stdio` host's own protocol, which would make the trick and that
+binary mutually exclusive.
+
+Two replacements, measured here:
+
+1. **A child process's piped stdout** — what `duet dev` uses. The engine's
+   fd 1 is the *child's* fd 1, an ordinary `Stdio::piped()` pipe. The parent
+   reads it, scans for the announcement, and echoes every line through. No
+   redirect, the parent's own stdout untouched, and the VM service keeps its
+   authentication code. This falls out of the architecture §8.2 already
+   describes rather than working around it.
+
+2. **Engine switches, for a host that drives its own reload in-process** —
+   what `examples/hot_reload.rs` uses. The macOS embedder reads switches from
+   `FLUTTER_ENGINE_SWITCHES` / `FLUTTER_ENGINE_SWITCH_N`. Measured on this
+   machine: with `vm-service-port=45671` and `disable-service-auth-codes`, the
+   engine announced exactly `http://127.0.0.1:45671/` — so the URI is known
+   *before the engine boots*, with nothing observed at all.
+
+   The cost, stated: `disable-service-auth-codes` removes the random path
+   component guarding the VM service. The VM service exists only in debug and
+   profile builds, so this cannot weaken a shipped app; within a debug session
+   it means anything that can reach that loopback port can drive the Dart VM.
+   That is why route 1 is the default wherever a child process exists.
+
+**A dead end, recorded so it is not tried twice.** `write-service-info=<path>`
+would have given a known URI *with* the auth code. The string is present in
+`FlutterMacOS.framework`'s binary, and the switch was passed both as a plain
+path and as a `file://` URI. **No file ever appeared.** It is not wired up in
+this embedder.
+
+### Commands run for this phase
+
+```
+cd fixtures/duet_guest && flutter build macos --debug
+cargo build -p duet-backend-macos --example hot_reload
+cargo build -p duet-backend-macos --example lifecycle
+
+DUET_APP_FRAMEWORK_PATH=fixtures/duet_guest/build/macos/Build/Products/Debug/App.framework \
+FLUTTER_ROOT=/Users/kishan/dev/rkishan516/flutterDC \
+  ./target/debug/examples/hot_reload                       # x3, 10 iterations each
+
+DUET_APP_FRAMEWORK_PATH=fixtures/duet_guest/... ./target/debug/examples/lifecycle   # x8 before, x3 after
+DUET_APP_FRAMEWORK_PATH=spikes/spike_app/...    ./target/debug/examples/lifecycle   # x3 before, x3 after
+
+cargo test -p duet-backend-macos                                    # 8 passed, 1 ignored
+cargo clippy -p duet-backend-macos --all-targets -- -D warnings      # clean
+```

@@ -14,8 +14,11 @@
 //
 // The three macOS examples are the end-to-end proof of the drivers themselves;
 // they are not reproducible under `flutter test`, which has no Rust host.
+import 'dart:io';
+
 import 'package:duet/duet.dart';
 import 'package:duet_guest/guest_support.dart';
+import 'package:duet_guest/reload_driver.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// A transport whose reply to each request the test supplies.
@@ -88,12 +91,50 @@ void main() {
 
   test('the mode contract matches the Rust side', () {
     // `two_guests.rs` seeds MODE_PATH with DUET_MODE to select the two-guest
-    // driver; `flutter_state.rs` seeds nothing, and an absent value must keep
-    // the solo behaviour. Nothing links the two sides at build time, so both
-    // pin the literals.
+    // driver and `hot_reload.rs` seeds MODE with "reload" to select the
+    // hot-reload one; `flutter_state.rs` seeds nothing, and an absent value
+    // must keep the solo behaviour. Nothing links the two sides at build time,
+    // so both pin the literals — a rename on either side would otherwise
+    // produce a guest that silently runs the wrong driver, which the Rust side
+    // sees only as a report that never arrives.
     expect(kModePath, 'mode');
     expect(kDuetMode, 'duet');
+    expect(kReloadMode, 'reload');
+    // Every mode must be distinct, or one driver becomes unreachable.
+    expect(<String>{kDuetMode, kReloadMode}.length, 2);
     // A deadline shorter than one attempt would give up before ever asking.
     expect(kHandshakeInterval, lessThan(kHandshakeTimeout));
+  });
+
+  test('the marker declaration hot_reload.rs edits is spelled as it expects', () {
+    // `crates/duet-backend-macos/examples/hot_reload.rs` rewrites the string
+    // literal in `lib/reload_driver.dart` by finding this exact prefix. A
+    // `dart format` pass that changed the spacing, or a rename of the
+    // constant, would break the proof — and it would break it *silently* on
+    // the Dart side, because nothing here would stop compiling. So the exact
+    // bytes are pinned from this side too.
+    //
+    // Reads the source rather than the constant: the value changes during a
+    // run, and what matters is the shape of the declaration, not what it
+    // currently holds.
+    final File source = File('lib/reload_driver.dart');
+    expect(
+      source.existsSync(),
+      isTrue,
+      reason: 'the hot-reload driver must exist for the proof to have a subject',
+    );
+    final String text = source.readAsStringSync();
+    expect(
+      text.contains("const String kReloadMarker = '"),
+      isTrue,
+      reason: 'hot_reload.rs finds the marker by exactly this prefix',
+    );
+    expect(
+      RegExp("const String kReloadMarker = '").allMatches(text).length,
+      1,
+      reason: 'a second occurrence would make the edit ambiguous',
+    );
+    // And the path the driver publishes at, which the Rust side polls.
+    expect(kReloadReportPath, 'reload');
   });
 }

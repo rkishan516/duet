@@ -6,8 +6,8 @@
 //! was not taken, for three reasons that are specific to this tool rather than
 //! general:
 //!
-//! 1. **The surface is one subcommand and four flags**, and it is meant to stay
-//!    that way. `clap` with `default-features = false` still brings
+//! 1. **The surface is two subcommands and seven flags**, and it is meant to
+//!    stay small. `clap` with `default-features = false` still brings
 //!    `clap_builder`, `clap_lex` and `anstyle` — tens of thousands of lines to
 //!    decide whether a string equals `"--schema"`. This workspace argues for
 //!    every dependency it takes: `duet-core` has none by design and CI asserts
@@ -59,8 +59,37 @@ pub enum Invocation {
     Version,
     /// Print the `generate` help and exit successfully.
     GenerateHelp,
+    /// Print the `dev` help and exit successfully.
+    DevHelp,
     /// Generate, or check, a set of clients.
     Generate(Generate),
+    /// Run a host and hot-reload its Dart guest on save.
+    Dev(Dev),
+}
+
+/// A `duet dev` request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dev {
+    /// The Flutter project directory: the one holding `pubspec.yaml` and
+    /// `.dart_tool/`.
+    pub project: PathBuf,
+    /// The Flutter SDK checkout, when it was given on the command line.
+    ///
+    /// `None` means "take it from `FLUTTER_ROOT`", resolved at run time rather
+    /// than here — a parser that read the environment would make its own tests
+    /// depend on the machine running them.
+    pub flutter_root: Option<PathBuf>,
+    /// The Dart entrypoint, when it was overridden.
+    ///
+    /// `None` derives it from the project's own package name, which is what a
+    /// standard `lib/main.dart` layout wants.
+    pub entrypoint: Option<String>,
+    /// The command that runs the host, taken from everything after `--`.
+    ///
+    /// A `Vec`, not a string to be split: a host command routinely contains a
+    /// path with a space in it, and splitting on whitespace would break that
+    /// in a way no quoting the developer tried could fix.
+    pub host: Vec<String>,
 }
 
 /// A `duet generate` request.
@@ -133,11 +162,15 @@ pub enum UsageError {
     },
     /// A flag this subcommand does not define.
     UnknownFlag {
+        /// The subcommand that does not define it.
+        command: &'static str,
         /// What was written.
         found: String,
     },
     /// A bare word where a flag was expected.
     UnexpectedArgument {
+        /// The subcommand that takes no positional arguments.
+        command: &'static str,
         /// What was written.
         found: String,
     },
@@ -167,6 +200,10 @@ pub enum UsageError {
     NoSchema,
     /// Neither `--dart` nor `--ts` was given.
     NoOutput,
+    /// `--flutter` was not given.
+    NoProject,
+    /// `dev` was given no host command after `--`.
+    NoHostCommand,
 }
 
 /// The most characters of an argument any message here will echo.
@@ -195,19 +232,25 @@ impl fmt::Display for UsageError {
             }
             UsageError::UnknownCommand { found } => write!(
                 f,
-                "there is no `{}` command; the only command is `generate`",
+                "there is no `{}` command; the commands are `generate` and `dev`",
                 truncate(found)
             ),
-            UsageError::UnknownFlag { found } => write!(
+            UsageError::UnknownFlag { command, found } => write!(
                 f,
-                "`generate` has no {} flag; it takes --schema, --dart, --ts and --check",
-                truncate(found)
+                "`{command}` has no {} flag; it takes {}",
+                truncate(found),
+                flags_of(command)
             ),
-            UsageError::UnexpectedArgument { found } => write!(
+            UsageError::UnexpectedArgument { command, found } => write!(
                 f,
-                "`generate` takes no positional arguments, but got \"{}\"; \
-                 every path is named by a flag",
-                truncate(found)
+                "`{command}` takes no positional arguments, but got \"{}\"; {}",
+                truncate(found),
+                match *command {
+                    "dev" =>
+                        "every value is named by a flag, and the host command \
+                              goes after `--`",
+                    _ => "every path is named by a flag",
+                }
             ),
             UsageError::RepeatedFlag { flag } => write!(
                 f,
@@ -238,8 +281,32 @@ impl fmt::Display for UsageError {
                 "nothing to generate: pass --dart, --ts, or both, naming where \
                  each client should go"
             ),
+            UsageError::NoProject => write!(
+                f,
+                "--flutter is required; it names the Flutter project directory \
+                 holding pubspec.yaml and .dart_tool/"
+            ),
+            UsageError::NoHostCommand => write!(
+                f,
+                "no host command: write it after `--`, as in \
+                 `duet dev --flutter ./flutter -- cargo run`. `dev` starts the \
+                 host itself, because that is how it reads the Dart VM service \
+                 URI the engine prints"
+            ),
         }
     }
+}
+
+/// The flags a subcommand takes, as one readable list.
+///
+/// Built from the same constants the parser matches against, so a flag added
+/// to one and not the other cannot produce a message that lies.
+fn flags_of(command: &str) -> String {
+    let (flags, extra) = match command {
+        "dev" => (&DEV_FLAGS[..], ""),
+        _ => (&PATH_FLAGS[..], " and --check"),
+    };
+    format!("{}{extra}", flags.join(", "))
 }
 
 impl std::error::Error for UsageError {}
@@ -259,9 +326,120 @@ pub fn parse<S: AsRef<str>>(arguments: &[S]) -> Result<Invocation, UsageError> {
         "-h" | "--help" | "help" => Ok(Invocation::Help),
         "-V" | "--version" | "version" => Ok(Invocation::Version),
         "generate" => parse_generate(rest),
+        "dev" => parse_dev(rest),
         other => Err(UsageError::UnknownCommand {
             found: other.to_string(),
         }),
+    }
+}
+
+/// Every flag of `duet dev` that takes a value.
+///
+/// The same single-list discipline as [`PATH_FLAGS`]: the parser, the "unknown
+/// flag" message and the help text all read this, so they cannot drift.
+pub const DEV_FLAGS: [&str; 3] = ["--flutter", "--flutter-root", "--entrypoint"];
+
+/// The flags of `duet dev`, and the host command after `--`.
+///
+/// `--` is handled before anything else on each pass, because everything after
+/// it belongs to another program: `duet dev --flutter x -- cargo run --release`
+/// must pass `--release` to `cargo`, not reject it as a flag `dev` does not
+/// define.
+fn parse_dev(arguments: &[&str]) -> Result<Invocation, UsageError> {
+    let mut fields = DevFields::default();
+    let mut index = 0;
+    while index < arguments.len() {
+        let argument = arguments[index];
+        index += 1;
+        if argument == "--" {
+            fields.host = arguments[index..]
+                .iter()
+                .map(|a| (*a).to_string())
+                .collect();
+            break;
+        }
+        let Some((flag, inline)) = split_flag(argument) else {
+            return Err(UsageError::UnexpectedArgument {
+                command: "dev",
+                found: argument.to_string(),
+            });
+        };
+        if matches!(flag, "-h" | "--help") {
+            return Ok(Invocation::DevHelp);
+        }
+        // Re-derived as a `&'static str`, so a diagnostic can only name a flag
+        // this parser defines.
+        let flag = DEV_FLAGS
+            .into_iter()
+            .find(|known| *known == flag)
+            .ok_or_else(|| UsageError::UnknownFlag {
+                command: "dev",
+                found: flag.to_string(),
+            })?;
+        let value = match inline {
+            Some(value) => value,
+            None => take_value(flag, arguments, &mut index)?,
+        };
+        fields.set(flag, value)?;
+    }
+    fields.finish().map(Invocation::Dev)
+}
+
+/// The `dev` flags seen so far, each at most once.
+#[derive(Default)]
+struct DevFields {
+    project: Option<PathBuf>,
+    flutter_root: Option<PathBuf>,
+    entrypoint: Option<String>,
+    host: Vec<String>,
+}
+
+impl DevFields {
+    /// Records one flag, refusing a repeat for the same reason `generate`
+    /// does: taking the last silently discards the first.
+    fn set(&mut self, flag: &'static str, value: &str) -> Result<(), UsageError> {
+        let occupied = match flag {
+            "--flutter" => {
+                let seen = self.project.is_some();
+                self.project = Some(PathBuf::from(value));
+                seen
+            }
+            "--flutter-root" => {
+                let seen = self.flutter_root.is_some();
+                self.flutter_root = Some(PathBuf::from(value));
+                seen
+            }
+            // Unreachable: the caller matches this same set.
+            _ => {
+                let seen = self.entrypoint.is_some();
+                self.entrypoint = Some(value.to_string());
+                seen
+            }
+        };
+        if occupied {
+            return Err(UsageError::RepeatedFlag { flag });
+        }
+        Ok(())
+    }
+
+    /// The request, if enough of it was given.
+    fn finish(self) -> Result<Dev, UsageError> {
+        let DevFields {
+            project,
+            flutter_root,
+            entrypoint,
+            host,
+        } = self;
+        let project = project.ok_or(UsageError::NoProject)?;
+        if host.is_empty() {
+            return Err(UsageError::NoHostCommand);
+        }
+        Ok(Dev {
+            project,
+            flutter_root,
+            entrypoint,
+            host,
+        })
     }
 }
 
@@ -280,6 +458,7 @@ fn parse_generate(arguments: &[&str]) -> Result<Invocation, UsageError> {
         index += 1;
         let Some((flag, inline)) = split_flag(argument) else {
             return Err(UsageError::UnexpectedArgument {
+                command: "generate",
                 found: argument.to_string(),
             });
         };
@@ -307,6 +486,7 @@ fn take_path(
         .into_iter()
         .find(|known| *known == flag)
         .ok_or_else(|| UsageError::UnknownFlag {
+            command: "generate",
             found: flag.to_string(),
         })?;
     let value = match inline {

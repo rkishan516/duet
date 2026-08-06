@@ -71,6 +71,7 @@
 #![forbid(unsafe_code)]
 
 pub mod args;
+pub mod dev;
 pub mod diff;
 pub mod error;
 pub mod help;
@@ -78,7 +79,7 @@ pub mod report;
 pub mod run;
 pub mod write;
 
-pub use args::{Generate, Invocation, UsageError};
+pub use args::{Dev, Generate, Invocation, UsageError};
 pub use error::{CliError, Difference, EXIT_FAILED, EXIT_STALE, EXIT_USAGE};
 pub use run::{Report, run};
 pub use write::{Target, WriteError};
@@ -99,12 +100,30 @@ pub struct Outcome {
 /// Total: every input produces an [`Outcome`], and nothing here panics.
 /// Diagnostics go to [`Outcome::err`] and everything else to [`Outcome::out`],
 /// so a caller redirecting one stream never loses the other.
+///
+/// **One exception, and it is deliberate: `dev`.** A `duet dev` session runs
+/// until the host exits or the developer interrupts it, so buffering its
+/// output into an [`Outcome`] would show them nothing at all until it ended.
+/// That arm streams straight to this process's own stdout and stderr and
+/// returns an [`Outcome`] carrying only the exit code. Callers that need to
+/// capture a session's output should use [`dev::run`], which takes the two
+/// writers explicitly — that is how this crate's own tests drive it.
 pub fn execute<S: AsRef<str>>(arguments: &[S]) -> Outcome {
     match args::parse(arguments) {
         Ok(Invocation::Help) => succeed(help::HELP),
         Ok(Invocation::GenerateHelp) => succeed(help::GENERATE_HELP),
+        Ok(Invocation::DevHelp) => succeed(help::DEV_HELP),
         Ok(Invocation::Version) => succeed(&help::version()),
         Ok(Invocation::Generate(request)) => generate(&request),
+        Ok(Invocation::Dev(request)) => Outcome {
+            code: dev::run(
+                &request,
+                &mut std::io::stdout().lock(),
+                &mut std::io::stderr().lock(),
+            ),
+            out: String::new(),
+            err: String::new(),
+        },
         Err(e) => fail(&CliError::Usage(e), None),
     }
 }
