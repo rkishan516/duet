@@ -103,6 +103,19 @@ jobs:
       #   packages read it — the no-host codec checks and the live-host
       #   conformance run alike. A stale one would have every language
       #   conforming to a schema that no longer exists.
+      #
+      # This step also runs `duet-derive`'s `trybuild` suite, which is the one
+      # thing here that a **toolchain bump alone** can break. The `.stderr` files
+      # under `crates/duet-derive/tests/ui/` record rustc's rendering of each
+      # rejection, not only Duet's own text, so a release that reformats a trait
+      # error moves them with nothing being wrong. When that happens:
+      #
+      #     TRYBUILD=overwrite cargo test -p duet-derive --test compile_fail
+      #
+      # and read the diff. `every_committed_message_still_names_the_fix` in that
+      # file reads the regenerated text with no compiler involved and fails if
+      # the guidance naming the fix stopped reaching the user, so a blind
+      # regeneration cannot quietly empty the check.
       - name: Test single-threaded (includes all three staleness checks)
         run: cargo test --workspace --exclude duet-backend-macos --locked -- --test-threads=1
 

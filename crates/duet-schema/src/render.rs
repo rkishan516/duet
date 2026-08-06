@@ -13,8 +13,8 @@
 //! # Determinism is a requirement, not a nicety
 //!
 //! The rendered schema is committed, diffed and compared byte-for-byte: a
-//! stale-schema check fails CI, and increment 6's derive has to produce a file
-//! byte-identical to a hand-written one. So: object keys are emitted in sorted
+//! stale-schema check fails CI, and `#[derive(SharedState)]` has to produce a
+//! file byte-identical to a hand-written one. So: object keys are emitted in sorted
 //! order, `types` is sorted by name, indentation is fixed at two spaces, and
 //! the file ends with exactly one newline. No floats are ever emitted, so no
 //! float formatting can vary.

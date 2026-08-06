@@ -1,0 +1,7 @@
+error: two fields share the wire key `title`.
+       A struct is one `Value::Map`, so both would occupy one entry: one of the two would be unreachable, and nothing here can know which.
+       Fix: give one of them a different key with `#[duet(rename = "...")]`, or `#[duet(skip)]` the one that is not shared state.
+ --> tests/ui/duplicate_key.rs:7:21
+  |
+7 |     #[duet(rename = "title")]
+  |                     ^^^^^^^

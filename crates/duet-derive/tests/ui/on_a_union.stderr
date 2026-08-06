@@ -1,0 +1,7 @@
+error: `#[derive(SharedState)]` describes a struct with named fields, and this is a union.
+       The schema describes one shape per name, and has no arm for a value that is one of several shapes.
+       Fixes: give it named fields, or write `impl SharedState` for it by hand — a hand-written impl is a supported escape hatch, not a workaround, and it is the documented way to share a type the schema's own language cannot describe.
+ --> tests/ui/on_a_union.rs:4:1
+  |
+4 | union Raw {
+  | ^^^^^

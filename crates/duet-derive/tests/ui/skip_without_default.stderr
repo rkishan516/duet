@@ -1,0 +1,18 @@
+error[E0277]: `Cache` is `#[duet(skip)]`ped, so it must implement `Default`
+  --> tests/ui/skip_without_default.rs:11:12
+   |
+11 |     cache: Cache,
+   |            ^^^^^ no `Default` impl exists for `Cache`
+   |
+   = help: the trait `Default` is not implemented for `Cache`
+   = note: A skipped field never reaches the store, so decoding the struct back out of the store has nothing to read it from and uses `Default::default()`.
+           The fixes:
+             add `#[derive(Default)]` to `Cache`, or write `impl Default for Cache` yourself
+             wrap the field in `Option<Cache>`, whose `Default` is `None`
+             remove `#[duet(skip)]`, if the field is shared state after all
+   = note: required for `Cache` to implement `SkippedDefault`
+help: consider annotating `Cache` with `#[derive(Default)]`
+   |
+ 5 + #[derive(Default)]
+ 6 | struct Cache(i64);
+   |

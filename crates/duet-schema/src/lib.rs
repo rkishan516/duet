@@ -71,9 +71,9 @@
 //! use duet_schema::{DecodeError, FieldDef, NotNullable, Reading, Registry, Schema,
 //!                   SharedState, Ty, install};
 //!
-//! /// The application's shared state. Increment 6 derives this; today it is
-//! /// hand-written, which is the point — the schema is a specification two
-//! /// independent producers must satisfy.
+//! /// The application's shared state. `duet`'s `derive` feature writes this
+//! /// impl for you; it is spelled out here because the trait is meant to be
+//! /// hand-implementable, and because this crate sits below the derive.
 //! #[derive(Debug, PartialEq)]
 //! struct AppState {
 //!     counter: i64,
@@ -161,7 +161,7 @@ pub use registry::Registry;
 pub use render::SCHEMA_VERSION;
 pub use schema::Schema;
 pub use seed::seed;
-pub use state::{NotNullable, SharedState};
+pub use state::{NotNullable, SharedState, SkippedDefault};
 pub use ty::{FieldDef, Ty, TypeDef};
 pub use typed::error::{FieldError, InstallError};
 pub use typed::field::{Field, OptionalField};

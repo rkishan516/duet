@@ -49,6 +49,23 @@ pub use duet_core::{
 pub use duet_runtime::{Runtime, RuntimeError, Sink, StoreHandle};
 pub use duet_schema::{
     Bytes, DecodeError, Field, FieldDef, FieldError, InstallError, NotNullable, OptionalField,
-    Reading, Registry, Schema, SchemaError, SchemaErrors, SharedState, Ty, TypeDef, TypedStore,
-    install,
+    Reading, Registry, Schema, SchemaError, SchemaErrors, SharedState, SkippedDefault, Ty, TypeDef,
+    TypedStore, install,
 };
+
+/// Derives [`SharedState`] for a struct with named fields.
+///
+/// Available with the `derive` feature:
+///
+/// ```toml
+/// duet = { version = "0.1", features = ["derive"] }
+/// ```
+///
+/// The trait and the macro share a name and live in different namespaces, so
+/// one `use duet::SharedState;` brings both into scope.
+///
+/// See [`duet_derive`] for what it generates, the three `#[duet(...)]`
+/// attributes, and why a rejected field type produces a trait error rather than
+/// a macro error.
+#[cfg(feature = "derive")]
+pub use duet_derive::SharedState;

@@ -164,3 +164,43 @@ pub trait SharedState: Sized {
             For a type of your own, add an empty `impl NotNullable for {Self}` next to its `SharedState` impl."
 )]
 pub trait NotNullable {}
+
+/// The bound `#[duet(skip)]` places on a field's type.
+///
+/// A skipped field is absent from the wire and from the schema, so
+/// [`from_value`](SharedState::from_value) has nothing to read it back from and
+/// fills it in with [`Default`] instead. This trait exists only so that the
+/// requirement arrives as a sentence naming the fix rather than as a bare
+/// "`Default` is not implemented" pointing into generated code.
+///
+/// It is blanket-implemented for every `T: Default` and has no other impls, so
+/// there is nothing to implement here: give the field's type a `Default`, or
+/// stop skipping it.
+///
+/// ```
+/// use duet_schema::SkippedDefault;
+///
+/// #[derive(Debug, Default, PartialEq)]
+/// struct Cache(Vec<u8>);
+///
+/// assert_eq!(<Cache as SkippedDefault>::skipped_default(), Cache(Vec::new()));
+/// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is `#[duet(skip)]`ped, so it must implement `Default`",
+    label = "no `Default` impl exists for `{Self}`",
+    note = "A skipped field never reaches the store, so decoding the struct back out of the store has nothing to read it from and uses `Default::default()`.\n\
+            The fixes:\n\
+            \x20 add `#[derive(Default)]` to `{Self}`, or write `impl Default for {Self}` yourself\n\
+            \x20 wrap the field in `Option<{Self}>`, whose `Default` is `None`\n\
+            \x20 remove `#[duet(skip)]`, if the field is shared state after all"
+)]
+pub trait SkippedDefault {
+    /// The value a skipped field is decoded as.
+    fn skipped_default() -> Self;
+}
+
+impl<T: Default> SkippedDefault for T {
+    fn skipped_default() -> T {
+        T::default()
+    }
+}

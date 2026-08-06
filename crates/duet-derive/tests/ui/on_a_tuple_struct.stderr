@@ -1,0 +1,7 @@
+error: `#[derive(SharedState)]` describes a struct with named fields, and this is a tuple struct.
+       A wire key is a field name, and unnamed fields have none.
+       Fixes: give it named fields, or write `impl SharedState` for it by hand — a hand-written impl is a supported escape hatch, not a workaround, and it is the documented way to share a type the schema's own language cannot describe.
+ --> tests/ui/on_a_tuple_struct.rs:5:14
+  |
+5 | struct Millis(i64);
+  |              ^^^^^

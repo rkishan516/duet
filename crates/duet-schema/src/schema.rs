@@ -19,10 +19,11 @@ use crate::ty::{Ty, TypeDef, is_legal_key, is_legal_type_name};
 ///
 /// # This, not the Rust types, is the contract
 ///
-/// Increment 4's emitters read a rendered schema; increment 6's derive must
-/// produce one byte-identical to a hand-written specification. Two independent
-/// producers satisfying one artifact is what makes "one type definition, three
-/// agreeing clients" a checkable claim rather than an assertion.
+/// `duet-codegen`'s emitters read a rendered schema, and
+/// `#[derive(SharedState)]` produces one byte-identical to the hand-written
+/// specification they were built against. Two independent producers satisfying
+/// one artifact is what makes "one type definition, three agreeing clients" a
+/// checkable claim rather than an assertion.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Schema {
     root: Ty,

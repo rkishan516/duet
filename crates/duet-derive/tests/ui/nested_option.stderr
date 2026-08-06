@@ -1,0 +1,21 @@
+error[E0277]: `Option<i64>` may lower to `Value::Null`, so it cannot go inside an `Option`
+ --> tests/ui/nested_option.rs:7:12
+  |
+7 |     maybe: Option<Option<i64>>,
+  |            ^^^^^^^^^^^^^^^^^^^ `Option<Option<i64>>` would collapse `Some(null)` and `None` into one value
+  |
+  = help: the trait `NotNullable` is not implemented for `Option<i64>`
+  = note: Nested options have no representation in the store: flatten `Option<Option<T>>` to `Option<T>`.
+          A `duet_core::Value` can already be `Value::Null`, so an `Option` around one is the same collapse.
+          For a type of your own, add an empty `impl NotNullable for Option<i64>` next to its `SharedState` impl.
+  = help: the following other types implement trait `NotNullable`:
+            App
+            Arc<T>
+            BTreeMap<String, V>
+            Box<T>
+            HashMap<String, V, S>
+            String
+            Vec<T>
+            bool
+          and $N others
+  = note: required for `Option<Option<i64>>` to implement `SharedState`

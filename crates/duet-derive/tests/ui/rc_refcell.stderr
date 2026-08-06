@@ -1,0 +1,59 @@
+error[E0277]: `Rc<i64>` cannot be shared through a Duet store
+  --> tests/ui/rc_refcell.rs:11:13
+   |
+11 |     shared: Rc<i64>,
+   |             ^^^^^^^ no `SharedState` impl exists for `Rc<i64>`
+   |
+   = help: the trait `SharedState` is not implemented for `Rc<i64>`
+   = note: Duet refuses a type by not implementing `SharedState` for it. The usual fixes:
+             `u64` `u128` `i128` `usize` `isize`  ->  `i64` (the wire's only integer is `i64`; `u64 > i64::MAX` has no representation)
+             `f32`                                ->  `f64` (Dart and TS have no 32-bit float, so `f32` is lossy inbound for nothing)
+             `HashSet<T>`                         ->  `Vec<T>` or `BTreeSet` via a hand impl (hash order is not a function of the value)
+             `HashMap<K, V>` with `K` != `String` ->  `HashMap<String, V>` (`Value::Map` has string keys; a list of pairs loses path addressing)
+             `Vec<u8>` as binary                  ->  `duet::Bytes` (a bare `Vec<u8>` is accepted, but lowers to a list of ints)
+             `&str` `&[T]` and other borrows      ->  the owned type (the store owns a `'static` tree)
+             `Rc` `RefCell` `Cell` `Mutex` `RwLock` -> the inner type (two handles to one node become two copies through `Value`)
+             `PathBuf` `OsString`                 ->  `String` (`OsString` is WTF-8 on Windows; `Value::Str` is UTF-8 only)
+             `Duration` `SystemTime` `Instant`    ->  an explicit `i64` or `String` encoding you choose
+             `Option<Option<T>>`                  ->  `Option<T>` (`Some(None)` and `None` both lower to `Value::Null`)
+           For anything else, write `impl SharedState for Rc<i64>` yourself — it is a supported escape hatch, not a workaround.
+   = help: the following other types implement trait `SharedState`:
+             App
+             Arc<T>
+             BTreeMap<String, V>
+             Box<T>
+             HashMap<String, V, S>
+             Option<T>
+             String
+             Value
+           and $N others
+
+error[E0277]: `RefCell<i64>` cannot be shared through a Duet store
+  --> tests/ui/rc_refcell.rs:12:14
+   |
+12 |     mutable: RefCell<i64>,
+   |              ^^^^^^^^^^^^ no `SharedState` impl exists for `RefCell<i64>`
+   |
+   = help: the trait `SharedState` is not implemented for `RefCell<i64>`
+   = note: Duet refuses a type by not implementing `SharedState` for it. The usual fixes:
+             `u64` `u128` `i128` `usize` `isize`  ->  `i64` (the wire's only integer is `i64`; `u64 > i64::MAX` has no representation)
+             `f32`                                ->  `f64` (Dart and TS have no 32-bit float, so `f32` is lossy inbound for nothing)
+             `HashSet<T>`                         ->  `Vec<T>` or `BTreeSet` via a hand impl (hash order is not a function of the value)
+             `HashMap<K, V>` with `K` != `String` ->  `HashMap<String, V>` (`Value::Map` has string keys; a list of pairs loses path addressing)
+             `Vec<u8>` as binary                  ->  `duet::Bytes` (a bare `Vec<u8>` is accepted, but lowers to a list of ints)
+             `&str` `&[T]` and other borrows      ->  the owned type (the store owns a `'static` tree)
+             `Rc` `RefCell` `Cell` `Mutex` `RwLock` -> the inner type (two handles to one node become two copies through `Value`)
+             `PathBuf` `OsString`                 ->  `String` (`OsString` is WTF-8 on Windows; `Value::Str` is UTF-8 only)
+             `Duration` `SystemTime` `Instant`    ->  an explicit `i64` or `String` encoding you choose
+             `Option<Option<T>>`                  ->  `Option<T>` (`Some(None)` and `None` both lower to `Value::Null`)
+           For anything else, write `impl SharedState for RefCell<i64>` yourself — it is a supported escape hatch, not a workaround.
+   = help: the following other types implement trait `SharedState`:
+             App
+             Arc<T>
+             BTreeMap<String, V>
+             Box<T>
+             HashMap<String, V, S>
+             Option<T>
+             String
+             Value
+           and $N others

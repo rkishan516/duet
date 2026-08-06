@@ -4,6 +4,14 @@ build/
 node_modules/
 .DS_Store
 
+# `cargo llvm-cov` raw profiles. Most land under `target/`, but `duet-derive` is
+# a **proc-macro** crate: its instrumented dylib is loaded by `rustc` itself
+# while compiling every crate that derives, and those `rustc` processes run with
+# the package directory as their working directory. So `crates/duet/*.profraw`
+# and friends appear as soon as coverage runs, outside `target/` entirely.
+*.profraw
+*.profdata
+
 # `packages/duet-js` build output. `src/` is the source of truth and Node runs
 # it directly via type stripping, so `dist/` is only ever what `npm run build`
 # just produced — committing it would create a second copy that can go stale.

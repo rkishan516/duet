@@ -1,0 +1,15 @@
+error: `editor.zoom` is not a legal wire key: it has to be exactly one path segment.
+       A key is one step of every path that addresses this field, so it may not be empty and may not contain `.`, `[` or `]` — `editor.zoom` written as a key would be read back as two segments addressing something else entirely.
+       Fix: choose a key made only of characters a path segment allows, with `#[duet(rename = "...")]`.
+ --> tests/ui/bad_rename.rs:6:21
+  |
+6 |     #[duet(rename = "editor.zoom")]
+  |                     ^^^^^^^^^^^^^
+
+error: `` is not a legal wire key: it has to be exactly one path segment.
+       A key is one step of every path that addresses this field, so it may not be empty and may not contain `.`, `[` or `]` — `editor.zoom` written as a key would be read back as two segments addressing something else entirely.
+       Fix: choose a key made only of characters a path segment allows, with `#[duet(rename = "...")]`.
+ --> tests/ui/bad_rename.rs:8:21
+  |
+8 |     #[duet(rename = "")]
+  |                     ^^
