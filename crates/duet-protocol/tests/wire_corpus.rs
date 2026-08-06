@@ -27,6 +27,38 @@ mod corpus;
 
 use std::fs;
 
+use serde::Deserialize;
+
+/// Reads the committed corpus file as JSON, with `serde_json`'s recursion limit
+/// lifted **for this file only**.
+///
+/// # Why the fixture container is exempt from the limit it describes
+///
+/// `value/nesting/at_limit` is a message at exactly
+/// [`duet_codec::MAX_JSON_DEPTH`] containers — the deepest thing the wire
+/// admits. Its `wire` is stored as a JSON *string*, so it costs the file
+/// nothing; its `witness` is stored as a JSON *tree*, and a witness is the same
+/// depth as the value it witnesses. Sitting three containers below the document
+/// root (`{…} → "accept" → case → witness`), that puts the file two containers
+/// past the limit.
+///
+/// So the corpus can only state its own boundary case if the envelope carrying
+/// it is exempt from that boundary. Nothing is weakened by this: the limit
+/// applies to guest text arriving over IPC, and `duet_protocol::handle_text`
+/// enforces it there with `duet_codec::exceeds_max_json_depth` before any parse.
+/// This file is neither guest text nor untrusted — it is a build artifact of
+/// this repository, read by a test.
+///
+/// The two guest implementations need no equivalent: `jsonDecode` and
+/// `JSON.parse` have no depth limit of their own, which is precisely why both
+/// packages have to state the wire's limit explicitly instead.
+fn read_corpus(text: &str) -> serde_json::Value {
+    let mut de = serde_json::Deserializer::from_str(text);
+    de.disable_recursion_limit();
+    serde_json::Value::deserialize(&mut de)
+        .unwrap_or_else(|e| panic!("the corpus is not valid JSON: {e}"))
+}
+
 #[test]
 fn corpus_matches_the_committed_file() {
     let path = corpus::corpus_path();
@@ -72,9 +104,7 @@ fn rust_satisfies_its_own_corpus() {
     let path = corpus::corpus_path();
     let committed =
         fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
-    let document: serde_json::Value = serde_json::from_str(&committed)
-        .unwrap_or_else(|e| panic!("{} is not valid JSON: {e}", path.display()));
-    corpus::check::verify(&document);
+    corpus::check::verify(&read_corpus(&committed));
 }
 
 #[test]

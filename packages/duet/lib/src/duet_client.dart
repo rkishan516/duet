@@ -140,9 +140,20 @@ class DuetClient {
 
     final DuetResponse reply = DuetResponse.fromWireText(text);
     if (reply.id != request.id) {
+      // A `failed` naming an id this call did not send is the host saying it
+      // could not read the id of the request it is refusing — see
+      // `RequestId::UNCORRELATED` in crates/duet-protocol/src/message.rs. A
+      // lone UTF-16 surrogate anywhere in the message produces exactly this.
+      // Its `message` is the only account of *why*, so it travels with the
+      // error: reporting the id mismatch alone would replace a diagnosis
+      // ("malformed JSON: lone surrogate at line 1 column 34") with a
+      // correlation complaint, which is the wrong half of the story.
+      final String detail = reply is DuetFailedResponse
+          ? ', and refused it: ${reply.message}'
+          : '';
       throw DuetTransportException(
         'the host answered request ${reply.id} on the reply to request '
-        '${request.id}',
+        '${request.id}$detail',
       );
     }
     if (reply is DuetFailedResponse) {

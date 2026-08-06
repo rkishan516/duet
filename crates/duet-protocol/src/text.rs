@@ -21,6 +21,23 @@ use crate::message::{Push, RequestId, Response};
 /// `subscriber` is the surface's own, supplied by the host. A `subscriber`
 /// field appearing in the message is **ignored** — [`crate::Request`] has no
 /// such field, so a guest cannot subscribe as another guest.
+///
+/// # The reply is depth-checked too, not only the request
+///
+/// The nesting limit guards text arriving *from* a guest. Nothing in the type
+/// system stops the host writing a `Value` whose encoding exceeds it, and a
+/// `get` for such a value would answer with text no conforming client — the
+/// host's own [`crate::decode_response`] included — can parse. Measured before
+/// this guard existed: a 200-deep `Value` produced a 3,251-byte reply
+/// `serde_json` refused to re-parse.
+///
+/// [`duet_core::Store::set`] refuses to store a value that deep, which is what
+/// makes the situation unreachable through any write. This check is the backstop
+/// for the door that leaves open — a `Store` *seeded* over-deep by its embedder,
+/// where the value was never written at all. Turning that into a
+/// [`Response::Failed`] costs one linear scan of text already produced, and buys
+/// the guarantee outright: **`handle_text` never returns text it could not
+/// decode itself**.
 pub fn handle_text(store: &StoreHandle, subscriber: SubscriberId, text: &str) -> String {
     let response = match decode(text) {
         Ok(request) => crate::dispatch(store, subscriber, request),
@@ -30,7 +47,21 @@ pub fn handle_text(store: &StoreHandle, subscriber: SubscriberId, text: &str) ->
     // the single encoding step. Note `wry`'s `evaluate_script_with_callback`
     // re-serializes anything a script *returns*, which is why responses are
     // pushed rather than returned — see `duet_webview::response_script`.
-    serde_json::to_string(&crate::encode_response(&response))
+    let encoded = serde_json::to_string(&crate::encode_response(&response))
+        .unwrap_or_else(|_| FALLBACK_FAILURE.to_string());
+    if !duet_codec::exceeds_max_json_depth(&encoded) {
+        return encoded;
+    }
+    // The failure keeps the id the request carried, so the guest fails that one
+    // call rather than waiting on a reply that would never arrive.
+    let refusal = Response::Failed {
+        id: response.id(),
+        message: format!(
+            "the stored value nests deeper than the {} JSON containers this wire admits",
+            duet_codec::MAX_JSON_DEPTH
+        ),
+    };
+    serde_json::to_string(&crate::encode_response(&refusal))
         .unwrap_or_else(|_| FALLBACK_FAILURE.to_string())
 }
 
@@ -48,7 +79,7 @@ const FALLBACK_FAILURE: &str =
 ///
 /// "Readable" means it passes [`duet_codec::parse_wire_id`] — canonically
 /// spelled *and* within the wire's id domain. Anything else is not recovered,
-/// and the failure carries `RequestId(0)` instead.
+/// and the failure carries [`RequestId::UNCORRELATED`] instead.
 ///
 /// Recovering `7` from `"007"` would reintroduce the very mismatch the
 /// canonical rule exists to prevent: the reply would name an id the guest never
@@ -56,19 +87,48 @@ const FALLBACK_FAILURE: &str =
 /// anyway — while this function's whole purpose is to stop exactly that hang.
 /// An id above `duet_codec::MAX_WIRE_ID` is refused for the mirrored reason:
 /// echoing it back would send a Dart guest a number its own `int` cannot parse,
-/// so the "recovery" would fail on arrival. `RequestId(0)` is the honest answer
+/// so the "recovery" would fail on arrival. [`RequestId::UNCORRELATED`] is the honest answer
 /// in both cases: this reply answers no request the guest can name.
+///
+/// # The depth pre-scan runs before the parser, not after it
+///
+/// [`duet_codec::exceeds_max_json_depth`] reads the raw text first. Two reasons
+/// it is not left to `serde_json`, whose own recursion limit happens to sit at
+/// the same 127 today:
+///
+/// - **The host must own its own limit.** Three implementations of this format
+///   have to agree on the boundary exactly, and `corpus/wire-corpus.json` pins
+///   it. A `serde_json` upgrade that moved its internal constant would move the
+///   host's behaviour with it and silently re-open a cross-language divergence
+///   that nothing in this workspace would fail on.
+/// - **Rejecting before parsing is cheaper and stricter.** Over-deep text never
+///   becomes a tree at all.
+///
+/// Over-deep text is reported exactly like any other unparseable input: the id
+/// is *not* recovered, because recovering it would mean parsing the very
+/// document being refused. [`RequestId::UNCORRELATED`] again means "this reply answers no
+/// request you can name" — which a guest must handle, see
+/// `crates/duet-webview/src/bootstrap.rs`.
 fn decode(text: &str) -> Result<crate::Request, (RequestId, String)> {
+    if duet_codec::exceeds_max_json_depth(text) {
+        return Err((
+            RequestId::UNCORRELATED,
+            format!(
+                "malformed JSON: nests deeper than {} containers",
+                duet_codec::MAX_JSON_DEPTH
+            ),
+        ));
+    }
     let json: serde_json::Value = match serde_json::from_str(text) {
         Ok(j) => j,
-        Err(e) => return Err((RequestId(0), format!("malformed JSON: {e}"))),
+        Err(e) => return Err((RequestId::UNCORRELATED, format!("malformed JSON: {e}"))),
     };
     let id = json
         .get("id")
         .and_then(|v| v.as_str())
         .and_then(duet_codec::parse_wire_id)
         .map(RequestId)
-        .unwrap_or(RequestId(0));
+        .unwrap_or(RequestId::UNCORRELATED);
 
     crate::decode_request(&json).map_err(|e| (id, e.to_string()))
 }
@@ -79,8 +139,27 @@ fn decode(text: &str) -> Result<crate::Request, (RequestId, String)> {
 /// `duet_webview::push_script`); a Flutter guest receives it verbatim on its
 /// platform channel, which is why the encoding lives here rather than in a
 /// transport crate.
+///
+/// # Over-deep pushes become `null`, and that is the honest answer
+///
+/// A push carries no request id, so there is no `failed` reply to send in its
+/// place — a guest correlates nothing and can be told nothing. `null` is
+/// therefore the only remaining option, and every guest's push handler already
+/// drops what it cannot decode. It is still strictly better than emitting text
+/// that nests past the wire's limit, which a guest would meet as a parse error
+/// on an unrelated code path.
+///
+/// A notification is the deepest envelope this format has, which is exactly why
+/// [`duet_core::MAX_VALUE_DEPTH`] is derived from it: with that bound enforced
+/// on the way into the store, no push built from a stored patch can reach this
+/// branch.
 pub fn push_text(push: &Push) -> String {
-    serde_json::to_string(&crate::encode_push(push)).unwrap_or_else(|_| "null".to_string())
+    let encoded =
+        serde_json::to_string(&crate::encode_push(push)).unwrap_or_else(|_| "null".to_string());
+    if duet_codec::exceeds_max_json_depth(&encoded) {
+        return "null".to_string();
+    }
+    encoded
 }
 
 #[cfg(test)]
@@ -185,7 +264,7 @@ mod tests {
         // Recovery exists so a guest can fail one specific call. Recovering
         // `7` from `"007"` would defeat that: the guest keys its pending map
         // by the string it SENT, so a reply carrying `"7"` never matches and
-        // the call hangs anyway — silently. `RequestId(0)` is the honest
+        // the call hangs anyway — silently. `RequestId::UNCORRELATED` is the honest
         // answer: "this reply answers no request you can name".
         let rt = rt();
         for raw in ["007", "+1", "0000000000000000000007", " 1", "1 ", ""] {
@@ -250,6 +329,230 @@ mod tests {
         rt.shutdown().expect("shutdown should succeed");
     }
 
+    #[test]
+    fn the_nesting_limit_bites_at_exactly_one_container_past_the_bound() {
+        // THE regression test for a one-level divergence. Both guests enforced
+        // 128 where this host stops at 127, so a document with exactly 128
+        // containers was accepted by Dart and TypeScript and refused here — and
+        // no test could see it, because the only nesting cases in the suite
+        // used 200 and 5,000 levels, which every implementation refuses
+        // whatever its off-by-one. Pin the exact boundary or pin nothing.
+        //
+        // The discriminator is the echoed id, not the response kind: a request
+        // that got *parsed* has its id recovered, while one refused by the
+        // pre-scan answers `RequestId::UNCORRELATED` because reading its id would mean
+        // parsing the document being refused. That stays true regardless of
+        // what the store later decides about a value this deep.
+        /// A `set` request whose document nests exactly `containers` JSON
+        /// containers: one for the envelope, then a tagged value carrying the
+        /// rest. A tagged value costs two containers per level of its own
+        /// nesting, so an odd remainder ends in `{"t":"n"}` and an even one in
+        /// an empty list. Both fixtures come from this one generator, so they
+        /// differ by exactly one container and by nothing else.
+        fn set_request(containers: usize) -> String {
+            let value = containers - 1;
+            let wrappers = (value - 1) / 2;
+            let leaf = if value % 2 == 0 {
+                r#"{"t":"l","v":[]}"#
+            } else {
+                r#"{"t":"n"}"#
+            };
+            format!(
+                r#"{{"kind":"set","id":"1","path":"editor","value":{}{}{}}}"#,
+                r#"{"t":"l","v":["#.repeat(wrappers),
+                leaf,
+                r#"]}"#.repeat(wrappers),
+            )
+        }
+
+        let rt = rt();
+        let handle = rt.handle();
+
+        let at_limit = set_request(duet_codec::MAX_JSON_DEPTH);
+        assert!(
+            !duet_codec::exceeds_max_json_depth(&at_limit),
+            "the fixture must sit AT the limit, not past it"
+        );
+        let reply = handle_text(&handle, SubscriberId(1), &at_limit);
+        let parsed: serde_json::Value = serde_json::from_str(&reply).expect("valid JSON");
+        assert_eq!(
+            parsed["id"],
+            "1",
+            "a document at exactly {} containers must be parsed, got {reply}",
+            duet_codec::MAX_JSON_DEPTH
+        );
+
+        let over_limit = set_request(duet_codec::MAX_JSON_DEPTH + 1);
+        assert!(
+            duet_codec::exceeds_max_json_depth(&over_limit),
+            "the fixture must sit exactly one container past the limit"
+        );
+        let reply = handle_text(&handle, SubscriberId(1), &over_limit);
+        let parsed: serde_json::Value = serde_json::from_str(&reply).expect("valid JSON");
+        assert_eq!(parsed["kind"], "failed", "got {reply}");
+        assert_eq!(
+            parsed["id"], "0",
+            "over-deep text must not have its id recovered, got {reply}"
+        );
+        assert!(
+            reply.contains(&duet_codec::MAX_JSON_DEPTH.to_string()),
+            "the failure must name the limit it enforced, got {reply}"
+        );
+
+        rt.shutdown().expect("shutdown should succeed");
+    }
+
+    /// A chain of `n` nested lists around a scalar leaf: `Value::depth() == n`.
+    fn chain(n: usize) -> Value {
+        let mut v = Value::Int(1);
+        for _ in 0..n {
+            v = Value::List(vec![v]);
+        }
+        v
+    }
+
+    #[test]
+    fn the_value_depth_bound_is_exactly_what_every_envelope_can_carry() {
+        // The arithmetic behind `duet_core::MAX_VALUE_DEPTH`, checked against
+        // the real encoders in the one crate that can see both constants.
+        // Stating 61 in `duet-core` and 127 in `duet-codec` and hoping they
+        // stay consistent is how the guests' off-by-one happened in the first
+        // place.
+        //
+        // A `Value` costs two JSON containers per level of its own nesting; the
+        // deepest envelope carrying one is a notification push, at three more.
+        // So the bound is tested where it binds, and the assertion is
+        // decodability rather than length.
+        for (depth, must_survive) in [
+            (duet_core::MAX_VALUE_DEPTH, true),
+            (duet_core::MAX_VALUE_DEPTH + 1, false),
+        ] {
+            let push = Push::Notification(duet_core::Notification {
+                subscriber: SubscriberId(1),
+                subscription: duet_core::SubscriptionId(1),
+                patch: duet_core::Patch {
+                    path: Path::parse("a").expect("path"),
+                    value: chain(depth),
+                },
+            });
+            let text = serde_json::to_string(&crate::encode_push(&push)).expect("serializes");
+            let within = !duet_codec::exceeds_max_json_depth(&text);
+            assert_eq!(
+                within,
+                must_survive,
+                "a value of depth {depth} in a notification push: expected \
+                 within-limit={must_survive}, and the limit is \
+                 {} containers",
+                duet_codec::MAX_JSON_DEPTH
+            );
+            if must_survive {
+                let json: serde_json::Value =
+                    serde_json::from_str(&text).expect("must re-parse at the bound");
+                crate::decode_push(&json).expect("must re-decode at the bound");
+            }
+        }
+    }
+
+    #[test]
+    fn a_value_too_deep_to_encode_cannot_be_written_at_all() {
+        // Option (a): the store refuses it, so no `get` can ever be asked to
+        // encode one. This is the guarantee that makes the reply unbreakable
+        // rather than merely diagnosable.
+        let rt = rt();
+        let handle = rt.handle();
+        let path = Path::parse("editor").expect("path");
+
+        // `editor` is one segment down, so one container already encloses the
+        // node being written and the value itself may be one shallower than the
+        // bound. Writing the bound's worth of value HERE is already one too
+        // deep — the same accounting `Store::set` does.
+        assert!(
+            handle
+                .set(&path, chain(duet_core::MAX_VALUE_DEPTH - 1))
+                .is_ok(),
+            "a value at exactly the bound must still be writable"
+        );
+        let refused = handle
+            .set(&path, chain(duet_core::MAX_VALUE_DEPTH))
+            .expect_err("one past the bound must be refused");
+        assert!(
+            refused.to_string().contains("nest"),
+            "the refusal must say why, got {refused}"
+        );
+        rt.shutdown().expect("shutdown should succeed");
+    }
+
+    #[test]
+    fn a_store_seeded_over_deep_still_answers_with_decodable_text() {
+        // Option (b): the backstop for the one door option (a) leaves open —
+        // `Store::new`'s seed, which is infallible and so cannot refuse
+        // anything. Before this guard, the host wrote a 200-deep value and
+        // `get` returned 3,251 bytes that `serde_json` could NOT re-parse; a
+        // guest met that as a parse failure or as silence.
+        //
+        // The assertion is decodability, not length: a reply that happens to be
+        // short proves nothing, and a reply that is well-formed JSON but not a
+        // `Response` is just as unusable to a guest.
+        let rt = Runtime::spawn(Value::map([("editor", chain(200))]), NullSink);
+        let reply = handle_text(
+            &rt.handle(),
+            SubscriberId(1),
+            r#"{"kind":"get","id":"7","path":"editor"}"#,
+        );
+
+        let json: serde_json::Value = serde_json::from_str(&reply)
+            .unwrap_or_else(|e| panic!("the reply must be well-formed JSON: {e}\n{reply}"));
+        let decoded = crate::decode_response(&json)
+            .unwrap_or_else(|e| panic!("the reply must be decodable by a guest: {e}\n{reply}"));
+
+        match decoded {
+            Response::Failed { id, message } => {
+                assert_eq!(
+                    id,
+                    RequestId(7),
+                    "the failure must name the request it answers, or the guest \
+                     cannot fail that one call"
+                );
+                assert!(
+                    message.contains(&duet_codec::MAX_JSON_DEPTH.to_string()),
+                    "the failure must name the limit it hit, got {message}"
+                );
+            }
+            other => panic!("expected a failed response, got {other:?}"),
+        }
+        rt.shutdown().expect("shutdown should succeed");
+    }
+
+    #[test]
+    fn an_over_deep_push_becomes_null_rather_than_unparseable_text() {
+        // A push carries no id, so there is no `failed` to send instead — but
+        // emitting text past the wire's limit would surface in a guest as a
+        // parse error on an unrelated code path. `null` is what every guest's
+        // push handler already drops.
+        let note = duet_core::Notification {
+            subscriber: SubscriberId(1),
+            subscription: duet_core::SubscriptionId(1),
+            patch: duet_core::Patch {
+                path: Path::parse("a").expect("path"),
+                value: chain(200),
+            },
+        };
+        assert_eq!(push_text(&Push::Notification(note)), "null");
+
+        // And a push within the bound is untouched.
+        let ok = duet_core::Notification {
+            subscriber: SubscriberId(1),
+            subscription: duet_core::SubscriptionId(1),
+            patch: duet_core::Patch {
+                path: Path::parse("a").expect("path"),
+                value: chain(duet_core::MAX_VALUE_DEPTH),
+            },
+        };
+        let text = push_text(&Push::Notification(ok));
+        let json: serde_json::Value = serde_json::from_str(&text).expect("well-formed JSON");
+        crate::decode_push(&json).expect("a push at the bound must be decodable");
+    }
+
     /// A guest that speaks the webview IPC channel may be running untrusted
     /// web content — `request.body()` on the `wry` side is attacker-controlled
     /// text, not a value this host constructed. `handle_text` sits
@@ -282,26 +585,25 @@ mod tests {
         };
 
         // 200,000 unclosed `[` would overflow the stack of a naive recursive
-        // descent parser well before reaching the end of input. serde_json's
-        // own recursion-limit guard must reject this instead.
+        // descent parser — or of a naive recursive depth *check* — well before
+        // reaching the end of input. `decode`'s iterative pre-scan must reject
+        // it instead.
         assert_failed(&"[".repeat(200_000), "200,000-deep nested array");
 
         // WARNING to future maintainers: this case looks like it stresses
         // `duet_codec`'s recursive tagged-value decoder specifically, by
         // nesting a `Value` 5,000 deep inside a real `set` request rather
         // than nesting raw JSON structure. It does not. `decode` (above)
-        // calls `serde_json::from_str` before any of this text ever reaches
-        // `duet_protocol::decode_request` — and therefore `duet_codec`'s
-        // decoder — and serde_json's own recursion limit (~128 levels)
-        // rejects input this deep on its own. So this hits exactly the same
-        // guard as the 200,000-bracket case above, just via a longer
-        // string: `duet_codec`'s recursive decoder is structurally
-        // unreachable from guest *text*, because the JSON parser in front
-        // of it is the depth guard. If a future change ever swaps in a
-        // parser without its own recursion limit, that guard disappears and
-        // `duet_codec::decode_value`'s recursion becomes reachable — and
-        // this case would then need a real assertion on the codec's own
-        // behavior, not just on this text-level guard.
+        // runs `duet_codec::exceeds_max_json_depth` over the raw text before
+        // any of it reaches `duet_protocol::decode_request` — and therefore
+        // `duet_codec`'s decoder — so this hits exactly the same guard as the
+        // 200,000-bracket case above, just via a longer string.
+        // `duet_codec::decode_value`'s recursion is structurally unreachable
+        // from guest *text* at more than `MAX_JSON_DEPTH / 2` levels, because
+        // the pre-scan in front of it is the depth guard. If that pre-scan
+        // were ever removed, that recursion becomes reachable — and this case
+        // would then need a real assertion on the codec's own behavior, not
+        // just on this text-level guard.
         let mut nested_value = "null".to_string();
         for _ in 0..5_000 {
             nested_value = format!(r#"{{"t":"m","v":{{"a":{nested_value}}}}}"#);

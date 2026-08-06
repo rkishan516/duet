@@ -57,7 +57,9 @@ interface AcceptCase {
   readonly witness: { readonly k: string; readonly bits?: string };
 }
 
-const corpus = JSON.parse(readFileSync(CORPUS_URL, 'utf8')) as { accept: AcceptCase[] };
+const corpus = JSON.parse(readFileSync(CORPUS_URL, 'utf8')) as {
+  accept: AcceptCase[];
+};
 
 /** The bootstrap's guest API, as far as this file drives it. */
 interface BootstrapDuet {
@@ -66,7 +68,7 @@ interface BootstrapDuet {
   toFloat(value: { v: unknown }): number;
   map(entries: Record<string, unknown>): { t: 'm'; v: Record<string, unknown> };
   compareKeys(a: string, b: string): number;
-  onResponse(response: { id: string }): void;
+  onResponse(response: { id: string; kind?: string; message?: string }): void;
   onPush(push: unknown): void;
   pushes: unknown[];
 }
@@ -90,7 +92,9 @@ function bootBootstrap(): { duet: BootstrapDuet; posted: string[] } {
   const posted: string[] = [];
   const element = { textContent: '' };
   const sandbox = {
-    window: { ipc: { postMessage: (message: string) => posted.push(message) } } as {
+    window: {
+      ipc: { postMessage: (message: string) => posted.push(message) },
+    } as {
       ipc: { postMessage(message: string): void };
       __duet?: BootstrapDuet;
     },
@@ -117,7 +121,15 @@ function payloadOf(wire: string): unknown {
 describe('the bootstrap loads and installs its hooks', () => {
   test('the script still runs and defines the guest API', () => {
     const { duet } = bootBootstrap();
-    for (const member of ['get', 'float', 'toFloat', 'map', 'compareKeys', 'onResponse', 'onPush']) {
+    for (const member of [
+      'get',
+      'float',
+      'toFloat',
+      'map',
+      'compareKeys',
+      'onResponse',
+      'onPush',
+    ]) {
       assert.equal(
         typeof (duet as unknown as Record<string, unknown>)[member],
         'function',
@@ -128,7 +140,9 @@ describe('the bootstrap loads and installs its hooks', () => {
 });
 
 describe('float sentinels agree with this package, case by case', () => {
-  const floatCases = corpus.accept.filter((c) => c.layer === 'value' && c.name.startsWith('value/float/'));
+  const floatCases = corpus.accept.filter(
+    (c) => c.layer === 'value' && c.name.startsWith('value/float/'),
+  );
 
   test('the corpus has float cases to check', () => {
     // Guards the failure where a filter silently matches nothing and this whole
@@ -230,7 +244,14 @@ describe('the documented divergences, pinned so they stay documented', () => {
       'the bootstrap still has the integer-like-key limitation',
     );
     assert.equal(
-      encodeValueText(duetMap(new Map([['!', duetNull()], ['0', duetNull()]]))),
+      encodeValueText(
+        duetMap(
+          new Map([
+            ['!', duetNull()],
+            ['0', duetNull()],
+          ]),
+        ),
+      ),
       '{"t":"m","v":{"!":{"t":"n"},"0":{"t":"n"}}}',
       'this package does not, because it writes the JSON text itself',
     );
@@ -253,11 +274,20 @@ describe('the documented divergences, pinned so they stay documented', () => {
     const request = decodeRequestText(posted[0] as string);
     assert.equal(request.kind, 'get');
     assert.equal(request.id, 1n);
-    assert.equal(formatDuetPath((request as { path: import('../src/index.ts').DuetPath }).path), 'editor.zoom');
+    assert.equal(
+      formatDuetPath((request as { path: import('../src/index.ts').DuetPath }).path),
+      'editor.zoom',
+    );
   });
 });
 
 describe('ids and the response hook', () => {
+  // `timeout` is the assertion, not decoration: `node --test` applies no
+  // per-test deadline of its own, so a client that never settles this promise
+  // would WEDGE the whole run rather than fail one test. Measured — the
+  // pre-fix bootstrap hung the suite until it was killed by hand.
+  const HANG_TIMEOUT_MS = 5_000;
+
   test('ids are canonical decimal strings, so the host can echo them back', () => {
     // A guest that sent "007" would be answered "7", never match its own
     // pending entry, and hang forever with no error at all.
@@ -283,5 +313,72 @@ describe('ids and the response hook', () => {
     const { duet } = bootBootstrap();
     duet.onPush({ kind: 'notification' });
     assert.equal(duet.pushes.length, 1);
+  });
+
+  test(
+    'a reply the host could not correlate settles the call instead of hanging',
+    { timeout: HANG_TIMEOUT_MS },
+    async () => {
+      // THE regression test, driven against the ACTUAL bootstrap script rather
+      // than against a substring of it.
+      //
+      // `{"kind":"failed","id":"0"}` is the host saying it could not read the id
+      // of the request it is refusing — `RequestId::UNCORRELATED` in
+      // crates/duet-protocol/src/message.rs. A lone UTF-16 surrogate anywhere in
+      // the message produces exactly this. The bootstrap's pending map is keyed by
+      // the id it sent, so "0" matches nothing; before this fix the reply was
+      // dropped there and the promise never settled — a hang with no error and no
+      // timeout, the same failure shape this project has found twice before.
+      const { duet, posted } = bootBootstrap();
+      const pending = duet.get('a');
+      assert.equal(posted.length, 1, 'the request must have gone out');
+
+      duet.onResponse({
+        kind: 'failed',
+        id: '0',
+        message: 'malformed JSON: lone leading surrogate in hex escape',
+      });
+
+      //
+      // `instanceof Error` would be wrong here: the script runs in a `vm` context
+      // with its own realm, so the `Error` it constructs is not this realm's
+      // `Error` and the check fails for a reason that has nothing to do with the
+      // behaviour under test. The message is what matters anyway — the host's
+      // account of what went wrong has to survive, since it is the only
+      // explanation of *why*.
+      await assert.rejects(pending, (error: unknown) => {
+        const message = String((error as { message?: unknown }).message);
+        assert.match(message, /surrogate/);
+        assert.match(message, /could not correlate/);
+        return true;
+      });
+    },
+  );
+
+  test(
+    'every outstanding call is settled, not just the first',
+    { timeout: HANG_TIMEOUT_MS },
+    async () => {
+      // Neither the host nor the guest can say WHICH request the host failed to
+      // read, so rejecting the set that contains it is the only sound superset.
+      // A spurious rejection is visible and retryable; a hang is neither.
+      const { duet } = bootBootstrap();
+      const first = duet.get('a');
+      const second = duet.get('b');
+      duet.onResponse({ kind: 'failed', id: '0', message: 'nope' });
+      await assert.rejects(first);
+      await assert.rejects(second);
+    },
+  );
+
+  test('an unmatched id that is NOT the sentinel leaves pending calls alone', async () => {
+    // A reply to a request this guest never sent — a second guest sharing the
+    // page, or a stale reply after a reload. Dropping that one is correct.
+    const { duet, posted } = bootBootstrap();
+    const pending = duet.get('a');
+    duet.onResponse({ kind: 'failed', id: '9', message: 'someone else' });
+    const id = (JSON.parse(posted[0] as string) as { id: string }).id;
+    duet.onResponse({ id, kind: 'done' });
+    assert.deepStrictEqual(await pending, { id, kind: 'done' });
   });
 });

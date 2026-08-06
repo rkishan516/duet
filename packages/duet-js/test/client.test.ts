@@ -184,6 +184,35 @@ describe('request/response', () => {
     });
   });
 
+  test("an uncorrelated failure carries the host's account of what went wrong", async () => {
+    // `{"kind":"failed","id":"0"}` is the host saying it could not read the id
+    // of the request it is refusing (`RequestId::UNCORRELATED` in
+    // crates/duet-protocol/src/message.rs). A lone UTF-16 surrogate anywhere in
+    // the message produces exactly this.
+    //
+    // The call must settle — it does here, because this transport resolves each
+    // send with that message's own reply — but reporting only the id mismatch
+    // would throw away the `message`, which is the sole explanation of *why*.
+    // A developer left with "the host answered request 0" has a correlation
+    // complaint and no diagnosis.
+    const duet = new DuetClient(
+      new FakeTransport(() =>
+        Promise.resolve(
+          '{"id":"0","kind":"failed","message":"malformed JSON: lone leading surrogate"}',
+        ),
+      ),
+    );
+    await assert.rejects(
+      () => duet.get('a'),
+      (error: unknown) => {
+        assert.ok(error instanceof DuetTransportError);
+        assert.match(error.message, /answered request 0/);
+        assert.match(error.message, /lone leading surrogate/);
+        return true;
+      },
+    );
+  });
+
   test('no host listening resolves with null, not an exception from below', async () => {
     const duet = new DuetClient(FakeTransport.silent());
     await assert.rejects(() => duet.get('a'), (error: unknown) => {

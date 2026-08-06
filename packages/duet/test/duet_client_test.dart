@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:duet/duet.dart';
 import 'package:test/test.dart';
 
@@ -299,6 +301,114 @@ void main() {
         );
       });
     }
+  });
+
+  group('a reply that answers no request this client sent', () {
+    /// The reply the host sends when it could not read the id of the request it
+    /// is refusing: `RequestId::UNCORRELATED` in
+    /// crates/duet-protocol/src/message.rs. A lone UTF-16 surrogate anywhere in
+    /// the message produces exactly this.
+    const String uncorrelated =
+        '{"kind":"failed","id":"0","message":"malformed JSON: lone leading '
+        'surrogate in hex escape at line 1 column 34"}';
+
+    test('settles the call with an error rather than hanging', () async {
+      // THE regression test. A client keying pending requests by the id it
+      // sent finds nothing for "0"; one that dropped the reply there would
+      // leave this future unsettled forever — no error, no timeout, silence.
+      //
+      // `timeout` is the assertion, not a convenience: without it a client that
+      // hangs would wedge the suite instead of failing it.
+      final DuetClient duet =
+          DuetClient(FakeTransport((String _) async => uncorrelated));
+      await expectLater(
+        duet.get('a').timeout(const Duration(seconds: 5)),
+        throwsA(isA<DuetTransportException>()),
+      );
+    });
+
+    test("carries the host's own account of what went wrong", () async {
+      // The `message` is the only explanation of *why* the host refused the
+      // request. Reporting the id mismatch alone would replace a diagnosis with
+      // a correlation complaint — the wrong half of the story, and the half a
+      // developer cannot act on.
+      final DuetClient duet =
+          DuetClient(FakeTransport((String _) async => uncorrelated));
+      await expectLater(
+        duet.get('a').timeout(const Duration(seconds: 5)),
+        throwsA(
+          isA<DuetTransportException>().having(
+            (DuetTransportException e) => e.message,
+            'message',
+            allOf(contains('surrogate'), contains('answered request 0')),
+          ),
+        ),
+      );
+    });
+  });
+
+  group('unpaired UTF-16 surrogates', () {
+    // A lone surrogate is not a character: it has no UTF-8 encoding at all.
+    // `serde_json` refuses it, so a Rust peer can never send or receive one —
+    // but `jsonDecode` accepts the escape and `utf8.encode` then substitutes
+    // U+FFFD for it SILENTLY. Left unchecked, the value that reaches the host
+    // is not the value that left this client, with no error anywhere.
+    const String loneHigh = '\uD800';
+
+    test('cannot be encoded, in a payload or in a map key', () {
+      expect(
+        () => encodeDuetJson(<String, Object?>{'v': loneHigh}),
+        throwsA(
+          isA<DuetCodecException>().having(
+            (DuetCodecException e) => e.reason,
+            'reason',
+            DuetReason.badJson,
+          ),
+        ),
+      );
+      expect(
+        () => encodeDuetJson(<String, Object?>{loneHigh: 'v'}),
+        throwsA(isA<DuetCodecException>()),
+      );
+      // The corruption this prevents, stated so the reason is not lost: Dart's
+      // own encoders turn a lone surrogate into a replacement character with no
+      // complaint at all.
+      expect(utf8.encode(loneHigh), <int>[0xEF, 0xBF, 0xBD]);
+    });
+
+    test('cannot be decoded either, matching the Rust peer', () {
+      // `jsonDecode` accepts `"\ud800"` happily. A guest that accepted it here
+      // would decode messages every Rust peer rejects — the divergence the
+      // corpus cases `value/str/lone_high_surrogate` and friends pin.
+      for (final String wire in <String>[
+        r'{"t":"s","v":"\ud800"}',
+        r'{"t":"s","v":"\udc00"}',
+        r'{"t":"m","v":{"\ud800":{"t":"n"}}}',
+      ]) {
+        expect(
+          () => DuetValue.fromWireText(wire),
+          throwsA(
+            isA<DuetCodecException>().having(
+              (DuetCodecException e) => e.reason,
+              'reason',
+              DuetReason.badJson,
+            ),
+          ),
+          reason: '$wire must be refused',
+        );
+      }
+    });
+
+    test('a well-formed pair is untouched', () {
+      // The check must not refuse legitimate non-BMP text. U+1F600 is the
+      // surrogate pair D83D DE00 — exactly the shape the scan has to accept.
+      expect(
+        DuetValue.fromWireText('{"t":"s","v":"\u{1F600}"}'),
+        const DuetStr('\u{1F600}'),
+      );
+      expect(hasUnpairedSurrogate('\u{1F600}'), isFalse);
+      expect(hasUnpairedSurrogate(loneHigh), isTrue);
+    });
   });
 
   group('pushes', () {

@@ -12,3 +12,21 @@ duet-core = { path = "../duet-core" }
 duet-codec = { path = "../duet-codec" }
 duet-runtime = { path = "../duet-runtime" }
 serde_json = { version = "1", features = ["float_roundtrip"] }
+
+# Test-only, and only for reading `corpus/wire-corpus.json` back.
+#
+# The corpus is a *container of fixtures*: one of them,
+# `value/nesting/at_limit`, sits at the wire's exact nesting ceiling by
+# construction, and its `witness` is the same depth again three containers below
+# the document root — so the FILE is deeper than any message it describes may be.
+# Dart's `jsonDecode` and V8's `JSON.parse` read it unaided (neither has a depth
+# limit); `serde_json` needs its limit lifted explicitly, which needs this
+# feature and `serde`'s `Deserialize` trait in scope. See `read_corpus` in
+# tests/wire_corpus.rs.
+#
+# This changes nothing about how the host parses guest text: the limit is
+# opt-out per `Deserializer`, the default is untouched, and
+# `duet-codec/tests/round_trip.rs` measures that default every run.
+[dev-dependencies]
+serde = "1"
+serde_json = { version = "1", features = ["float_roundtrip", "unbounded_depth"] }

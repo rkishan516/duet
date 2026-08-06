@@ -33,19 +33,30 @@ export type CanonicalJson =
  * Parses one Duet wire message, refusing anything the Rust peer's JSON parser
  * would refuse.
  *
- * Two failure modes, both reported as {@link DuetReason.badJson} so the three
+ * Three failure modes, all reported as {@link DuetReason.badJson} so the three
  * implementations agree on the reason as well as the verdict:
  *
  * - the text is not JSON, which `JSON.parse` reports as a `SyntaxError`;
  * - the text nests containers deeper than {@link MAX_JSON_DEPTH}, which
- *   `JSON.parse` accepts and `serde_json` does not.
+ *   `JSON.parse` accepts and `serde_json` does not;
+ * - a string or object key holds an unpaired UTF-16 surrogate, which
+ *   `JSON.parse` also accepts and `serde_json` also does not.
  *
- * The depth check is the reason this function exists rather than a bare
- * `JSON.parse` call. It must run *before* any of this package's decoders touch
- * the tree, because those decoders recurse: an unbounded tree would overflow
- * the stack on the way down. V8's `JSON.parse` accepted a 100 000-deep
- * document in this project's own measurement, which is exactly why it cannot
- * be relied on to raise the alarm.
+ * Those last two are why this function exists rather than a bare `JSON.parse`
+ * call, and both are places where V8 is *wider* than the wire.
+ *
+ * The depth check must run *before* any of this package's decoders touch the
+ * tree, because those decoders recurse: an unbounded tree would overflow the
+ * stack on the way down. V8's `JSON.parse` accepted a 100 000-deep document in
+ * this project's own measurement, which is exactly why it cannot be relied on
+ * to raise the alarm.
+ *
+ * The surrogate check is there because an unpaired surrogate is not text — it
+ * has no UTF-8 encoding at all. `JSON.parse('"\\ud800"')` yields a string
+ * holding one, and encoding that to UTF-8 (`TextEncoder`, `Buffer.from`,
+ * `fetch`) substitutes U+FFFD for it **silently**, so the value that reaches
+ * the host is not the value that left the guest. `serde_json` refuses the same
+ * input outright.
  *
  * Throws {@link DuetCodecError} and nothing else, whatever `text` contains.
  *
@@ -63,8 +74,39 @@ export function decodeDuetJson(text: string): unknown {
     // handing its caller a failure mode outside this package's error type.
     throw new DuetCodecError(DuetReason.badJson, `malformed JSON: ${describeCause(cause)}`);
   }
-  requireBoundedDepth(parsed);
+  requireWireSafe(parsed);
   return parsed;
+}
+
+/**
+ * True if `s` holds a UTF-16 surrogate code unit that is not part of a valid
+ * high-then-low pair.
+ *
+ * JavaScript strings are sequences of UTF-16 code units and nothing enforces
+ * that surrogates come in pairs, so `'\ud800'` is a perfectly constructible
+ * string that denotes no character at all.
+ *
+ * Written out rather than delegating to `String.prototype.isWellFormed`
+ * (ES2024): this is the one rule the Dart client mirrors line for line, and a
+ * hand-written scan keeps the two readable side by side and free of an
+ * environment gate. Iterating with `for...of` would be wrong here — it yields
+ * code *points*, and an unpaired surrogate arrives as itself only because there
+ * is nothing to pair it with, which is precisely the case an index-based scan
+ * has to distinguish.
+ */
+export function hasUnpairedSurrogate(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const unit = s.charCodeAt(i);
+    if (unit < 0xd800 || unit > 0xdfff) continue;
+    // A low surrogate here has no high surrogate before it: the previous
+    // iteration would have consumed it as the second half of a pair.
+    if (unit >= 0xdc00) return true;
+    i++;
+    if (i >= s.length) return true;
+    const low = s.charCodeAt(i);
+    if (low < 0xdc00 || low > 0xdfff) return true;
+  }
+  return false;
 }
 
 /**
@@ -105,8 +147,9 @@ export function decodeDuetJson(text: string): unknown {
  *
  * @param doc the document to write
  * @returns compact JSON text
- * @throws DuetCodecError if the document nests past {@link MAX_JSON_DEPTH}, or
- *   holds a number no JSON text can denote
+ * @throws DuetCodecError if the document nests past {@link MAX_JSON_DEPTH},
+ *   holds a number no JSON text can denote, or holds a string or object key
+ *   with an unpaired UTF-16 surrogate
  */
 export function encodeDuetJson(doc: CanonicalJson): string {
   const out: string[] = [];
@@ -305,7 +348,7 @@ function writeJson(node: CanonicalJson, depth: number, out: string[]): void {
       out.push(node ? 'true' : 'false');
       return;
     case 'string':
-      out.push(JSON.stringify(node));
+      out.push(writeString(node, 'a string'));
       return;
     case 'number':
       out.push(writeNumber(node));
@@ -341,10 +384,24 @@ function writeJson(node: CanonicalJson, depth: number, out: string[]): void {
   out.push('{');
   for (let i = 0; i < fields.length; i++) {
     if (i > 0) out.push(',');
-    out.push(JSON.stringify(fields[i]![0]), ':');
+    out.push(writeString(fields[i]![0], 'an object key'), ':');
     writeJson(fields[i]![1]!, depth + 1, out);
   }
   out.push('}');
+}
+
+/**
+ * Renders a JSON string, refusing one no UTF-8 encoder could carry.
+ *
+ * `JSON.stringify('\ud800')` is `"\ud800"` — syntactically valid JSON that every
+ * Rust peer refuses to parse, and that a UTF-8 encoder turns into U+FFFD without
+ * a word. Refusing here means a caller who built such a string learns about it
+ * at the point of the mistake, rather than finding a replacement character on
+ * the other side of the wire.
+ */
+function writeString(s: string, what: string): string {
+  requireNoUnpairedSurrogate(s, what);
+  return JSON.stringify(s) as string;
 }
 
 /**
@@ -372,20 +429,26 @@ function writeNumber(n: number): string {
 
 /**
  * Walks `root` iteratively, throwing if any container nests past
- * {@link MAX_JSON_DEPTH}.
+ * {@link MAX_JSON_DEPTH} or any string holds an unpaired UTF-16 surrogate.
  *
  * Iterative on purpose: a recursive check would overflow the stack on exactly
  * the input it exists to reject, since `JSON.parse` will have already built the
  * pathological tree without complaint. The explicit stack is bounded by the
  * number of nodes in the parsed document, which the caller has already paid
  * for; it allocates nothing proportional to anything else.
+ *
+ * One walk rather than two, because both rules apply to every node.
  */
-function requireBoundedDepth(root: unknown): void {
+function requireWireSafe(root: unknown): void {
   // Each entry is a node paired with the number of containers enclosing it.
   const pending: { node: unknown; depth: number }[] = [{ node: root, depth: 0 }];
   while (pending.length > 0) {
     const entry = pending.pop() as { node: unknown; depth: number };
     const node = entry.node;
+    if (typeof node === 'string') {
+      requireNoUnpairedSurrogate(node, 'a string');
+      continue;
+    }
     if (node === null || typeof node !== 'object') continue;
     const inner = entry.depth + 1;
     if (inner > MAX_JSON_DEPTH) {
@@ -398,9 +461,31 @@ function requireBoundedDepth(root: unknown): void {
       for (const child of node) pending.push({ node: child, depth: inner });
     } else {
       const obj = node as JsonObject;
-      for (const key of Object.keys(obj)) pending.push({ node: obj[key], depth: inner });
+      for (const key of Object.keys(obj)) {
+        // Keys are text on the wire too, and a `Value::Map` key is chosen by
+        // whoever built the value — checking only the values would leave the
+        // identical hazard open on the other half of every entry.
+        requireNoUnpairedSurrogate(key, 'an object key');
+        pending.push({ node: obj[key], depth: inner });
+      }
     }
   }
+}
+
+/**
+ * Throws {@link DuetCodecError} if `s` holds an unpaired UTF-16 surrogate.
+ *
+ * `what` names the position ("a string", "an object key"). The offending text is
+ * deliberately **not** echoed: it can be arbitrarily long and arrives from a
+ * peer, and it holds a code unit that renders as a replacement character anyway,
+ * so quoting it would cost an unbounded allocation to print nothing useful.
+ */
+function requireNoUnpairedSurrogate(s: string, what: string): void {
+  if (!hasUnpairedSurrogate(s)) return;
+  throw new DuetCodecError(
+    DuetReason.badJson,
+    `${what} holds an unpaired UTF-16 surrogate, which has no UTF-8 encoding`,
+  );
 }
 
 /**

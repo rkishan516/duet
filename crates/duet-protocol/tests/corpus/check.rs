@@ -42,6 +42,15 @@ fn check_accept(case: &Json) {
     let name = text(case, "name");
     let wire = text(case, "wire");
     let layer = layer_of(case);
+    // Every accept case must be within the wire's own nesting bound. Without
+    // this, a case could sit past `MAX_JSON_DEPTH` and still pass here — the
+    // corpus would then be telling Dart and TypeScript to accept a document the
+    // host's `handle_text` refuses at its front door.
+    assert!(
+        !duet_codec::exceeds_max_json_depth(&wire),
+        "{name}: an accept case must not nest past {} containers",
+        duet_codec::MAX_JSON_DEPTH
+    );
     let json = serde_json::from_str(&wire)
         .unwrap_or_else(|e| panic!("{name}: wire must be valid JSON: {e}"));
 
@@ -80,6 +89,19 @@ fn check_reject(case: &Json) {
     let name = text(case, "name");
     let wire = text(case, "wire");
     let reason = text(case, "reason");
+
+    // Duet's own nesting bound, checked before the parser rather than left to
+    // it. A guest runs the same check in the same order, so the corpus has to
+    // assert the host does too — not merely that `serde_json` happens to agree.
+    if duet_codec::exceeds_max_json_depth(&wire) {
+        assert_eq!(
+            reason,
+            BAD_JSON,
+            "{name}: nests past {} containers, so the reason must be {BAD_JSON}",
+            duet_codec::MAX_JSON_DEPTH
+        );
+        return;
+    }
 
     let json: Json = match serde_json::from_str(&wire) {
         Ok(json) => json,

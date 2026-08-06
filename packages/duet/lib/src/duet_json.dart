@@ -9,18 +9,30 @@ import 'duet_error.dart';
 /// Parses one Duet wire message, refusing anything the Rust peer's JSON parser
 /// would refuse.
 ///
-/// Two failure modes, both reported as [DuetReason.badJson] so the three
+/// Three failure modes, all reported as [DuetReason.badJson] so the three
 /// implementations agree on the reason as well as the verdict:
 ///
 /// - the text is not JSON, which `jsonDecode` reports as a `FormatException`;
 /// - the text nests containers deeper than [maxJsonDepth], which `jsonDecode`
-///   accepts and `serde_json` does not.
+///   accepts and `serde_json` does not;
+/// - a string or object key holds an unpaired UTF-16 surrogate, which
+///   `jsonDecode` also accepts and `serde_json` also does not.
 ///
-/// The depth check is the reason this function exists rather than a bare
-/// `jsonDecode` call. It must run *before* any of this package's decoders
-/// touch the tree, because those decoders recurse: an unbounded tree would
-/// overflow the stack on the way down. `jsonDecode` itself is iterative and
-/// will not, which is exactly why it cannot be relied on to raise the alarm.
+/// Those last two are the reason this function exists rather than a bare
+/// `jsonDecode` call, and both are cases where `dart:convert` is *wider* than
+/// the wire.
+///
+/// The depth check must run *before* any of this package's decoders touch the
+/// tree, because those decoders recurse: an unbounded tree would overflow the
+/// stack on the way down. `jsonDecode` itself is iterative and will not, which
+/// is exactly why it cannot be relied on to raise the alarm.
+///
+/// The surrogate check is there because an unpaired surrogate is not text: it
+/// has no UTF-8 encoding at all. `jsonDecode('"\\ud800"')` yields a Dart string
+/// holding one, and `utf8.encode` then replaces it with U+FFFD — **silently**,
+/// with no error, so the value that reaches the host is not the value that left
+/// the guest. `serde_json` refuses the same input outright, so accepting it here
+/// would be a divergence that ends in quiet corruption rather than a failure.
 ///
 /// Throws [DuetCodecException] and nothing else, whatever [text] contains.
 Object? decodeDuetJson(String text) {
@@ -30,11 +42,18 @@ Object? decodeDuetJson(String text) {
   } on FormatException catch (e) {
     throw DuetCodecException.badJson('malformed JSON: ${e.message}');
   }
-  _requireBoundedDepth(parsed);
+  _requireWireSafe(parsed);
   return parsed;
 }
 
 /// Serializes [json] to the compact text the wire carries.
+///
+/// Throws [DuetCodecException] with [DuetReason.badJson] if any string or object
+/// key holds an unpaired UTF-16 surrogate. `jsonEncode` would happily write one
+/// as `\ud800`, which every Rust peer refuses to parse — and `utf8.encode`
+/// would turn it into U+FFFD without a word. Refusing here means a caller who
+/// built such a string learns about it at the point of the mistake instead of
+/// discovering a replacement character on the other side of the wire.
 ///
 /// Key order is *not* imposed here: `jsonEncode` walks a Dart `Map` in
 /// insertion order, so it is [sortedJsonObject] — called by every `toJson` in
@@ -43,7 +62,10 @@ Object? decodeDuetJson(String text) {
 /// with `serde_json`'s (short escapes for `\b \t \n \f \r`, lowercase
 /// `\u00xx` for the other control characters, no escaping of `/` or non-ASCII).
 /// A hand-written encoder would have to re-derive all of that correctly.
-String encodeDuetJson(Object? json) => jsonEncode(json);
+String encodeDuetJson(Object? json) {
+  _requireWireSafe(json, checkDepth: false);
+  return jsonEncode(json);
+}
 
 /// Rebuilds [fields] with its keys in the wire's canonical order.
 ///
@@ -110,19 +132,29 @@ int compareDuetMapKeys(String a, String b) {
 }
 
 /// Walks [root] iteratively, throwing if any container nests past
-/// [maxJsonDepth].
+/// [maxJsonDepth] (when [checkDepth]) or any string holds an unpaired UTF-16
+/// surrogate.
 ///
 /// Iterative on purpose: a recursive check would overflow the stack on exactly
 /// the input it exists to reject, since `jsonDecode` will have already built
 /// the pathological tree without complaint.
-void _requireBoundedDepth(Object? root) {
+///
+/// One walk rather than two, because both rules apply to every node and the
+/// tree may be large. [checkDepth] is `false` on the encode path: the depth of a
+/// document this package *builds* is the caller's own doing rather than
+/// untrusted input, and `jsonEncode` is what would fail on it, loudly.
+void _requireWireSafe(Object? root, {bool checkDepth = true}) {
   // Each entry is a node paired with the number of containers enclosing it.
   final List<(Object?, int)> pending = <(Object?, int)>[(root, 0)];
   while (pending.isNotEmpty) {
     final (Object? node, int depth) = pending.removeLast();
+    if (node is String) {
+      _requireNoUnpairedSurrogate(node, 'a string');
+      continue;
+    }
     if (node is! List<Object?> && node is! Map<String, Object?>) continue;
     final int inner = depth + 1;
-    if (inner > maxJsonDepth) {
+    if (checkDepth && inner > maxJsonDepth) {
       throw DuetCodecException.badJson(
         'JSON nests deeper than $maxJsonDepth containers',
       );
@@ -132,11 +164,58 @@ void _requireBoundedDepth(Object? root) {
         pending.add((child, inner));
       }
     } else if (node is Map<String, Object?>) {
-      for (final Object? child in node.values) {
-        pending.add((child, inner));
+      for (final MapEntry<String, Object?> entry in node.entries) {
+        // Keys are text on the wire too, and a `Value::Map` key is chosen by
+        // whoever built the value — checking only the values would leave the
+        // identical hazard open on the other half of every entry.
+        _requireNoUnpairedSurrogate(entry.key, 'an object key');
+        pending.add((entry.value, inner));
       }
     }
   }
+}
+
+/// Throws [DuetCodecException] if [s] holds an unpaired UTF-16 surrogate.
+///
+/// [what] names the position ("a string", "an object key"). The offending text
+/// is deliberately **not** echoed: it can be arbitrarily long and arrives from a
+/// peer, and it holds a code unit that renders as a replacement character
+/// anyway, so quoting it would cost an unbounded allocation to print nothing
+/// useful.
+void _requireNoUnpairedSurrogate(String s, String what) {
+  if (!hasUnpairedSurrogate(s)) return;
+  throw DuetCodecException.badJson(
+    '$what holds an unpaired UTF-16 surrogate, which has no UTF-8 encoding',
+  );
+}
+
+/// True if [s] contains a UTF-16 surrogate code unit that is not part of a
+/// valid high-then-low pair.
+///
+/// Dart strings are sequences of UTF-16 code units and nothing enforces that
+/// surrogates come in pairs, so `String.fromCharCode(0xD800)` is a perfectly
+/// constructible `String` that denotes no character at all. It has no UTF-8
+/// encoding, `utf8.encode` substitutes U+FFFD for it without raising anything,
+/// and `serde_json` rejects the matching wire text — which makes it exactly the
+/// kind of value that must not be allowed to cross this boundary in either
+/// direction.
+///
+/// Scans code units rather than runes on purpose: `String.runes` *repairs*
+/// unpaired surrogates into U+FFFD as it iterates, so a rune-based check can
+/// never see the thing it is looking for.
+bool hasUnpairedSurrogate(String s) {
+  for (int i = 0; i < s.length; i++) {
+    final int unit = s.codeUnitAt(i);
+    if (unit < 0xD800 || unit > 0xDFFF) continue;
+    // A low surrogate here has no high surrogate before it: the previous
+    // iteration would have consumed it as the second half of a pair.
+    if (unit >= 0xDC00) return true;
+    i++;
+    if (i >= s.length) return true;
+    final int low = s.codeUnitAt(i);
+    if (low < 0xDC00 || low > 0xDFFF) return true;
+  }
+  return false;
 }
 
 /// True if [s] is a canonical, sign-free decimal digit string: at least one

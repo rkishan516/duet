@@ -36,14 +36,24 @@ const String _corpusPath = '../../corpus/wire-corpus.json';
 /// The schema version this file knows how to read.
 const int _schemaVersion = 1;
 
+/// How deep `equals` may recurse when comparing a witness.
+///
+/// `package:matcher`'s default is 100, and `value/nesting/at_limit` is deeper
+/// than that on purpose: it is a value at the wire's exact ceiling of
+/// [maxJsonDepth] containers, and its witness nests once per container. Without
+/// this the matcher reports "recursion depth limit exceeded" — a failure of the
+/// *assertion*, not of the decoder, and one that looks alarmingly like a real
+/// divergence. Comfortably above the ceiling, so it can never be what fails.
+const int _matcherRecursionLimit = 4 * maxJsonDepth;
+
 /// The case counts the corpus must contain.
 ///
 /// Pinned as literals on purpose. A corpus test that silently consumes
 /// whatever it is given is worthless: a file truncated to one case would pass
 /// every assertion below and prove nothing. If these numbers need changing,
 /// that is a deliberate review step.
-const int _acceptCaseCount = 50;
-const int _rejectCaseCount = 20;
+const int _acceptCaseCount = 51;
+const int _rejectCaseCount = 26;
 
 void main() {
   final Map<String, Object?> corpus = _loadCorpus();
@@ -132,7 +142,7 @@ void main() {
         // Built from the decoded value, never by re-reading `wire`.
         expect(
           decoded.witness,
-          equals(expectedWitness),
+          equals(expectedWitness, _matcherRecursionLimit),
           reason: '$name decoded to the wrong value',
         );
 
@@ -150,7 +160,8 @@ void main() {
         } else {
           expect(
             _normalizeJson(decodeDuetJson(decoded.reencoded)),
-            equals(_normalizeJson(decodeDuetJson(target))),
+            equals(_normalizeJson(decodeDuetJson(target)),
+                _matcherRecursionLimit),
             reason: '$name re-encoded to a structurally different document',
           );
         }

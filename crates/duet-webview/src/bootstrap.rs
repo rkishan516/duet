@@ -60,6 +60,14 @@
 /// `"-0"`, joining `"NaN"`, `"Infinity"` and `"-Infinity"` — the four `f64`
 /// values with no portable JSON-number spelling.
 ///
+/// **A reply may name no request this guest sent.** The host answers
+/// `{kind:"failed", id:"0"}` when it could not read the id of the message it is
+/// refusing — see `duet_protocol::text`'s `decode`. A pending map keyed by the
+/// id the guest sent finds nothing for `"0"`, and a client that simply dropped
+/// such a reply would leave that promise unsettled forever: a hang with no
+/// error and no timeout. `onResponse` below rejects the outstanding calls
+/// instead, and explains why it rejects all of them rather than one.
+///
 /// **Map keys travel in code-point order.** JavaScript's default
 /// `Array.prototype.sort` compares UTF-16 **code units**, which disagrees with
 /// code-point order above the BMP: `U+1F600` encodes as the surrogate pair
@@ -82,14 +90,20 @@ pub const BOOTSTRAP_HTML: &str = r#"<!doctype html>
     window.ipc.postMessage(JSON.stringify(msg));
   }
 
+  // The id the host answers with when it could NOT read the id of the request
+  // it is refusing — malformed JSON, a non-canonical id, nesting past the
+  // wire's limit (crates/duet-protocol/src/text.rs). It is not a real
+  // correlation id and this guest never sends it: `nextId` starts at 1.
+  const UNCORRELATED_ID = "0";
+
   function call(kind, extra) {
     // A CANONICAL decimal string: no leading "+", no leading zeros. The host
     // echoes the canonical form back, so an id spelled "007" would be answered
     // "7", never match this map, and hang forever with no error. String(n) on
     // a non-negative integer is always canonical; do not hand-write ids.
     const id = String(nextId++);
-    return new Promise((resolve) => {
-      pending.set(id, resolve);
+    return new Promise((resolve, reject) => {
+      pending.set(id, { resolve: resolve, reject: reject });
       send(Object.assign({ kind, id }, extra));
     });
   }
@@ -187,14 +201,49 @@ pub const BOOTSTRAP_HTML: &str = r#"<!doctype html>
     log: [],
 
     onResponse(response) {
-      const resolve = pending.get(response.id);
-      if (resolve) {
-        pending.delete(response.id);
-        resolve(response);
-      }
       window.__duet.log.push(response);
       document.getElementById("log").textContent =
         JSON.stringify(window.__duet.log, null, 1);
+
+      const id = response && response.id;
+      const waiting = pending.get(id);
+      if (waiting) {
+        pending.delete(id);
+        waiting.resolve(response);
+        return;
+      }
+
+      // A reply matching nothing pending. DO NOT drop it silently: a promise
+      // this map never settles is a hang with no error and no timeout, and
+      // that failure shape has already been found twice in this project.
+      //
+      // `{kind:"failed", id:"0"}` is the host saying "I could not even read the
+      // id of the request I am refusing" — a lone UTF-16 surrogate anywhere in
+      // the message produces exactly this. The host is right not to guess an id
+      // it cannot trust, so this side has to cope: one of the calls in `pending`
+      // is now dead and will never be answered, and neither the host nor this
+      // guest can say which.
+      //
+      // So reject them all. Failing every in-flight call loudly is strictly
+      // better than hanging one of them silently: a spurious rejection is
+      // visible and retryable, a hang is neither. In this bootstrap `pending`
+      // usually holds exactly one entry anyway — it awaits each call before
+      // making the next.
+      //
+      // Any OTHER unmatched id is a reply to a request this guest never sent —
+      // a second guest sharing the page, or a stale reply after a reload — and
+      // dropping that one is correct. It is still in `__duet.log` above.
+      if (response && response.kind === "failed" && id === UNCORRELATED_ID) {
+        const orphaned = Array.from(pending.values());
+        pending.clear();
+        const reason = new Error(
+          "the host refused a request it could not correlate: " +
+            String(response.message)
+        );
+        for (let i = 0; i < orphaned.length; i++) {
+          orphaned[i].reject(reason);
+        }
+      }
     },
 
     onPush(push) {
@@ -333,6 +382,39 @@ mod tests {
              \"\u{FFFD}\":{\"t\":\"n\"},\
              \"\u{1F600}\":{\"t\":\"n\"}}}",
             "the order __duet.map must reproduce: E000, FFFD, 1F600"
+        );
+    }
+
+    #[test]
+    fn the_bootstrap_settles_a_reply_that_matches_no_pending_request() {
+        // `handle_text` answers `id:"0"` when it could not read the id of the
+        // request it is refusing — a lone UTF-16 surrogate does it. A guest
+        // keying its pending map by the id it sent finds nothing for "0", and a
+        // client that dropped the reply would leave that promise unsettled
+        // forever: no error, no timeout, just silence. Twice now this project
+        // has found that exact failure shape.
+        //
+        // These are substring assertions because a Rust test cannot execute
+        // JavaScript. `packages/duet-js/test/bootstrap-parity.test.ts` drives
+        // the real scenario against this script in a `node:vm` sandbox; these
+        // keep an accidental revert visible on this side too.
+        assert!(
+            BOOTSTRAP_HTML.contains("reject"),
+            "the bootstrap must be able to reject a pending call, not only resolve it"
+        );
+        assert!(
+            BOOTSTRAP_HTML.contains("UNCORRELATED_ID"),
+            "the bootstrap must name the id the host uses for a request it \
+             could not correlate"
+        );
+        // Pinned against the host's own constant, so the two sides cannot drift
+        // apart silently: a change to what `handle_text` emits fails here.
+        assert!(
+            BOOTSTRAP_HTML.contains(&format!(
+                "UNCORRELATED_ID = \"{}\"",
+                duet_protocol::RequestId::UNCORRELATED.0
+            )),
+            "the bootstrap's sentinel must be the id the host actually sends"
         );
     }
 

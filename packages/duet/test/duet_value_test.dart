@@ -129,25 +129,65 @@ void main() {
   });
 
   group('nesting', () {
-    test('decoding refuses nesting past maxJsonDepth, as serde_json does', () {
+    /// Wire text for a well-formed tagged value nesting exactly [containers]
+    /// JSON containers. A tagged value costs two per level of its own nesting
+    /// (the object and its array), so an odd count ends in `{"t":"n"}` and an
+    /// even one in an empty list.
+    String nestExactly(int containers) {
+      final int wrappers = (containers - 1) ~/ 2;
+      final String leaf =
+          containers.isEven ? '{"t":"l","v":[]}' : '{"t":"n"}';
+      return '${'{"t":"l","v":[' * wrappers}$leaf${']}' * wrappers}';
+    }
+
+    test('the limit bites at exactly one container past maxJsonDepth', () {
+      // THE regression test. This package shipped `maxJsonDepth = 128` against
+      // a host that stops at 127, so a document with exactly 128 containers
+      // was accepted here and refused by every Rust peer — and nothing caught
+      // it, because the only nesting case in this suite used 200 levels, which
+      // fails in every implementation whatever its off-by-one. A limit is only
+      // tested by a case on each side of it.
+      //
+      // The same boundary is pinned in the golden corpus
+      // (`value/nesting/at_limit` and `value/nesting/over_limit`) and in
+      // crates/duet-codec/src/depth.rs, so all three implementations are held
+      // to one number.
+      expect(
+        DuetValue.fromWireText(nestExactly(maxJsonDepth)),
+        isA<DuetList>(),
+        reason: 'exactly $maxJsonDepth containers must decode',
+      );
+      expect(
+        () => DuetValue.fromWireText(nestExactly(maxJsonDepth + 1)),
+        throwsA(
+          isA<DuetCodecException>().having(
+            (DuetCodecException e) => e.reason,
+            'reason',
+            DuetReason.badJson,
+          ),
+        ),
+        reason: 'exactly ${maxJsonDepth + 1} containers must be refused',
+      );
+    });
+
+    test('maxJsonDepth is the host\'s limit, stated once', () {
+      // Mirrors `duet_codec::MAX_JSON_DEPTH`. Pinned as a literal so reading
+      // this number never requires running Rust to find out what it is.
+      expect(maxJsonDepth, 127);
+    });
+
+    test('decoding refuses nesting far past maxJsonDepth', () {
       // dart:convert has no recursion limit at all — `jsonDecode` builds a
       // 100 000-deep tree without complaint, iteratively, so it never even
-      // overflows the stack to warn anyone. Rust's serde_json refuses past its
-      // own limit, which is why the corpus case
-      // `value/nesting/exceeds_parser_recursion_limit` has reason "bad_json".
-      // Without this guard a Dart guest would accept messages every Rust peer
-      // rejects, and would then hand the tree to a recursive decoder.
+      // overflows the stack to warn anyone. Without this package's own guard a
+      // Dart guest would accept messages every Rust peer rejects, and would
+      // then hand the tree to a recursive decoder. Mirrors the corpus case
+      // `value/nesting/far_over_limit`.
       String nest(int depth) =>
           '${'{"t":"l","v":[' * depth}{"t":"n"}${']}' * depth}';
 
-      // Two JSON containers per level of value nesting, so the limit bites at
-      // half of maxJsonDepth.
       expect(
-        DuetValue.fromWireText(nest(maxJsonDepth ~/ 2 - 1)),
-        isA<DuetList>(),
-      );
-      expect(
-        () => DuetValue.fromWireText(nest(maxJsonDepth)),
+        () => DuetValue.fromWireText(nest(200)),
         throwsA(
           isA<DuetCodecException>().having(
             (DuetCodecException e) => e.reason,

@@ -140,12 +140,45 @@ describe('rejections', () => {
 });
 
 describe('nesting', () => {
-  test('decoding refuses nesting past MAX_JSON_DEPTH, as serde_json does', () => {
+  /**
+   * Wire text for a well-formed tagged value nesting exactly `containers` JSON
+   * containers. A tagged value costs two per level of its own nesting (the
+   * object and its array), so an odd count ends in `{"t":"n"}` and an even one
+   * in an empty list.
+   */
+  const nestExactly = (containers: number): string => {
+    const wrappers = Math.floor((containers - 1) / 2);
+    const leaf = containers % 2 === 0 ? '{"t":"l","v":[]}' : '{"t":"n"}';
+    return '{"t":"l","v":['.repeat(wrappers) + leaf + ']}'.repeat(wrappers);
+  };
+
+  test('the limit bites at exactly one container past MAX_JSON_DEPTH', () => {
+    // THE regression test. This package shipped `MAX_JSON_DEPTH = 128` against
+    // a host that stops at 127, so a document with exactly 128 containers was
+    // accepted here and refused by every Rust peer — and nothing caught it,
+    // because the only nesting case in this suite used 200 levels, which fails
+    // in every implementation whatever its off-by-one. A limit is only tested
+    // by a case on each side of it.
+    //
+    // The same boundary is pinned in the golden corpus
+    // (`value/nesting/at_limit` and `value/nesting/over_limit`) and in
+    // crates/duet-codec/src/depth.rs, so all three implementations are held to
+    // one number.
+    assert.doesNotThrow(
+      () => decodeValueText(nestExactly(MAX_JSON_DEPTH)),
+      `exactly ${MAX_JSON_DEPTH} containers must decode`,
+    );
+    refuses(
+      () => decodeValueText(nestExactly(MAX_JSON_DEPTH + 1)),
+      DuetReason.badJson,
+      `exactly ${MAX_JSON_DEPTH + 1} containers`,
+    );
+  });
+
+  test('decoding refuses nesting far past MAX_JSON_DEPTH', () => {
     const nest = (depth: number): string =>
       '{"t":"l","v":['.repeat(depth) + '{"t":"n"}' + ']}'.repeat(depth);
-    // Each level costs two containers (the object and its array), so the
-    // shallowest refused nesting is a little over half MAX_JSON_DEPTH levels.
-    assert.doesNotThrow(() => decodeValueText(nest(60)));
+    // Mirrors the corpus case `value/nesting/far_over_limit`.
     refuses(() => decodeValueText(nest(200)), DuetReason.badJson, 'a 200-level value');
   });
 
@@ -159,8 +192,10 @@ describe('nesting', () => {
     refuses(() => decodeValueText(deep), DuetReason.badJson, 'a 50 000-deep document');
   });
 
-  test('MAX_JSON_DEPTH is the serde_json limit, stated once', () => {
-    assert.equal(MAX_JSON_DEPTH, 128);
+  test("MAX_JSON_DEPTH is the host's limit, stated once", () => {
+    // Mirrors `duet_codec::MAX_JSON_DEPTH`. Pinned as a literal so reading this
+    // number never requires running Rust to find out what it is.
+    assert.equal(MAX_JSON_DEPTH, 127);
   });
 });
 
