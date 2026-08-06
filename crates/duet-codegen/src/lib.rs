@@ -7,11 +7,11 @@
 //! # The schema file is the contract, not this crate
 //!
 //! The document in the middle is the artifact two independent producers have to
-//! satisfy — a human writing `schema/app.json` by hand today, and
-//! `#[derive(SharedState)]` in increment 6. If the derive had come first, the
-//! format would have been whatever the macro happened to emit, the emitters
-//! would have been tested against that, and nothing would independently check
-//! either side.
+//! satisfy — a human who wrote `schema/app.json` by hand, and
+//! `#[derive(SharedState)]`, which reproduces it byte for byte. The emitters
+//! came first on purpose: had the derive, the format would have been whatever
+//! the macro happened to emit, the emitters would have been tested against
+//! that, and nothing would independently check either side.
 //!
 //! The independence is built rather than promised:
 //!

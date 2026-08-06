@@ -25,10 +25,10 @@
 //! Vec<u8>;` resolves to `Vec<u8>` before the bound is ever tested.
 //!
 //! `trybuild` compile-fail cases — which additionally pin the *diagnostic text*
-//! each rejection produces — belong to increment 6, alongside the derive that
-//! most users will meet them through. **No `trybuild` dev-dependency is added
-//! here**; this file needs none, and the crate's dependency list stays as short
-//! as the manifest says.
+//! each rejection produces — live in `crates/duet-derive/tests/ui/`, alongside
+//! the derive that most users will meet them through. **No `trybuild`
+//! dev-dependency is added here**; this file needs none, and the crate's
+//! dependency list stays as short as the manifest says.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};

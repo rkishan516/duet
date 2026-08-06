@@ -38,9 +38,10 @@ pub struct Fixture {
 
 /// Every schema the goldens are generated from.
 ///
-/// `app` is the canonical example increment 6's derive must reproduce
-/// byte-for-byte. `wide` exists to reach every arm of the schema's type
-/// language; `tests/coverage.rs` asserts mechanically that between them they do.
+/// `app` is the canonical example `#[derive(SharedState)]` reproduces
+/// byte-for-byte, in `crates/duet-derive/tests/schema_proof.rs`. `wide` exists
+/// to reach every arm of the schema's type language; `tests/coverage.rs` asserts
+/// mechanically that between them they do.
 pub const FIXTURES: &[Fixture] = &[
     Fixture {
         stem: "app",

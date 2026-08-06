@@ -35,8 +35,9 @@ use duet_schema::{FieldDef, Schema, Ty, TypeDef};
 #[test]
 fn every_committed_schema_is_already_in_canonical_form() {
     // The fixtures are hand-written. This is what says a *human* can write the
-    // exact bytes the machine produces — which is the whole claim increment 6's
-    // derive has to make, one increment early and against a different producer.
+    // exact bytes the machine produces, which is the same claim
+    // `crates/duet-derive/tests/schema_proof.rs` makes from the other side —
+    // measured here against a different producer.
     for fixture in support::FIXTURES {
         let committed = support::read(fixture.schema);
         let parsed = support::schema(fixture.schema);
