@@ -1,0 +1,682 @@
+{
+  "generator": "cargo test -p duet-codegen --test schema_corpus -- --ignored regenerate_corpus",
+  "schemas": [
+    {
+      "name": "app",
+      "paths": [
+        {
+          "accept": "{\"t\":\"m\",\"v\":{\"counter\":{\"t\":\"i\",\"v\":\"7\"},\"editor\":{\"t\":\"m\",\"v\":{\"theme\":{\"t\":\"s\",\"v\":\"sample\"},\"zoom\":{\"t\":\"f\",\"v\":3.25}}},\"title\":{\"t\":\"s\",\"v\":\"sample\"}}}",
+          "optional": false,
+          "path": "",
+          "rejects": [
+            "{\"t\":\"i\",\"v\":\"1\"}",
+            "{\"t\":\"m\",\"v\":{}}",
+            "{\"t\":\"n\"}"
+          ],
+          "seed": "{\"t\":\"m\",\"v\":{\"counter\":{\"t\":\"i\",\"v\":\"0\"},\"editor\":{\"t\":\"m\",\"v\":{\"theme\":{\"t\":\"s\",\"v\":\"\"},\"zoom\":{\"t\":\"f\",\"v\":0.0}}},\"title\":{\"t\":\"s\",\"v\":\"\"}}}",
+          "ty": "App"
+        },
+        {
+          "accept": "{\"t\":\"i\",\"v\":\"7\"}",
+          "optional": false,
+          "path": "counter",
+          "rejects": [
+            "{\"t\":\"f\",\"v\":1.0}",
+            "{\"t\":\"s\",\"v\":\"1\"}",
+            "{\"t\":\"n\"}"
+          ],
+          "seed": "{\"t\":\"i\",\"v\":\"0\"}",
+          "ty": "int"
+        },
+        {
+          "accept": "{\"t\":\"m\",\"v\":{\"theme\":{\"t\":\"s\",\"v\":\"sample\"},\"zoom\":{\"t\":\"f\",\"v\":3.25}}}",
+          "optional": false,
+          "path": "editor",
+          "rejects": [
+            "{\"t\":\"i\",\"v\":\"1\"}",
+            "{\"t\":\"m\",\"v\":{}}",
+            "{\"t\":\"n\"}"
+          ],
+          "seed": "{\"t\":\"m\",\"v\":{\"theme\":{\"t\":\"s\",\"v\":\"\"},\"zoom\":{\"t\":\"f\",\"v\":0.0}}}",
+          "ty": "Editor"
+        },
+        {
+          "accept": "{\"t\":\"s\",\"v\":\"sample\"}",
+          "optional": false,
+          "path": "editor.theme",
+          "rejects": [
+            "{\"t\":\"i\",\"v\":\"1\"}",
+            "{\"t\":\"n\"}"
+          ],
+          "seed": "{\"t\":\"s\",\"v\":\"\"}",
+          "ty": "string"
+        },
+        {
+          "accept": "{\"t\":\"f\",\"v\":3.25}",
+          "optional": false,
+          "path": "editor.zoom",
+          "rejects": [
+            "{\"t\":\"i\",\"v\":\"1\"}",
+            "{\"t\":\"n\"}"
+          ],
+          "seed": "{\"t\":\"f\",\"v\":0.0}",
+          "ty": "float"
+        },
+        {
+          "accept": "{\"t\":\"s\",\"v\":\"sample\"}",
+          "optional": false,
+          "path": "title",
+          "rejects": [
+            "{\"t\":\"i\",\"v\":\"1\"}",
+            "{\"t\":\"n\"}"
+          ],
+          "seed": "{\"t\":\"s\",\"v\":\"\"}",
+          "ty": "string"
+        }
+      ],
+      "root": "App",
+      "seed": "{\"t\":\"m\",\"v\":{\"counter\":{\"t\":\"i\",\"v\":\"0\"},\"editor\":{\"t\":\"m\",\"v\":{\"theme\":{\"t\":\"s\",\"v\":\"\"},\"zoom\":{\"t\":\"f\",\"v\":0.0}}},\"title\":{\"t\":\"s\",\"v\":\"\"}}}",
+      "source": "schema/app.json",
+      "types": [
+        {
+          "fields": [
+            {
+              "accept": "{\"t\":\"i\",\"v\":\"7\"}",
+              "key": "counter",
+              "optional": false,
+              "rejects": [
+                "{\"t\":\"f\",\"v\":1.0}",
+                "{\"t\":\"s\",\"v\":\"1\"}",
+                "{\"t\":\"n\"}"
+              ],
+              "ty": "int"
+            },
+            {
+              "accept": "{\"t\":\"m\",\"v\":{\"theme\":{\"t\":\"s\",\"v\":\"sample\"},\"zoom\":{\"t\":\"f\",\"v\":3.25}}}",
+              "key": "editor",
+              "optional": false,
+              "rejects": [
+                "{\"t\":\"i\",\"v\":\"1\"}",
+                "{\"t\":\"m\",\"v\":{}}",
+                "{\"t\":\"n\"}"
+              ],
+              "ty": "Editor"
+            },
+            {
+              "accept": "{\"t\":\"s\",\"v\":\"sample\"}",
+              "key": "title",
+              "optional": false,
+              "rejects": [
+                "{\"t\":\"i\",\"v\":\"1\"}",
+                "{\"t\":\"n\"}"
+              ],
+              "ty": "string"
+            }
+          ],
+          "name": "App"
+        },
+        {
+          "fields": [
+            {
+              "accept": "{\"t\":\"f\",\"v\":3.25}",
+              "key": "zoom",
+              "optional": false,
+              "rejects": [
+                "{\"t\":\"i\",\"v\":\"1\"}",
+                "{\"t\":\"n\"}"
+              ],
+              "ty": "float"
+            },
+            {
+              "accept": "{\"t\":\"s\",\"v\":\"sample\"}",
+              "key": "theme",
+              "optional": false,
+              "rejects": [
+                "{\"t\":\"i\",\"v\":\"1\"}",
+                "{\"t\":\"n\"}"
+              ],
+              "ty": "string"
+            }
+          ],
+          "name": "Editor"
+        }
+      ]
+    },
+    {
+      "name": "wide",
+      "paths": [
+        {
+          "accept": "{\"t\":\"m\",\"v\":{\"anything\":{\"t\":\"s\",\"v\":\"anything\"},\"blob\":{\"t\":\"b\",\"v\":\"AQID\"},\"blobs\":{\"t\":\"l\",\"v\":[{\"t\":\"b\",\"v\":\"AQID\"}]},\"count\":{\"t\":\"i\",\"v\":\"7\"},\"editors\":{\"t\":\"m\",\"v\":{\"k\":{\"t\":\"m\",\"v\":{\"theme\":{\"t\":\"s\",\"v\":\"sample\"},\"zoom\":{\"t\":\"f\",\"v\":3.25}}}}},\"flag\":{\"t\":\"bool\",\"v\":true},\"flags\":{\"t\":\"l\",\"v\":[{\"t\":\"bool\",\"v\":true}]},\"label\":{\"t\":\"s\",\"v\":\"sample\"},\"lookup\":{\"t\":\"m\",\"v\":{\"k\":{\"t\":\"i\",\"v\":\"7\"}}},\"loose\":{\"t\":\"m\",\"v\":{\"k\":{\"t\":\"s\",\"v\":\"anything\"}}},\"matrix\":{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"i\",\"v\":\"7\"}]}]},\"maybe_editor\":{\"t\":\"m\",\"v\":{\"theme\":{\"t\":\"s\",\"v\":\"sample\"},\"zoom\":{\"t\":\"f\",\"v\":3.25}}},\"maybe_label\":{\"t\":\"s\",\"v\":\"sample\"},\"maybe_ratios\":{\"t\":\"l\",\"v\":[{\"t\":\"f\",\"v\":3.25}]},\"outer\":{\"t\":\"m\",\"v\":{\"depth\":{\"t\":\"i\",\"v\":\"7\"},\"inner\":{\"t\":\"m\",\"v\":{\"theme\":{\"t\":\"s\",\"v\":\"sample\"},\"zoom\":{\"t\":\"f\",\"v\":3.25}}}}},\"ratio\":{\"t\":\"f\",\"v\":3.25},\"snake_case_field\":{\"t\":\"s\",\"v\":\"sample\"},\"tags\":{\"t\":\"l\",\"v\":[{\"t\":\"s\",\"v\":\"sample\"}]}}}",
+          "optional": false,
+          "path": "",
+          "rejects": [
+            "{\"t\":\"i\",\"v\":\"1\"}",
+            "{\"t\":\"m\",\"v\":{}}",
+            "{\"t\":\"n\"}"
+          ],
+          "seed": "{\"t\":\"m\",\"v\":{\"anything\":{\"t\":\"n\"},\"blob\":{\"t\":\"b\",\"v\":\"\"},\"blobs\":{\"t\":\"l\",\"v\":[]},\"count\":{\"t\":\"i\",\"v\":\"0\"},\"editors\":{\"t\":\"m\",\"v\":{}},\"flag\":{\"t\":\"bool\",\"v\":false},\"flags\":{\"t\":\"l\",\"v\":[]},\"label\":{\"t\":\"s\",\"v\":\"\"},\"lookup\":{\"t\":\"m\",\"v\":{}},\"loose\":{\"t\":\"m\",\"v\":{}},\"matrix\":{\"t\":\"l\",\"v\":[]},\"maybe_editor\":{\"t\":\"n\"},\"maybe_label\":{\"t\":\"n\"},\"maybe_ratios\":{\"t\":\"n\"},\"outer\":{\"t\":\"m\",\"v\":{\"depth\":{\"t\":\"i\",\"v\":\"0\"},\"inner\":{\"t\":\"m\",\"v\":{\"theme\":{\"t\":\"s\",\"v\":\"\"},\"zoom\":{\"t\":\"f\",\"v\":0.0}}}}},\"ratio\":{\"t\":\"f\",\"v\":0.0},\"snake_case_field\":{\"t\":\"s\",\"v\":\"\"},\"tags\":{\"t\":\"l\",\"v\":[]}}}",
+          "ty": "Wide"
+        },
+        {
+          "accept": "{\"t\":\"s\",\"v\":\"anything\"}",
+          "optional": false,
+          "path": "anything",
+          "rejects": [],
+          "seed": "{\"t\":\"n\"}",
+          "ty": "dynamic"
+        },
+        {
+          "accept": "{\"t\":\"b\",\"v\":\"AQID\"}",
+          "optional": false,
+          "path": "blob",
+          "rejects": [
+            "{\"t\":\"l\",\"v\":[{\"t\":\"i\",\"v\":\"1\"}]}",
+            "{\"t\":\"s\",\"v\":\"AQID\"}",
+            "{\"t\":\"n\"}"
+          ],
+          "seed": "{\"t\":\"b\",\"v\":\"\"}",
+          "ty": "bytes"
+        },
+        {
+          "accept": "{\"t\":\"l\",\"v\":[{\"t\":\"b\",\"v\":\"AQID\"}]}",
+          "optional": false,
+          "path": "blobs",
+          "rejects": [
+            "{\"t\":\"m\",\"v\":{}}",
+            "{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"i\",\"v\":\"1\"}]}]}",
+            "{\"t\":\"n\"}"
+          ],
+          "seed": "{\"t\":\"l\",\"v\":[]}",
+          "ty": "list<bytes>"
+        },
+        {
+          "accept": "{\"t\":\"i\",\"v\":\"7\"}",
+          "optional": false,
+          "path": "count",
+          "rejects": [
+            "{\"t\":\"f\",\"v\":1.0}",
+            "{\"t\":\"s\",\"v\":\"1\"}",
+            "{\"t\":\"n\"}"
+          ],
+          "seed": "{\"t\":\"i\",\"v\":\"0\"}",
+          "ty": "int"
+        },
+        {
+          "accept": "{\"t\":\"m\",\"v\":{\"k\":{\"t\":\"m\",\"v\":{\"theme\":{\"t\":\"s\",\"v\":\"sample\"},\"zoom\":{\"t\":\"f\",\"v\":3.25}}}}}",
+          "optional": false,
+          "path": "editors",
+          "rejects": [
+            "{\"t\":\"l\",\"v\":[]}",
+            "{\"t\":\"m\",\"v\":{\"k\":{\"t\":\"i\",\"v\":\"1\"}}}",
+            "{\"t\":\"n\"}"
+          ],
+          "seed": "{\"t\":\"m\",\"v\":{}}",
+          "ty": "map<Editor>"
+        },
+        {
+          "accept": "{\"t\":\"bool\",\"v\":true}",
+          "optional": false,
+          "path": "flag",
+          "rejects": [
+            "{\"t\":\"i\",\"v\":\"1\"}",
+            "{\"t\":\"n\"}"
+          ],
+          "seed": "{\"t\":\"bool\",\"v\":false}",
+          "ty": "bool"
+        },
+        {
+          "accept": "{\"t\":\"l\",\"v\":[{\"t\":\"bool\",\"v\":true}]}",
+          "optional": false,
+          "path": "flags",
+          "rejects": [
+            "{\"t\":\"m\",\"v\":{}}",
+            "{\"t\":\"l\",\"v\":[{\"t\":\"i\",\"v\":\"1\"}]}",
+            "{\"t\":\"n\"}"
+          ],
+          "seed": "{\"t\":\"l\",\"v\":[]}",
+          "ty": "list<bool>"
+        },
+        {
+          "accept": "{\"t\":\"s\",\"v\":\"sample\"}",
+          "optional": false,
+          "path": "label",
+          "rejects": [
+            "{\"t\":\"i\",\"v\":\"1\"}",
+            "{\"t\":\"n\"}"
+          ],
+          "seed": "{\"t\":\"s\",\"v\":\"\"}",
+          "ty": "string"
+        },
+        {
+          "accept": "{\"t\":\"m\",\"v\":{\"k\":{\"t\":\"i\",\"v\":\"7\"}}}",
+          "optional": false,
+          "path": "lookup",
+          "rejects": [
+            "{\"t\":\"l\",\"v\":[]}",
+            "{\"t\":\"m\",\"v\":{\"k\":{\"t\":\"f\",\"v\":1.0}}}",
+            "{\"t\":\"n\"}"
+          ],
+          "seed": "{\"t\":\"m\",\"v\":{}}",
+          "ty": "map<int>"
+        },
+        {
+          "accept": "{\"t\":\"m\",\"v\":{\"k\":{\"t\":\"s\",\"v\":\"anything\"}}}",
+          "optional": false,
+          "path": "loose",
+          "rejects": [
+            "{\"t\":\"l\",\"v\":[]}",
+            "{\"t\":\"n\"}"
+          ],
+          "seed": "{\"t\":\"m\",\"v\":{}}",
+          "ty": "map<dynamic>"
+        },
+        {
+          "accept": "{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"i\",\"v\":\"7\"}]}]}",
+          "optional": false,
+          "path": "matrix",
+          "rejects": [
+            "{\"t\":\"m\",\"v\":{}}",
+            "{\"t\":\"l\",\"v\":[{\"t\":\"m\",\"v\":{}}]}",
+            "{\"t\":\"n\"}"
+          ],
+          "seed": "{\"t\":\"l\",\"v\":[]}",
+          "ty": "list<list<int>>"
+        },
+        {
+          "accept": "{\"t\":\"m\",\"v\":{\"theme\":{\"t\":\"s\",\"v\":\"sample\"},\"zoom\":{\"t\":\"f\",\"v\":3.25}}}",
+          "optional": true,
+          "path": "maybe_editor",
+          "rejects": [
+            "{\"t\":\"i\",\"v\":\"1\"}",
+            "{\"t\":\"m\",\"v\":{}}"
+          ],
+          "seed": "{\"t\":\"n\"}",
+          "ty": "Editor"
+        },
+        {
+          "accept": "{\"t\":\"s\",\"v\":\"sample\"}",
+          "optional": false,
+          "path": "maybe_editor.theme",
+          "rejects": [
+            "{\"t\":\"i\",\"v\":\"1\"}",
+            "{\"t\":\"n\"}"
+          ],
+          "seed": null,
+          "ty": "string"
+        },
+        {
+          "accept": "{\"t\":\"f\",\"v\":3.25}",
+          "optional": false,
+          "path": "maybe_editor.zoom",
+          "rejects": [
+            "{\"t\":\"i\",\"v\":\"1\"}",
+            "{\"t\":\"n\"}"
+          ],
+          "seed": null,
+          "ty": "float"
+        },
+        {
+          "accept": "{\"t\":\"s\",\"v\":\"sample\"}",
+          "optional": true,
+          "path": "maybe_label",
+          "rejects": [
+            "{\"t\":\"i\",\"v\":\"1\"}"
+          ],
+          "seed": "{\"t\":\"n\"}",
+          "ty": "string"
+        },
+        {
+          "accept": "{\"t\":\"l\",\"v\":[{\"t\":\"f\",\"v\":3.25}]}",
+          "optional": true,
+          "path": "maybe_ratios",
+          "rejects": [
+            "{\"t\":\"m\",\"v\":{}}",
+            "{\"t\":\"l\",\"v\":[{\"t\":\"i\",\"v\":\"1\"}]}"
+          ],
+          "seed": "{\"t\":\"n\"}",
+          "ty": "list<float>"
+        },
+        {
+          "accept": "{\"t\":\"m\",\"v\":{\"depth\":{\"t\":\"i\",\"v\":\"7\"},\"inner\":{\"t\":\"m\",\"v\":{\"theme\":{\"t\":\"s\",\"v\":\"sample\"},\"zoom\":{\"t\":\"f\",\"v\":3.25}}}}}",
+          "optional": false,
+          "path": "outer",
+          "rejects": [
+            "{\"t\":\"i\",\"v\":\"1\"}",
+            "{\"t\":\"m\",\"v\":{}}",
+            "{\"t\":\"n\"}"
+          ],
+          "seed": "{\"t\":\"m\",\"v\":{\"depth\":{\"t\":\"i\",\"v\":\"0\"},\"inner\":{\"t\":\"m\",\"v\":{\"theme\":{\"t\":\"s\",\"v\":\"\"},\"zoom\":{\"t\":\"f\",\"v\":0.0}}}}}",
+          "ty": "Outer"
+        },
+        {
+          "accept": "{\"t\":\"i\",\"v\":\"7\"}",
+          "optional": false,
+          "path": "outer.depth",
+          "rejects": [
+            "{\"t\":\"f\",\"v\":1.0}",
+            "{\"t\":\"s\",\"v\":\"1\"}",
+            "{\"t\":\"n\"}"
+          ],
+          "seed": "{\"t\":\"i\",\"v\":\"0\"}",
+          "ty": "int"
+        },
+        {
+          "accept": "{\"t\":\"m\",\"v\":{\"theme\":{\"t\":\"s\",\"v\":\"sample\"},\"zoom\":{\"t\":\"f\",\"v\":3.25}}}",
+          "optional": false,
+          "path": "outer.inner",
+          "rejects": [
+            "{\"t\":\"i\",\"v\":\"1\"}",
+            "{\"t\":\"m\",\"v\":{}}",
+            "{\"t\":\"n\"}"
+          ],
+          "seed": "{\"t\":\"m\",\"v\":{\"theme\":{\"t\":\"s\",\"v\":\"\"},\"zoom\":{\"t\":\"f\",\"v\":0.0}}}",
+          "ty": "Editor"
+        },
+        {
+          "accept": "{\"t\":\"s\",\"v\":\"sample\"}",
+          "optional": false,
+          "path": "outer.inner.theme",
+          "rejects": [
+            "{\"t\":\"i\",\"v\":\"1\"}",
+            "{\"t\":\"n\"}"
+          ],
+          "seed": "{\"t\":\"s\",\"v\":\"\"}",
+          "ty": "string"
+        },
+        {
+          "accept": "{\"t\":\"f\",\"v\":3.25}",
+          "optional": false,
+          "path": "outer.inner.zoom",
+          "rejects": [
+            "{\"t\":\"i\",\"v\":\"1\"}",
+            "{\"t\":\"n\"}"
+          ],
+          "seed": "{\"t\":\"f\",\"v\":0.0}",
+          "ty": "float"
+        },
+        {
+          "accept": "{\"t\":\"f\",\"v\":3.25}",
+          "optional": false,
+          "path": "ratio",
+          "rejects": [
+            "{\"t\":\"i\",\"v\":\"1\"}",
+            "{\"t\":\"n\"}"
+          ],
+          "seed": "{\"t\":\"f\",\"v\":0.0}",
+          "ty": "float"
+        },
+        {
+          "accept": "{\"t\":\"s\",\"v\":\"sample\"}",
+          "optional": false,
+          "path": "snake_case_field",
+          "rejects": [
+            "{\"t\":\"i\",\"v\":\"1\"}",
+            "{\"t\":\"n\"}"
+          ],
+          "seed": "{\"t\":\"s\",\"v\":\"\"}",
+          "ty": "string"
+        },
+        {
+          "accept": "{\"t\":\"l\",\"v\":[{\"t\":\"s\",\"v\":\"sample\"}]}",
+          "optional": false,
+          "path": "tags",
+          "rejects": [
+            "{\"t\":\"m\",\"v\":{}}",
+            "{\"t\":\"l\",\"v\":[{\"t\":\"i\",\"v\":\"1\"}]}",
+            "{\"t\":\"n\"}"
+          ],
+          "seed": "{\"t\":\"l\",\"v\":[]}",
+          "ty": "list<string>"
+        }
+      ],
+      "root": "Wide",
+      "seed": "{\"t\":\"m\",\"v\":{\"anything\":{\"t\":\"n\"},\"blob\":{\"t\":\"b\",\"v\":\"\"},\"blobs\":{\"t\":\"l\",\"v\":[]},\"count\":{\"t\":\"i\",\"v\":\"0\"},\"editors\":{\"t\":\"m\",\"v\":{}},\"flag\":{\"t\":\"bool\",\"v\":false},\"flags\":{\"t\":\"l\",\"v\":[]},\"label\":{\"t\":\"s\",\"v\":\"\"},\"lookup\":{\"t\":\"m\",\"v\":{}},\"loose\":{\"t\":\"m\",\"v\":{}},\"matrix\":{\"t\":\"l\",\"v\":[]},\"maybe_editor\":{\"t\":\"n\"},\"maybe_label\":{\"t\":\"n\"},\"maybe_ratios\":{\"t\":\"n\"},\"outer\":{\"t\":\"m\",\"v\":{\"depth\":{\"t\":\"i\",\"v\":\"0\"},\"inner\":{\"t\":\"m\",\"v\":{\"theme\":{\"t\":\"s\",\"v\":\"\"},\"zoom\":{\"t\":\"f\",\"v\":0.0}}}}},\"ratio\":{\"t\":\"f\",\"v\":0.0},\"snake_case_field\":{\"t\":\"s\",\"v\":\"\"},\"tags\":{\"t\":\"l\",\"v\":[]}}}",
+      "source": "schema/wide.json",
+      "types": [
+        {
+          "fields": [
+            {
+              "accept": "{\"t\":\"f\",\"v\":3.25}",
+              "key": "zoom",
+              "optional": false,
+              "rejects": [
+                "{\"t\":\"i\",\"v\":\"1\"}",
+                "{\"t\":\"n\"}"
+              ],
+              "ty": "float"
+            },
+            {
+              "accept": "{\"t\":\"s\",\"v\":\"sample\"}",
+              "key": "theme",
+              "optional": false,
+              "rejects": [
+                "{\"t\":\"i\",\"v\":\"1\"}",
+                "{\"t\":\"n\"}"
+              ],
+              "ty": "string"
+            }
+          ],
+          "name": "Editor"
+        },
+        {
+          "fields": [
+            {
+              "accept": "{\"t\":\"m\",\"v\":{\"theme\":{\"t\":\"s\",\"v\":\"sample\"},\"zoom\":{\"t\":\"f\",\"v\":3.25}}}",
+              "key": "inner",
+              "optional": false,
+              "rejects": [
+                "{\"t\":\"i\",\"v\":\"1\"}",
+                "{\"t\":\"m\",\"v\":{}}",
+                "{\"t\":\"n\"}"
+              ],
+              "ty": "Editor"
+            },
+            {
+              "accept": "{\"t\":\"i\",\"v\":\"7\"}",
+              "key": "depth",
+              "optional": false,
+              "rejects": [
+                "{\"t\":\"f\",\"v\":1.0}",
+                "{\"t\":\"s\",\"v\":\"1\"}",
+                "{\"t\":\"n\"}"
+              ],
+              "ty": "int"
+            }
+          ],
+          "name": "Outer"
+        },
+        {
+          "fields": [
+            {
+              "accept": "{\"t\":\"bool\",\"v\":true}",
+              "key": "flag",
+              "optional": false,
+              "rejects": [
+                "{\"t\":\"i\",\"v\":\"1\"}",
+                "{\"t\":\"n\"}"
+              ],
+              "ty": "bool"
+            },
+            {
+              "accept": "{\"t\":\"i\",\"v\":\"7\"}",
+              "key": "count",
+              "optional": false,
+              "rejects": [
+                "{\"t\":\"f\",\"v\":1.0}",
+                "{\"t\":\"s\",\"v\":\"1\"}",
+                "{\"t\":\"n\"}"
+              ],
+              "ty": "int"
+            },
+            {
+              "accept": "{\"t\":\"f\",\"v\":3.25}",
+              "key": "ratio",
+              "optional": false,
+              "rejects": [
+                "{\"t\":\"i\",\"v\":\"1\"}",
+                "{\"t\":\"n\"}"
+              ],
+              "ty": "float"
+            },
+            {
+              "accept": "{\"t\":\"s\",\"v\":\"sample\"}",
+              "key": "label",
+              "optional": false,
+              "rejects": [
+                "{\"t\":\"i\",\"v\":\"1\"}",
+                "{\"t\":\"n\"}"
+              ],
+              "ty": "string"
+            },
+            {
+              "accept": "{\"t\":\"b\",\"v\":\"AQID\"}",
+              "key": "blob",
+              "optional": false,
+              "rejects": [
+                "{\"t\":\"l\",\"v\":[{\"t\":\"i\",\"v\":\"1\"}]}",
+                "{\"t\":\"s\",\"v\":\"AQID\"}",
+                "{\"t\":\"n\"}"
+              ],
+              "ty": "bytes"
+            },
+            {
+              "accept": "{\"t\":\"s\",\"v\":\"anything\"}",
+              "key": "anything",
+              "optional": false,
+              "rejects": [],
+              "ty": "dynamic"
+            },
+            {
+              "accept": "{\"t\":\"s\",\"v\":\"sample\"}",
+              "key": "maybe_label",
+              "optional": true,
+              "rejects": [
+                "{\"t\":\"i\",\"v\":\"1\"}"
+              ],
+              "ty": "string"
+            },
+            {
+              "accept": "{\"t\":\"l\",\"v\":[{\"t\":\"f\",\"v\":3.25}]}",
+              "key": "maybe_ratios",
+              "optional": true,
+              "rejects": [
+                "{\"t\":\"m\",\"v\":{}}",
+                "{\"t\":\"l\",\"v\":[{\"t\":\"i\",\"v\":\"1\"}]}"
+              ],
+              "ty": "list<float>"
+            },
+            {
+              "accept": "{\"t\":\"m\",\"v\":{\"theme\":{\"t\":\"s\",\"v\":\"sample\"},\"zoom\":{\"t\":\"f\",\"v\":3.25}}}",
+              "key": "maybe_editor",
+              "optional": true,
+              "rejects": [
+                "{\"t\":\"i\",\"v\":\"1\"}",
+                "{\"t\":\"m\",\"v\":{}}"
+              ],
+              "ty": "Editor"
+            },
+            {
+              "accept": "{\"t\":\"l\",\"v\":[{\"t\":\"s\",\"v\":\"sample\"}]}",
+              "key": "tags",
+              "optional": false,
+              "rejects": [
+                "{\"t\":\"m\",\"v\":{}}",
+                "{\"t\":\"l\",\"v\":[{\"t\":\"i\",\"v\":\"1\"}]}",
+                "{\"t\":\"n\"}"
+              ],
+              "ty": "list<string>"
+            },
+            {
+              "accept": "{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"i\",\"v\":\"7\"}]}]}",
+              "key": "matrix",
+              "optional": false,
+              "rejects": [
+                "{\"t\":\"m\",\"v\":{}}",
+                "{\"t\":\"l\",\"v\":[{\"t\":\"m\",\"v\":{}}]}",
+                "{\"t\":\"n\"}"
+              ],
+              "ty": "list<list<int>>"
+            },
+            {
+              "accept": "{\"t\":\"m\",\"v\":{\"k\":{\"t\":\"i\",\"v\":\"7\"}}}",
+              "key": "lookup",
+              "optional": false,
+              "rejects": [
+                "{\"t\":\"l\",\"v\":[]}",
+                "{\"t\":\"m\",\"v\":{\"k\":{\"t\":\"f\",\"v\":1.0}}}",
+                "{\"t\":\"n\"}"
+              ],
+              "ty": "map<int>"
+            },
+            {
+              "accept": "{\"t\":\"m\",\"v\":{\"k\":{\"t\":\"m\",\"v\":{\"theme\":{\"t\":\"s\",\"v\":\"sample\"},\"zoom\":{\"t\":\"f\",\"v\":3.25}}}}}",
+              "key": "editors",
+              "optional": false,
+              "rejects": [
+                "{\"t\":\"l\",\"v\":[]}",
+                "{\"t\":\"m\",\"v\":{\"k\":{\"t\":\"i\",\"v\":\"1\"}}}",
+                "{\"t\":\"n\"}"
+              ],
+              "ty": "map<Editor>"
+            },
+            {
+              "accept": "{\"t\":\"l\",\"v\":[{\"t\":\"b\",\"v\":\"AQID\"}]}",
+              "key": "blobs",
+              "optional": false,
+              "rejects": [
+                "{\"t\":\"m\",\"v\":{}}",
+                "{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"i\",\"v\":\"1\"}]}]}",
+                "{\"t\":\"n\"}"
+              ],
+              "ty": "list<bytes>"
+            },
+            {
+              "accept": "{\"t\":\"m\",\"v\":{\"k\":{\"t\":\"s\",\"v\":\"anything\"}}}",
+              "key": "loose",
+              "optional": false,
+              "rejects": [
+                "{\"t\":\"l\",\"v\":[]}",
+                "{\"t\":\"n\"}"
+              ],
+              "ty": "map<dynamic>"
+            },
+            {
+              "accept": "{\"t\":\"l\",\"v\":[{\"t\":\"bool\",\"v\":true}]}",
+              "key": "flags",
+              "optional": false,
+              "rejects": [
+                "{\"t\":\"m\",\"v\":{}}",
+                "{\"t\":\"l\",\"v\":[{\"t\":\"i\",\"v\":\"1\"}]}",
+                "{\"t\":\"n\"}"
+              ],
+              "ty": "list<bool>"
+            },
+            {
+              "accept": "{\"t\":\"m\",\"v\":{\"depth\":{\"t\":\"i\",\"v\":\"7\"},\"inner\":{\"t\":\"m\",\"v\":{\"theme\":{\"t\":\"s\",\"v\":\"sample\"},\"zoom\":{\"t\":\"f\",\"v\":3.25}}}}}",
+              "key": "outer",
+              "optional": false,
+              "rejects": [
+                "{\"t\":\"i\",\"v\":\"1\"}",
+                "{\"t\":\"m\",\"v\":{}}",
+                "{\"t\":\"n\"}"
+              ],
+              "ty": "Outer"
+            },
+            {
+              "accept": "{\"t\":\"s\",\"v\":\"sample\"}",
+              "key": "snake_case_field",
+              "optional": false,
+              "rejects": [
+                "{\"t\":\"i\",\"v\":\"1\"}",
+                "{\"t\":\"n\"}"
+              ],
+              "ty": "string"
+            }
+          ],
+          "name": "Wide"
+        }
+      ]
+    }
+  ],
+  "version": 1
+}

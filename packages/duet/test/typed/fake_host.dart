@@ -36,7 +36,22 @@ final class FakeSubscription {
 /// Thrown internally when a write is refused; becomes a `failed` response.
 final class _SetRefused implements Exception {
   _SetRefused(this.message);
+
+  /// The `duet_core::SetError` text, exactly as that type renders it.
   final String message;
+
+  /// The message as it reaches a **guest**, which is not the same string.
+  ///
+  /// A refused write travels `Value::set` → `duet_core::SetError` →
+  /// `duet_runtime::RuntimeError::Store` → `Response::Failed`, and the middle
+  /// step prefixes it: `RuntimeError`'s `Display` is
+  /// `"store rejected the write: {e}"`
+  /// (crates/duet-runtime/src/error.rs). This fake used to omit that prefix,
+  /// so every guest-side assertion on an exact refusal message was written
+  /// against a string the real host never sends — found by
+  /// `test/live_host_test.dart` the first time the generated client was driven
+  /// against `duet-host-stdio`, and not findable any other way.
+  String get onTheWire => 'store rejected the write: $message';
 }
 
 /// A transport that answers as a real Duet host would.
@@ -163,7 +178,7 @@ final class FakeHost implements DuetTransport {
         req.path.toString(),
       );
     } on _SetRefused catch (e) {
-      return DuetFailedResponse(id: req.id, message: e.message).toWireText();
+      return DuetFailedResponse(id: req.id, message: e.onTheWire).toWireText();
     }
     notify(req.path, req.value);
     return DuetDoneResponse(id: req.id).toWireText();

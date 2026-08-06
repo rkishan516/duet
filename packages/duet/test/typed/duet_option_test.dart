@@ -52,7 +52,11 @@ void main() {
           isA<DuetFailure>().having(
             (DuetFailure e) => e.message,
             'message',
-            'path "editor.zoom" addresses the wrong kind of node',
+            // The prefix is `duet_runtime::RuntimeError::Store`'s, and it is
+            // part of what a guest actually sees; `test/live_host_test.dart`
+            // asserts the same shape against the real host.
+            'store rejected the write: path "editor.zoom" addresses the wrong '
+                'kind of node',
           ),
         ),
       );

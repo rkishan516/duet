@@ -20,4 +20,5 @@ duet-schema = { path = "../duet-schema" }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 
 [dev-dependencies]
+duet-codec = { path = "../duet-codec" }
 duet-runtime = { path = "../duet-runtime" }

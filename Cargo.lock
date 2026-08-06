@@ -456,6 +456,7 @@ dependencies = [
 name = "duet-codegen"
 version = "0.1.0"
 dependencies = [
+ "duet-codec",
  "duet-core",
  "duet-runtime",
  "duet-schema",
@@ -473,6 +474,19 @@ dependencies = [
  "duet-core",
  "duet-runtime",
  "duet-supervisor",
+]
+
+[[package]]
+name = "duet-host-stdio"
+version = "0.1.0"
+dependencies = [
+ "duet-codec",
+ "duet-codegen",
+ "duet-core",
+ "duet-protocol",
+ "duet-runtime",
+ "duet-schema",
+ "serde_json",
 ]
 
 [[package]]

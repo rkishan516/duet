@@ -10,7 +10,9 @@
 // part of it. Without this, adding a helper for one test warns in every other.
 #![allow(dead_code)]
 
+pub mod admits;
 pub mod checks;
+pub mod schema_corpus;
 
 use std::fs;
 use std::path::{Path, PathBuf};
