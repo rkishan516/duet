@@ -9,6 +9,7 @@ members = [
     "crates/duet-codegen",
     "crates/duet-cli",
     "crates/duet-derive",
+    "crates/duet-dev",
     "crates/duet-supervisor",
     "crates/duet-host",
     "crates/duet-backend-macos",

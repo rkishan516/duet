@@ -1,0 +1,37 @@
+[package]
+name = "duet-dev"
+description = "The hot-reload driver behind `duet dev`: frontend_server, the Dart VM service, and a file watcher"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# ONE dependency, and it is one this workspace already carries everywhere it is
+# allowed to.
+#
+# `serde_json` is already in `duet-codec`, `duet-protocol`, `duet-codegen` and
+# therefore already in `duet-cli`'s tree — adding it here changes nobody's
+# dependency graph. It earns its place: the Dart VM service speaks JSON-RPC 2.0,
+# and hand-rolling a JSON parser to talk to it would be inventing a second,
+# worse copy of something the workspace has already standardised on.
+#
+# What is deliberately NOT here, and why:
+#
+# - **No WebSocket crate.** Spike C used `tungstenite`. `duet-cli` is the
+#   framework's front door, installed with `cargo install duet-cli`, and today
+#   it has exactly one dependency; `tungstenite` would add a subtree (`rand`,
+#   `sha1`, `http`, `httparse`, `utf-8`, `byteorder`, …) to it. This crate
+#   instead carries `ws`, `sha1` and `base64` — about 400 lines total, all of it
+#   pure functions with direct unit tests, connecting only to loopback, only to
+#   a Dart VM this process (or its own child) launched. `duet-codec` already set
+#   this precedent by hand-rolling base64 rather than taking a crate for it. The
+#   honest cost is written down in `ws.rs`'s module docs.
+# - **No file-watching crate.** `notify` is the obvious one and brings
+#   platform-specific backends (FSEvents/inotify/ReadDirectoryChangesW) with
+#   their own well-known coalescing quirks. `watch.rs` polls mtimes instead:
+#   portable, injectable-clock testable, and O(files) `stat`s per tick, which at
+#   dev-project scale is microseconds. See its module docs for the measured
+#   cost and the point at which this choice would stop being right.
+[dependencies]
+serde_json = { version = "1", features = ["float_roundtrip"] }
