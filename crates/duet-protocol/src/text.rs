@@ -667,6 +667,33 @@ mod tests {
             reply.len()
         );
 
+        // A 1 MB command name. `command` is the newest guest-controlled string
+        // on this wire and the one most likely to be echoed: every reason an
+        // `invoke` can be refused — no commands registered, no command by that
+        // name, a body that panicked — wants to name the command in its
+        // message, and naming it verbatim is exactly the amplifier the two
+        // cases above already found for `path` and for a value tag.
+        //
+        // Deliberately written so it holds on BOTH sides of the increment that
+        // adds `invoke`. Before it, this is an unknown `kind` and the 1 MB
+        // string never gets read at all; after it, the request decodes and the
+        // refusal names the command — bounded, via `duet_core::truncated`. The
+        // assertion is the same either way, because the property is the same
+        // either way: a `failed` reply whose size does not track the guest's.
+        let huge_command = format!(
+            r#"{{"kind":"invoke","id":"1","command":"{}","args":{{"t":"m","v":{{}}}}}}"#,
+            "c".repeat(1_000_000)
+        );
+        let reply = handle_text(&handle, SubscriberId(1), &huge_command);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&reply).expect("1 MB command name: reply must be valid JSON");
+        assert_eq!(parsed["kind"], "failed", "1 MB command name: got {reply}");
+        assert!(
+            reply.len() < MAX_REASONABLE_REPLY,
+            "1 MB command name: reply must not echo the guest's text, got {} bytes",
+            reply.len()
+        );
+
         // A lone UTF-16 surrogate and a raw control character are both
         // things a hostile guest can put in a JSON string; neither may panic
         // the JSON parser.
