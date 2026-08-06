@@ -69,8 +69,8 @@ const GENERATOR = 'cargo test -p duet-protocol --test wire_corpus -- --ignored r
  * assertion below and prove nothing. If these numbers need changing, that is a
  * deliberate review step.
  */
-const ACCEPT_CASE_COUNT = 50;
-const REJECT_CASE_COUNT = 20;
+const ACCEPT_CASE_COUNT = 51;
+const REJECT_CASE_COUNT = 21;
 
 interface AcceptCase {
   readonly layer: string;

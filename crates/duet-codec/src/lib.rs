@@ -28,6 +28,7 @@
 
 mod base64;
 pub mod canonical;
+pub mod depth;
 pub mod error;
 mod value;
 mod wire;
@@ -35,6 +36,7 @@ mod wire;
 pub use canonical::{
     MAX_WIRE_ID, is_canonical_signed_decimal, is_canonical_unsigned_digits, parse_wire_id,
 };
+pub use depth::{MAX_JSON_DEPTH, exceeds_max_json_depth};
 pub use error::CodecError;
 
 /// Encodes a [`duet_core::Value`] into its tagged JSON representation.

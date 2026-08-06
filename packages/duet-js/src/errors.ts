@@ -161,16 +161,26 @@ export function echoBounded(text: string): string {
 }
 
 /**
- * The most nested JSON containers a Duet message may contain.
+ * The most nested JSON containers a Duet message may contain: **127**.
  *
- * Mirrors `serde_json`'s own recursion limit, which is what makes the Rust
- * decoder refuse the corpus case `value/nesting/exceeds_parser_recursion_limit`
- * with reason {@link DuetReason.badJson}.
+ * Mirrors `duet_codec::MAX_JSON_DEPTH` (crates/duet-codec/src/depth.rs), which
+ * the host enforces itself over raw text before parsing it. The golden corpus
+ * pins the boundary in every language at once: `value/nesting/at_limit` has
+ * exactly 127 containers and must decode, `value/nesting/over_limit` has 128 and
+ * must be refused as {@link DuetReason.badJson}.
  *
- * JavaScript needs this stated explicitly, because `JSON.parse` has no such
- * limit: V8 accepts a 100 000-deep document without complaint (measured on
- * Node v24). Without this guard a JavaScript guest would *accept* a message
- * every Rust peer rejects, and — worse — would then hand that tree to this
- * package's recursive decoders, which would overflow the stack for real.
+ * # This number must equal the host's exactly, not approximately
+ *
+ * This package shipped with `128` here against a host that stops at 127, so a
+ * document with exactly 128 containers was accepted by TypeScript and refused by
+ * Rust. Nothing caught it: the only nesting test in the suite used 200 levels,
+ * which every implementation refuses whatever its off-by-one. A limit is only
+ * tested by a case on each side of it.
+ *
+ * JavaScript needs it stated explicitly at all because `JSON.parse` has no
+ * limit: V8 accepts a 100 000-deep document without complaint (measured on Node
+ * v24). Without this guard a JavaScript guest would accept messages every Rust
+ * peer rejects, and — worse — would then hand that tree to this package's
+ * recursive decoders, which would overflow the stack for real.
  */
-export const MAX_JSON_DEPTH = 128;
+export const MAX_JSON_DEPTH = 127;

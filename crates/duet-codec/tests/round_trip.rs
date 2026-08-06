@@ -223,3 +223,52 @@ fn decode_never_panics_on_arbitrary_json() {
         "the alphabet must produce some valid JSON or this test proves nothing"
     );
 }
+
+/// `MAX_JSON_DEPTH` must stay exactly what the host's own parser accepts.
+///
+/// The constant is Duet's, not `serde_json`'s — the host enforces it itself with
+/// `exceeds_max_json_depth`, precisely so a dependency bump cannot move the wire
+/// contract without anyone noticing. This test is the other half of that
+/// arrangement: it measures `serde_json`'s real boundary and fails if the two
+/// have drifted, so "the number moved" is a deliberate decision (and a corpus
+/// regeneration, and matching edits in the Dart and TypeScript guests) rather
+/// than a silent one.
+///
+/// Note this asserts *equality* today, but the requirement is only that
+/// `MAX_JSON_DEPTH <= serde_json's limit`. Equality is the stronger statement
+/// and the one worth pinning: a host that accepted less than it advertises would
+/// refuse documents the corpus says all three languages must accept.
+#[test]
+fn the_wire_depth_limit_matches_what_serde_json_actually_accepts() {
+    fn parses(containers: usize) -> bool {
+        let text = format!("{}1{}", "[".repeat(containers), "]".repeat(containers));
+        serde_json::from_str::<serde_json::Value>(&text).is_ok()
+    }
+
+    assert!(
+        parses(duet_codec::MAX_JSON_DEPTH),
+        "serde_json must accept exactly {} containers",
+        duet_codec::MAX_JSON_DEPTH
+    );
+    assert!(
+        !parses(duet_codec::MAX_JSON_DEPTH + 1),
+        "serde_json must refuse exactly {} containers; if it now accepts more, \
+         raising MAX_JSON_DEPTH is a wire-format change that needs the Dart and \
+         TypeScript guests and the golden corpus moved with it",
+        duet_codec::MAX_JSON_DEPTH + 1
+    );
+}
+
+/// The scan and the parser must agree case by case, not merely at the boundary.
+#[test]
+fn the_pre_scan_agrees_with_the_parser_across_the_whole_range() {
+    for containers in [1usize, 2, 10, 63, 64, 126, 127, 128, 129, 200] {
+        let text = format!("{}1{}", "[".repeat(containers), "]".repeat(containers));
+        let parser_accepts = serde_json::from_str::<serde_json::Value>(&text).is_ok();
+        let scan_accepts = !duet_codec::exceeds_max_json_depth(&text);
+        assert_eq!(
+            scan_accepts, parser_accepts,
+            "{containers} containers: the pre-scan and serde_json must agree"
+        );
+    }
+}

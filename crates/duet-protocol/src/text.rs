@@ -58,7 +58,36 @@ const FALLBACK_FAILURE: &str =
 /// echoing it back would send a Dart guest a number its own `int` cannot parse,
 /// so the "recovery" would fail on arrival. `RequestId(0)` is the honest answer
 /// in both cases: this reply answers no request the guest can name.
+///
+/// # The depth pre-scan runs before the parser, not after it
+///
+/// [`duet_codec::exceeds_max_json_depth`] reads the raw text first. Two reasons
+/// it is not left to `serde_json`, whose own recursion limit happens to sit at
+/// the same 127 today:
+///
+/// - **The host must own its own limit.** Three implementations of this format
+///   have to agree on the boundary exactly, and `corpus/wire-corpus.json` pins
+///   it. A `serde_json` upgrade that moved its internal constant would move the
+///   host's behaviour with it and silently re-open a cross-language divergence
+///   that nothing in this workspace would fail on.
+/// - **Rejecting before parsing is cheaper and stricter.** Over-deep text never
+///   becomes a tree at all.
+///
+/// Over-deep text is reported exactly like any other unparseable input: the id
+/// is *not* recovered, because recovering it would mean parsing the very
+/// document being refused. `RequestId(0)` again means "this reply answers no
+/// request you can name" — which a guest must handle, see
+/// `crates/duet-webview/src/bootstrap.rs`.
 fn decode(text: &str) -> Result<crate::Request, (RequestId, String)> {
+    if duet_codec::exceeds_max_json_depth(text) {
+        return Err((
+            RequestId(0),
+            format!(
+                "malformed JSON: nests deeper than {} containers",
+                duet_codec::MAX_JSON_DEPTH
+            ),
+        ));
+    }
     let json: serde_json::Value = match serde_json::from_str(text) {
         Ok(j) => j,
         Err(e) => return Err((RequestId(0), format!("malformed JSON: {e}"))),
@@ -250,6 +279,79 @@ mod tests {
         rt.shutdown().expect("shutdown should succeed");
     }
 
+    #[test]
+    fn the_nesting_limit_bites_at_exactly_one_container_past_the_bound() {
+        // THE regression test for a one-level divergence. Both guests enforced
+        // 128 where this host stops at 127, so a document with exactly 128
+        // containers was accepted by Dart and TypeScript and refused here — and
+        // no test could see it, because the only nesting cases in the suite
+        // used 200 and 5,000 levels, which every implementation refuses
+        // whatever its off-by-one. Pin the exact boundary or pin nothing.
+        //
+        // The discriminator is the echoed id, not the response kind: a request
+        // that got *parsed* has its id recovered, while one refused by the
+        // pre-scan answers `RequestId(0)` because reading its id would mean
+        // parsing the document being refused. That stays true regardless of
+        // what the store later decides about a value this deep.
+        /// A `set` request whose document nests exactly `containers` JSON
+        /// containers: one for the envelope, then a tagged value carrying the
+        /// rest. A tagged value costs two containers per level of its own
+        /// nesting, so an odd remainder ends in `{"t":"n"}` and an even one in
+        /// an empty list. Both fixtures come from this one generator, so they
+        /// differ by exactly one container and by nothing else.
+        fn set_request(containers: usize) -> String {
+            let value = containers - 1;
+            let wrappers = (value - 1) / 2;
+            let leaf = if value % 2 == 0 {
+                r#"{"t":"l","v":[]}"#
+            } else {
+                r#"{"t":"n"}"#
+            };
+            format!(
+                r#"{{"kind":"set","id":"1","path":"editor","value":{}{}{}}}"#,
+                r#"{"t":"l","v":["#.repeat(wrappers),
+                leaf,
+                r#"]}"#.repeat(wrappers),
+            )
+        }
+
+        let rt = rt();
+        let handle = rt.handle();
+
+        let at_limit = set_request(duet_codec::MAX_JSON_DEPTH);
+        assert!(
+            !duet_codec::exceeds_max_json_depth(&at_limit),
+            "the fixture must sit AT the limit, not past it"
+        );
+        let reply = handle_text(&handle, SubscriberId(1), &at_limit);
+        let parsed: serde_json::Value = serde_json::from_str(&reply).expect("valid JSON");
+        assert_eq!(
+            parsed["id"],
+            "1",
+            "a document at exactly {} containers must be parsed, got {reply}",
+            duet_codec::MAX_JSON_DEPTH
+        );
+
+        let over_limit = set_request(duet_codec::MAX_JSON_DEPTH + 1);
+        assert!(
+            duet_codec::exceeds_max_json_depth(&over_limit),
+            "the fixture must sit exactly one container past the limit"
+        );
+        let reply = handle_text(&handle, SubscriberId(1), &over_limit);
+        let parsed: serde_json::Value = serde_json::from_str(&reply).expect("valid JSON");
+        assert_eq!(parsed["kind"], "failed", "got {reply}");
+        assert_eq!(
+            parsed["id"], "0",
+            "over-deep text must not have its id recovered, got {reply}"
+        );
+        assert!(
+            reply.contains(&duet_codec::MAX_JSON_DEPTH.to_string()),
+            "the failure must name the limit it enforced, got {reply}"
+        );
+
+        rt.shutdown().expect("shutdown should succeed");
+    }
+
     /// A guest that speaks the webview IPC channel may be running untrusted
     /// web content — `request.body()` on the `wry` side is attacker-controlled
     /// text, not a value this host constructed. `handle_text` sits
@@ -282,26 +384,25 @@ mod tests {
         };
 
         // 200,000 unclosed `[` would overflow the stack of a naive recursive
-        // descent parser well before reaching the end of input. serde_json's
-        // own recursion-limit guard must reject this instead.
+        // descent parser — or of a naive recursive depth *check* — well before
+        // reaching the end of input. `decode`'s iterative pre-scan must reject
+        // it instead.
         assert_failed(&"[".repeat(200_000), "200,000-deep nested array");
 
         // WARNING to future maintainers: this case looks like it stresses
         // `duet_codec`'s recursive tagged-value decoder specifically, by
         // nesting a `Value` 5,000 deep inside a real `set` request rather
         // than nesting raw JSON structure. It does not. `decode` (above)
-        // calls `serde_json::from_str` before any of this text ever reaches
-        // `duet_protocol::decode_request` — and therefore `duet_codec`'s
-        // decoder — and serde_json's own recursion limit (~128 levels)
-        // rejects input this deep on its own. So this hits exactly the same
-        // guard as the 200,000-bracket case above, just via a longer
-        // string: `duet_codec`'s recursive decoder is structurally
-        // unreachable from guest *text*, because the JSON parser in front
-        // of it is the depth guard. If a future change ever swaps in a
-        // parser without its own recursion limit, that guard disappears and
-        // `duet_codec::decode_value`'s recursion becomes reachable — and
-        // this case would then need a real assertion on the codec's own
-        // behavior, not just on this text-level guard.
+        // runs `duet_codec::exceeds_max_json_depth` over the raw text before
+        // any of it reaches `duet_protocol::decode_request` — and therefore
+        // `duet_codec`'s decoder — so this hits exactly the same guard as the
+        // 200,000-bracket case above, just via a longer string.
+        // `duet_codec::decode_value`'s recursion is structurally unreachable
+        // from guest *text* at more than `MAX_JSON_DEPTH / 2` levels, because
+        // the pre-scan in front of it is the depth guard. If that pre-scan
+        // were ever removed, that recursion becomes reachable — and this case
+        // would then need a real assertion on the codec's own behavior, not
+        // just on this text-level guard.
         let mut nested_value = "null".to_string();
         for _ in 0..5_000 {
             nested_value = format!(r#"{{"t":"m","v":{{"a":{nested_value}}}}}"#);

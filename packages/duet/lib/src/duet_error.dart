@@ -159,16 +159,26 @@ String echoBounded(String text) => text.length <= maxEchoChars
     ? '"$text"'
     : '"${text.substring(0, maxEchoChars)}…"';
 
-/// The most nested JSON containers a Duet message may contain.
+/// The most nested JSON containers a Duet message may contain: **127**.
 ///
-/// Mirrors `serde_json`'s own recursion limit, which is what makes the Rust
-/// decoder refuse `value/nesting/exceeds_parser_recursion_limit` in the golden
-/// corpus with reason [DuetReason.badJson].
+/// Mirrors `duet_codec::MAX_JSON_DEPTH` (crates/duet-codec/src/depth.rs), which
+/// the host enforces itself over raw text before parsing it. The golden corpus
+/// pins the boundary in every language at once: `value/nesting/at_limit` has
+/// exactly 127 containers and must decode, `value/nesting/over_limit` has 128
+/// and must be refused as [DuetReason.badJson].
 ///
-/// Dart needs this stated explicitly, because `dart:convert`'s parser has no
-/// such limit: `jsonDecode` happily builds a 100 000-deep tree (it is
-/// iterative, so it does not overflow the stack building one). Without this
-/// guard a Dart guest would *accept* a message every Rust peer rejects, and —
-/// worse — would then hand that tree to this package's recursive decoders,
-/// which would overflow the stack for real.
-const int maxJsonDepth = 128;
+/// # This number must equal the host's exactly, not approximately
+///
+/// This package shipped with `128` here against a host that stops at 127, so a
+/// document with exactly 128 containers was accepted by Dart and refused by
+/// Rust. Nothing caught it: the only nesting test in the suite used 200 levels,
+/// which every implementation refuses whatever its off-by-one. A limit is only
+/// tested by a case on each side of it.
+///
+/// Dart needs it stated explicitly at all because `dart:convert`'s parser has no
+/// limit: `jsonDecode` happily builds a 100 000-deep tree (it is iterative, so
+/// it does not overflow the stack building one). Without this guard a Dart guest
+/// would accept messages every Rust peer rejects, and — worse — would then hand
+/// that tree to this package's recursive decoders, which would overflow the
+/// stack for real.
+const int maxJsonDepth = 127;

@@ -115,6 +115,47 @@ fn text_and_bytes_cases() -> Vec<AcceptCase> {
     ]
 }
 
+/// A well-formed tagged value nesting **exactly** `containers` JSON containers.
+///
+/// A tagged value costs **two** containers per level of its own nesting — the
+/// `{"t":"l","v":…}` object and the array inside it — so the two halves of the
+/// depth boundary pair are built from one generator rather than written out.
+///
+/// An odd count ends in `{"t":"n"}` (one container); an even count ends in an
+/// empty list (two). Both halves of the boundary pair come from this one
+/// generator, so they differ by exactly one container and by nothing else — no
+/// bare-bracket soup on one side and a real value on the other.
+fn nested_value_wire(containers: usize) -> String {
+    let wrappers = (containers - 1) / 2;
+    let leaf = if containers % 2 == 0 {
+        r#"{"t":"l","v":[]}"#
+    } else {
+        r#"{"t":"n"}"#
+    };
+    format!(
+        "{}{}{}",
+        r#"{"t":"l","v":["#.repeat(wrappers),
+        leaf,
+        r#"]}"#.repeat(wrappers)
+    )
+}
+
+/// The deepest `Value` the wire admits, as a value rather than as text.
+fn at_limit_value() -> Value {
+    let mut v = Value::Null;
+    for _ in 0..(duet_codec::MAX_JSON_DEPTH - 1) / 2 {
+        v = Value::List(vec![v]);
+    }
+    // The generator and the encoder must agree, or the pair below is comparing
+    // two different shapes and the boundary it claims to pin is fictional.
+    assert_eq!(
+        super::to_text(&duet_codec::encode_value(&v)),
+        nested_value_wire(duet_codec::MAX_JSON_DEPTH),
+        "the at-limit value must encode to exactly the at-limit wire text"
+    );
+    v
+}
+
 /// Containers, including the map that pins code-point key order.
 fn container_cases() -> Vec<AcceptCase> {
     let nested = Value::List(vec![
@@ -143,6 +184,11 @@ fn container_cases() -> Vec<AcceptCase> {
                 ("\u{FFFD}", Value::Int(2)),
             ]),
         ),
+        // Exactly `duet_codec::MAX_JSON_DEPTH` containers: the deepest document
+        // every implementation must ACCEPT. Its partner,
+        // `value/nesting/over_limit`, is one container deeper and every
+        // implementation must refuse it.
+        value_case("value/nesting/at_limit", &at_limit_value()),
     ]
 }
 
@@ -407,24 +453,37 @@ fn reject_envelope_cases() -> Vec<RejectCase> {
     ]
 }
 
-/// Input the JSON parser refuses before any Duet decoder sees it.
+/// Input refused before any Duet decoder sees it, so the reason is [`BAD_JSON`]
+/// rather than any [`duet_codec::CodecError`].
 ///
-/// # A known cross-language divergence
+/// # The nesting cases, and why there are two of them
 ///
-/// `value/nesting/exceeds_parser_recursion_limit` is 200 levels of nested
-/// tagged lists — 400 nested containers. `serde_json` has a recursion limit
-/// (128 by default) and refuses to parse it, so Rust's reason is `bad_json`,
-/// not any [`duet_codec::CodecError`]: the codec's own recursive decoder is
-/// never reached. Dart's `jsonDecode` has a comparable guard.
+/// `value/nesting/over_limit` is one container past
+/// [`duet_codec::MAX_JSON_DEPTH`] and `value/nesting/at_limit` (an *accept*
+/// case) is exactly at it. Together they pin the boundary; separately neither
+/// does. The corpus previously carried only a 200-level case named
+/// `value/nesting/exceeds_parser_recursion_limit`, and it could not see that the
+/// Dart and TypeScript guests enforced 128 where this host stops at 127 — 400
+/// containers is refused by every implementation whatever its off-by-one. That
+/// divergence shipped, and this pair is what would have caught it.
 ///
-/// **A JavaScript guest may not.** V8's `JSON.parse` has no such limit at this
-/// depth, so a JS decoder would parse the text and then recurse through it
-/// successfully — accepting input the host refuses. That asymmetry is real and
-/// this entry is where it surfaces: the JavaScript client must impose its own
-/// depth limit to satisfy this case, which is exactly the kind of gap the
-/// corpus exists to make visible rather than to paper over.
+/// `value/nesting/far_over_limit` keeps the deep case, renamed. It is not
+/// redundant and it is no longer misnamed:
+///
+/// - **Renamed**, because the limit is no longer "whatever `serde_json`'s
+///   parser happens to do". The host enforces
+///   [`duet_codec::MAX_JSON_DEPTH`] itself, before parsing.
+/// - **Kept**, because it tests something the boundary pair cannot: at 400
+///   containers a *recursive* depth check dies by stack overflow — an abort, not
+///   a catchable error — on exactly the input it exists to reject. An
+///   implementation that passes the pair with a recursive check still fails
+///   here.
+///
+/// The cross-language note this used to carry is now obsolete in the best way:
+/// every implementation states its own limit and refuses past it, so there is no
+/// asymmetry left to warn about — only a number all three must keep equal.
 fn reject_parser_cases() -> Vec<RejectCase> {
-    let deep = format!(
+    let far_over = format!(
         "{}{}{}",
         r#"{"t":"l","v":["#.repeat(200),
         r#"{"t":"n"}"#,
@@ -438,9 +497,15 @@ fn reject_parser_cases() -> Vec<RejectCase> {
             BAD_JSON,
         ),
         reject(
-            "value/nesting/exceeds_parser_recursion_limit",
+            "value/nesting/over_limit",
             Layer::Value,
-            deep,
+            nested_value_wire(duet_codec::MAX_JSON_DEPTH + 1),
+            BAD_JSON,
+        ),
+        reject(
+            "value/nesting/far_over_limit",
+            Layer::Value,
+            far_over,
             BAD_JSON,
         ),
     ]
