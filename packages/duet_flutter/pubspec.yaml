@@ -3,7 +3,7 @@ description: >-
   The Flutter binding for the Duet wire protocol: a DuetTransport over the
   duet/rpc BasicMessageChannel, so a Flutter guest can share a Rust host's
   state.
-version: 0.1.0
+version: 0.1.1
 repository: https://github.com/rkishan516/tauri-flutter
 issue_tracker: https://github.com/rkishan516/tauri-flutter/issues
 
@@ -12,7 +12,7 @@ environment:
   flutter: '>=3.10.0'
 
 dependencies:
-  duet: ^0.1.0
+  duet: '>=0.1.0 <0.3.0'
   flutter:
     sdk: flutter
 

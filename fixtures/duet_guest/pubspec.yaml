@@ -13,7 +13,7 @@ dependencies:
   # pubspec_overrides.yaml. This fixture used to carry its own copy of the
   # client; it does not any more, because two copies is how a fixture and the
   # package it mirrors drift apart without either one ever looking wrong.
-  duet: ^0.1.0
+  duet: ^0.2.0
   duet_flutter: ^0.1.0
   flutter:
     sdk: flutter
