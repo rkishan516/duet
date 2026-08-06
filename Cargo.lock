@@ -475,6 +475,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "duet-schema"
+version = "0.1.0"
+dependencies = [
+ "duet-core",
+ "duet-runtime",
+]
+
+[[package]]
 name = "duet-supervisor"
 version = "0.1.0"
 dependencies = [

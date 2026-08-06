@@ -1,0 +1,410 @@
+//! Tests for [`Schema`](crate::Schema): validation, depth, and the render.
+//!
+//! Split out of `schema.rs` under `#[path]` so both files stay small; they are
+//! one module as far as visibility is concerned.
+
+use super::*;
+use crate::decode::DecodeError;
+use crate::state::NotNullable;
+use crate::ty::FieldDef;
+use duet_core::Value;
+
+/// Builds a `SharedState` impl whose only interesting part is its schema.
+///
+/// `to_value`/`from_value` are stubs: every test here is about the *schema*
+/// half of the contract, and giving each fixture a real decoder would be
+/// several hundred lines proving nothing these tests ask about. The impls in
+/// `src/impls/` and the doc example on the crate root exercise the other two
+/// methods.
+macro_rules! schema_only {
+    ($name:ident, $wire:literal, |$registry:ident| $body:expr) => {
+        #[derive(Debug, PartialEq)]
+        struct $name;
+
+        impl SharedState for $name {
+            fn to_value(&self) -> Value {
+                Value::map([])
+            }
+
+            fn from_value(value: &Value) -> Result<Self, DecodeError> {
+                match value {
+                    Value::Map(_) => Ok($name),
+                    other => Err(DecodeError::wrong_type($wire, other)),
+                }
+            }
+
+            fn schema($registry: &mut Registry) -> Ty {
+                $body
+            }
+        }
+
+        impl NotNullable for $name {}
+    };
+}
+
+schema_only!(Leaf, "Leaf", |registry| {
+    registry.define::<Self>("Leaf", |_| vec![FieldDef::new("zoom", Ty::Float)])
+});
+
+schema_only!(Root, "Root", |registry| {
+    registry.define::<Self>("Root", |r| {
+        vec![
+            FieldDef::new("counter", Ty::Int),
+            FieldDef::new("leaf", Leaf::schema(r)),
+            FieldDef::new("leaves", Leaf::schema(r).list()),
+        ]
+    })
+});
+
+schema_only!(SelfReferential, "SelfReferential", |registry| {
+    registry.define::<Self>("Node", |r| {
+        vec![FieldDef::new("next", SelfReferential::schema(r).optional())]
+    })
+});
+
+schema_only!(BadName, "BadName", |registry| {
+    registry.define::<Self>("2Bad", |_| vec![FieldDef::new("a", Ty::Int)])
+});
+
+schema_only!(BadKey, "BadKey", |registry| {
+    registry.define::<Self>("BadKey", |_| vec![FieldDef::new("a.b", Ty::Int)])
+});
+
+schema_only!(EmptyKey, "EmptyKey", |registry| {
+    registry.define::<Self>("EmptyKey", |_| vec![FieldDef::new("", Ty::Int)])
+});
+
+schema_only!(Dangling, "Dangling", |registry| {
+    registry.define::<Self>("Dangling", |_| {
+        vec![FieldDef::new("ghost", Ty::Named("Ghost".to_string()))]
+    })
+});
+
+schema_only!(Empty, "Empty", |registry| {
+    registry.define::<Self>("Empty", |_| Vec::new())
+});
+
+// --- Building and validating ---
+
+#[test]
+fn a_valid_schema_records_its_types_sorted_by_name() {
+    let schema = Schema::of::<Root>().expect("Root is a valid schema");
+    assert_eq!(schema.root(), &Ty::Named("Root".to_string()));
+    assert_eq!(
+        schema
+            .types()
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Leaf", "Root"]
+    );
+}
+
+#[test]
+fn a_type_reached_twice_is_defined_once() {
+    let schema = Schema::of::<Root>().expect("Root is valid");
+    assert_eq!(
+        schema.types().iter().filter(|t| t.name == "Leaf").count(),
+        1,
+        "Leaf is reached through two fields and must be defined once"
+    );
+}
+
+#[test]
+fn a_primitive_root_needs_no_types() {
+    let schema = Schema::of::<i64>().expect("a bare i64 is a legal root");
+    assert_eq!(schema.root(), &Ty::Int);
+    assert!(schema.types().is_empty());
+    assert_eq!(schema.depth(), 0);
+}
+
+#[test]
+fn field_order_is_declaration_order_not_alphabetical() {
+    // Generated positional constructors depend on this, so it is part of the
+    // contract rather than an incidental property of the walk.
+    let schema = Schema::of::<Root>().expect("Root is valid");
+    let root = schema
+        .types()
+        .iter()
+        .find(|t| t.name == "Root")
+        .expect("Root is defined");
+    assert_eq!(
+        root.fields
+            .iter()
+            .map(|f| f.key.as_str())
+            .collect::<Vec<_>>(),
+        ["counter", "leaf", "leaves"]
+    );
+}
+
+// --- Cycle detection ---
+
+#[test]
+fn a_recursive_type_is_a_typed_error_not_a_stack_overflow() {
+    let errors = Schema::of::<SelfReferential>().expect_err("a recursive type is not a schema");
+    assert_eq!(errors.to_string(), "recursive type: Node -> Node");
+    assert_eq!(
+        errors.as_slice(),
+        [SchemaError::Recursive {
+            chain: vec!["Node".to_string(), "Node".to_string()],
+        }]
+    );
+}
+
+#[test]
+fn a_cycle_is_reported_once_though_two_checks_find_it() {
+    // `Registry::define` catches it as the schema is built and `resolve`
+    // catches it in the finished graph. Both must run — they cover different
+    // construction routes — and the developer must still see one message.
+    let errors = Schema::of::<SelfReferential>().expect_err("recursive");
+    assert_eq!(errors.as_slice().len(), 1, "{errors}");
+}
+
+#[test]
+fn a_dangling_named_reference_is_rejected() {
+    let errors = Schema::of::<Dangling>().expect_err("Ghost is not defined");
+    assert_eq!(errors.to_string(), "no type named \"Ghost\" is defined");
+}
+
+// --- Names and keys ---
+
+#[test]
+fn an_illegal_type_name_is_rejected() {
+    let errors = Schema::of::<BadName>().expect_err("2Bad is not an identifier");
+    assert!(
+        errors.as_slice().contains(&SchemaError::IllegalName {
+            name: "2Bad".to_string()
+        }),
+        "{errors}"
+    );
+}
+
+#[test]
+fn a_key_that_would_not_round_trip_through_the_path_parser_is_rejected() {
+    // The exact hazard `Path::from_segments` only catches with a debug_assert:
+    // one segment in, two out on re-parse.
+    let errors = Schema::of::<BadKey>().expect_err("a.b is two segments");
+    assert_eq!(
+        errors.as_slice(),
+        [SchemaError::IllegalKey {
+            type_name: "BadKey".to_string(),
+            key: "a.b".to_string(),
+        }]
+    );
+}
+
+#[test]
+fn an_empty_key_is_rejected() {
+    let errors = Schema::of::<EmptyKey>().expect_err("the empty key is the root path");
+    assert_eq!(
+        errors.as_slice(),
+        [SchemaError::IllegalKey {
+            type_name: "EmptyKey".to_string(),
+            key: String::new(),
+        }]
+    );
+}
+
+#[test]
+fn every_key_of_every_valid_schema_round_trips_through_path_parse() {
+    // The property the emitters rely on: a path literal built by joining keys
+    // with `.` addresses exactly the node the schema describes.
+    for def in Schema::of::<Root>().expect("Root is valid").types() {
+        for field in &def.fields {
+            let parsed = Path::parse(&field.key).expect("a validated key parses");
+            assert_eq!(parsed.to_string(), field.key);
+            assert_eq!(parsed.segments().len(), 1, "key {:?}", field.key);
+        }
+    }
+}
+
+#[test]
+fn the_key_round_trip_predicate_rejects_what_the_parser_reinterprets() {
+    assert!(key_round_trips("zoom"));
+    assert!(key_round_trips("café"));
+    for bad in ["", "a.b", "a[0]", "]", "[0]"] {
+        assert!(!key_round_trips(bad), "{bad:?} must not round-trip");
+    }
+}
+
+// --- Depth ---
+
+#[test]
+fn a_struct_counts_as_one_container_plus_its_deepest_field() {
+    // Root { counter, leaf: Leaf { zoom }, leaves: [Leaf] }
+    //   Leaf                   = 1
+    //   Root.leaves = list(Leaf) = 1 + 1 = 2
+    //   Root                   = 1 + 2 = 3
+    assert_eq!(Schema::of::<Root>().expect("valid").depth(), 3);
+    assert_eq!(Schema::of::<Leaf>().expect("valid").depth(), 1);
+    assert_eq!(Schema::of::<Empty>().expect("valid").depth(), 1);
+}
+
+#[test]
+fn an_option_adds_no_container_of_its_own() {
+    // `None` is a scalar and `Some(x)` is exactly `x`.
+    assert_eq!(Schema::of::<Option<i64>>().expect("valid").depth(), 0);
+    assert_eq!(Schema::of::<Option<Vec<i64>>>().expect("valid").depth(), 1);
+}
+
+#[test]
+fn lists_and_maps_each_add_one() {
+    assert_eq!(Schema::of::<Vec<i64>>().expect("valid").depth(), 1);
+    assert_eq!(Schema::of::<Vec<Vec<i64>>>().expect("valid").depth(), 2);
+    assert_eq!(
+        Schema::of::<std::collections::BTreeMap<String, Vec<i64>>>()
+            .expect("valid")
+            .depth(),
+        2
+    );
+}
+
+#[test]
+fn the_declared_depth_matches_what_a_real_value_of_it_measures() {
+    // The whole point of the bound: the schema's number and `Value::depth`'s
+    // number have to be the same number, or the check guards nothing.
+    let value = Root.to_value();
+    assert_eq!(value.depth(), 1, "the stub `to_value` is an empty map");
+
+    let realistic = Value::map([
+        ("counter", Value::Int(0)),
+        ("leaf", Value::map([("zoom", Value::Float(1.0))])),
+        (
+            "leaves",
+            Value::List(vec![Value::map([("zoom", Value::Float(1.0))])]),
+        ),
+    ]);
+    assert_eq!(
+        realistic.depth(),
+        Schema::of::<Root>().expect("valid").depth()
+    );
+}
+
+#[test]
+fn a_schema_deeper_than_the_store_accepts_is_rejected() {
+    // A list nested MAX_VALUE_DEPTH + 1 deep. Built by `Ty` rather than by
+    // Rust types, because expressing 62 nested `Vec`s as a type would be 62
+    // lines of turbofish proving the same thing.
+    let mut ty = Ty::Int;
+    for _ in 0..=MAX_VALUE_DEPTH {
+        ty = ty.list();
+    }
+    let errors = check_depth(&ty, &[], &[]);
+    assert_eq!(
+        errors,
+        [SchemaError::TooDeep {
+            depth: MAX_VALUE_DEPTH + 1,
+            max: MAX_VALUE_DEPTH,
+        }]
+    );
+
+    // Exactly at the limit is accepted: an off-by-one here would silently cost
+    // a whole level of nesting.
+    let mut at_limit = Ty::Int;
+    for _ in 0..MAX_VALUE_DEPTH {
+        at_limit = at_limit.list();
+    }
+    assert!(check_depth(&at_limit, &[], &[]).is_empty());
+}
+
+#[test]
+fn dynamic_contributes_nothing_to_the_declared_depth() {
+    // It cannot contribute anything honest: what a guest put there is not a
+    // property of the schema. The store bounds it per write instead.
+    assert_eq!(Schema::of::<Value>().expect("valid").depth(), 0);
+    assert_eq!(Schema::of::<Vec<Value>>().expect("valid").depth(), 1);
+}
+
+// --- Rendering ---
+
+#[test]
+fn the_render_is_byte_stable_across_repeated_builds() {
+    let first = Schema::of::<Root>().expect("valid").render();
+    let second = Schema::of::<Root>().expect("valid").render();
+    assert_eq!(first, second);
+}
+
+#[test]
+fn the_render_ends_with_exactly_one_newline() {
+    let rendered = Schema::of::<Root>().expect("valid").render();
+    assert!(rendered.ends_with("}\n"));
+    assert!(!rendered.ends_with("\n\n"));
+}
+
+#[test]
+fn the_whole_document_is_pinned() {
+    // A golden, inline. Increment 4 reads this format with an independent
+    // `serde_json` reader, so any drift here is a contract change and should
+    // read as one in a diff.
+    let rendered = Schema::of::<Root>().expect("valid").render();
+    assert_eq!(
+        rendered,
+        r#"{
+  "root": {"kind": "named", "name": "Root"},
+  "types": [
+    {
+      "fields": [
+        {"key": "zoom", "type": {"kind": "float"}}
+      ],
+      "name": "Leaf"
+    },
+    {
+      "fields": [
+        {"key": "counter", "type": {"kind": "int"}},
+        {"key": "leaf", "type": {"kind": "named", "name": "Leaf"}},
+        {"key": "leaves", "type": {"kind": "list", "of": {"kind": "named", "name": "Leaf"}}}
+      ],
+      "name": "Root"
+    }
+  ],
+  "version": 1
+}
+"#
+    );
+}
+
+#[test]
+fn a_schema_with_no_types_renders_an_empty_array() {
+    assert_eq!(
+        Schema::of::<i64>().expect("valid").render(),
+        "{\n  \"root\": {\"kind\": \"int\"},\n  \"types\": [],\n  \"version\": 1\n}\n"
+    );
+}
+
+#[test]
+fn a_type_with_no_fields_renders_an_empty_array() {
+    let rendered = Schema::of::<Empty>().expect("valid").render();
+    assert!(rendered.contains("\"fields\": [],"), "{rendered}");
+}
+
+#[test]
+fn every_ty_arm_reaches_the_renderer_through_a_whole_document() {
+    // Guards against an arm whose spelling nobody ever exercised. Each arm is
+    // wrapped in all three containers so the wrappers are exercised against
+    // every leaf rather than only against the one the fixture happens to use.
+    let arms = [
+        (Ty::Bool, "\"bool\""),
+        (Ty::Int, "\"int\""),
+        (Ty::Float, "\"float\""),
+        (Ty::Str, "\"string\""),
+        (Ty::Bytes, "\"bytes\""),
+        (Ty::Dynamic, "\"dynamic\""),
+        (Ty::Named("Leaf".to_string()), "\"named\""),
+    ];
+    for (arm, spelling) in arms {
+        let rendered = Schema {
+            root: arm.list().map().optional(),
+            types: vec![TypeDef {
+                name: "Leaf".to_string(),
+                fields: vec![FieldDef::new("zoom", Ty::Float)],
+            }],
+        }
+        .render();
+        for expected in [spelling, "\"optional\"", "\"map\"", "\"list\""] {
+            assert!(
+                rendered.contains(expected),
+                "{expected} missing: {rendered}"
+            );
+        }
+    }
+}

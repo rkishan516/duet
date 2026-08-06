@@ -1,0 +1,17 @@
+[package]
+name = "duet-schema"
+description = "The SharedState contract, schema model, and typed store API for Duet"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# `Schema::render` is a HAND-ROLLED JSON writer, so this crate deliberately does
+# not depend on `serde_json`. `crates/duet-codegen` (increment 4) reads the
+# schema back with a `serde_json` reader; an independent writer and reader make
+# a round-trip across the two a genuine cross-check rather than a tautology, and
+# that is only true while nothing here shares code with the reader.
+[dependencies]
+duet-core = { path = "../duet-core" }
+duet-runtime = { path = "../duet-runtime" }
