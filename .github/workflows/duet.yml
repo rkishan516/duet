@@ -187,3 +187,80 @@ jobs:
       - name: Test
         run: npm test
         working-directory: packages/duet-js
+
+  # The generated clients against the REAL host, in the one job that has a Rust
+  # toolchain and both guest runtimes at once.
+  #
+  # # Why this job exists separately from `dart` and `node`
+  #
+  # `crates/duet-host-stdio` wraps `duet_protocol::handle_text` in a process
+  # speaking newline-delimited JSON, so the whole host conversation runs on
+  # ubuntu with no window server, no Flutter engine and no webview — which is
+  # exactly why `duet-backend-macos` cannot be built here and this can.
+  #
+  # The `dart` and `node` jobs above have no Rust toolchain, so
+  # `packages/duet/test/live_host_test.dart` and
+  # `packages/duet-js/test/live-host.test.ts` **skip** there, loudly, naming the
+  # build command. That skip is the reason for this job: without it the
+  # live-host suites would be skipped everywhere and CI would stay green having
+  # run none of them.
+  #
+  # `DUET_HOST_STDIO` is set explicitly rather than relying on the default
+  # `target/debug` lookup. Both suites treat an override that names a missing
+  # file as a **failure** rather than a skip, so a broken build path here fails
+  # this job instead of silently emptying it.
+  #
+  # # What it covers that nothing else does
+  #
+  # Everything that is a property of `duet-core`'s write rules rather than of a
+  # value: whether a generated path resolves on a real store, whether a `set` at
+  # it is accepted or refused and with exactly which message, whether a
+  # subscription pushes the value that was written, and the three measured
+  # `Option<Struct>` behaviours. Both guest packages otherwise drive their
+  # generated clients against fake hosts transcribed by hand from
+  # `crates/duet-core/src/value.rs`, and a transcription can be faithfully
+  # wrong — the first run of this job found that it was, in the refusal message
+  # a guest sees for a rejected write.
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: dart-lang/setup-dart@v1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: packages/duet-js/package-lock.json
+      - name: Build the stdio host
+        run: cargo build -p duet-host-stdio --locked
+      - name: Assert the host runs and is seeded from its schema
+        # A smoke test before either guest suite, so "the binary is broken"
+        # fails here with the host's own diagnostic rather than as a timeout
+        # inside a test runner.
+        run: |
+          set -euo pipefail
+          reply="$(printf '%s\n' '{"kind":"get","id":"1","path":"editor.zoom"}' \
+            | ./target/debug/duet-host-stdio app)"
+          printf '%s\n' "$reply"
+          expected='{"id":"1","kind":"value","value":{"t":"f","v":0.0}}'
+          if [ "$reply" != "$expected" ]; then
+            echo "::error::the stdio host answered $reply, expected $expected"
+            exit 1
+          fi
+      - name: Resolve the Dart package
+        run: dart pub get
+        working-directory: packages/duet
+      - name: Dart against the real host
+        run: dart test
+        working-directory: packages/duet
+        env:
+          DUET_HOST_STDIO: ${{ github.workspace }}/target/debug/duet-host-stdio
+      - name: Install the TypeScript package
+        run: npm ci
+        working-directory: packages/duet-js
+      - name: TypeScript against the real host
+        run: npm test
+        working-directory: packages/duet-js
+        env:
+          DUET_HOST_STDIO: ${{ github.workspace }}/target/debug/duet-host-stdio
