@@ -5,6 +5,39 @@
 /// Phase 4's codegen will generate a typed client over this same protocol; this
 /// is the hand-written floor that proves the transport works.
 ///
+/// # This is not the client a real app uses
+///
+/// There are two JavaScript implementations of this wire format in the
+/// repository, and the split is deliberate:
+///
+/// - **This constant** is the *default page* a `WebviewSurface` boots with when
+///   the embedder supplies no HTML of its own. It exists so the transport can
+///   be exercised end to end with nothing installed, and so the macOS examples
+///   have a guest to drive. It deliberately does **not** encode
+///   `duet_core::Value` for you — `set` takes an already-tagged object.
+/// - **`packages/duet-js`** (published as `duet-protocol` on npm) is the full
+///   typed client, with the value codec, the envelope codec, path parsing, a
+///   `bigint` integer domain and a bounded-depth JSON decoder. That is what a
+///   real webview app installs.
+///
+/// Building this constant *from* that package was considered and rejected. It
+/// would make every `cargo build` depend on a committed bundler artifact —
+/// meaning a Rust-only contributor could not change this page, and a stale
+/// artifact would be caught only by a CI job that needs Node. It would also
+/// replace a readable 130-line script, debuggable as-is in the webview
+/// inspector, with a minified blob, and would force the examples onto the npm
+/// package's `bigint`/`Map` API for no gain at this layer.
+///
+/// The cost of keeping them separate is **drift**, and the tests below can only
+/// assert that substrings are present, because a Rust test cannot execute
+/// JavaScript. `packages/duet-js/test/bootstrap-parity.test.ts` closes that gap:
+/// it reads the script out of *this file*, runs it in a `node:vm` sandbox, and
+/// checks it against `corpus/wire-corpus.json` — the same golden corpus every
+/// other implementation is checked against — for the subset this script can
+/// reach: the float sentinels, the code-point key comparator, canonical request
+/// ids, and the response hook. The `the_parity_suite_that_executes_this_script_exists`
+/// test below keeps that file from being deleted without this side noticing.
+///
 /// # Three encoding rules a JavaScript guest must not get wrong
 ///
 /// This client does **not** encode `duet_core::Value` for you: `set` takes an
@@ -300,6 +333,37 @@ mod tests {
              \"\u{FFFD}\":{\"t\":\"n\"},\
              \"\u{1F600}\":{\"t\":\"n\"}}}",
             "the order __duet.map must reproduce: E000, FFFD, 1F600"
+        );
+    }
+
+    #[test]
+    fn the_parity_suite_that_executes_this_script_exists() {
+        // Every other test in this module can only grep a string constant,
+        // because a Rust test cannot run JavaScript. The one suite that
+        // actually *executes* this script — against the same golden corpus the
+        // Rust and Dart implementations are checked against — lives in the npm
+        // package, so nothing on this side would notice it being deleted. This
+        // test is that notice.
+        //
+        // Asserted on content, not merely existence: an empty file at the right
+        // path would pass a `Path::exists` check while proving nothing.
+        let parity = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/duet-js/test/bootstrap-parity.test.ts");
+        let source = std::fs::read_to_string(&parity).unwrap_or_else(|e| {
+            panic!(
+                "cannot read {}: {e}\n\nBOOTSTRAP_HTML is one of two JavaScript \
+                 implementations of this wire format. That suite is what keeps them \
+                 from drifting apart; do not remove it without replacing the check.",
+                parity.display()
+            )
+        });
+        assert!(
+            source.contains("bootstrap.rs"),
+            "the parity suite must load the script out of this file, not from a copy"
+        );
+        assert!(
+            source.contains("wire-corpus.json"),
+            "the parity suite must check the bootstrap against the golden corpus"
         );
     }
 
