@@ -127,6 +127,25 @@ export const duetBytesCodec: DuetCodec<Uint8Array> = {
 };
 
 /**
+ * A codec for a value of no fixed type, mirroring Rust's `duet_core::Value` and
+ * the schema's `dynamic`.
+ *
+ * The identity: it accepts every {@link DuetValue} and refuses none, so a
+ * `dynamic` field never reports a mismatch. That is the definition of the arm —
+ * the schema says nothing about what is there, so nothing about what is there
+ * can contradict it.
+ *
+ * A `'null'` value included. A required `dynamic` holding a null reads as
+ * present, not as none: the field is not an option, and the null is the value
+ * some guest actually wrote.
+ */
+export const duetDynamicCodec: DuetCodec<DuetValue> = {
+  name: 'dynamic',
+  encode: (value) => value,
+  decode: (value) => value,
+};
+
+/**
  * A codec for a homogeneous list, mirroring Rust's `Vec<T>` and `Value::List`.
  *
  * Refuses the whole list if any element is refused, rather than dropping the bad

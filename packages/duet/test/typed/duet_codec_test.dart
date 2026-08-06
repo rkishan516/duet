@@ -49,6 +49,41 @@ void main() {
       expect(duetIntCodec.decode(const DuetNull()), isNull);
     });
 
+    test('the dynamic codec is the identity and refuses nothing', () {
+      // The schema's `dynamic` arm says nothing about what is at the path, so
+      // nothing at the path can contradict it. A generated `dynamic` field
+      // therefore never reports a mismatch — which is the arm's definition
+      // rather than a weakening of it.
+      for (final DuetValue value in <DuetValue>[
+        const DuetNull(),
+        const DuetBool(true),
+        const DuetInt(7),
+        const DuetFloat(1.5),
+        const DuetStr('a'),
+        const DuetBytes(<int>[1]),
+        const DuetList(<DuetValue>[DuetInt(1)]),
+        DuetMap(<String, DuetValue>{'a': const DuetInt(1)}),
+      ]) {
+        expect(duetDynamicCodec.encode(value), value);
+        expect(duetDynamicCodec.decode(value), value);
+      }
+      expect(duetDynamicCodec.name, 'dynamic');
+    });
+
+    test('a required dynamic holding a null is present, not none', () {
+      // The distinction a `DuetOptionalField` exists to make does not apply
+      // here: a `dynamic` field is not an option, so a null someone wrote is
+      // the value, not the absence of one.
+      expect(
+        duetRequiredReading<DuetValue>(duetDynamicCodec, const DuetNull()),
+        const DuetPresent<DuetValue>(DuetNull()),
+      );
+      expect(
+        duetRequiredReading<DuetValue>(duetDynamicCodec, null),
+        const DuetAbsent<DuetValue>(),
+      );
+    });
+
     test('an integer is not silently widened to a double, or the reverse', () {
       // `Value::Int` and `Value::Float` are distinct host types. A codec that
       // accepted one for the other would let a guest write an `i64` where the

@@ -24,6 +24,7 @@ import {
   duetAbsent,
   duetBoolCodec,
   duetBytesCodec,
+  duetDynamicCodec,
   duetFloatCodec,
   duetIntCodec,
   duetListCodec,
@@ -63,6 +64,39 @@ describe('primitive codecs round-trip', () => {
     assert.equal(duetStringCodec.decode(duetBytes(new Uint8Array([1]))), null);
     assert.equal(duetBytesCodec.decode(duetStr('a')), null);
     assert.equal(duetIntCodec.decode(duetNull()), null);
+  });
+
+  test('the dynamic codec is the identity and refuses nothing', () => {
+    // The schema's `dynamic` arm says nothing about what is at the path, so
+    // nothing at the path can contradict it. A generated `dynamic` field
+    // therefore never reports a mismatch — which is the arm's definition rather
+    // than a weakening of it.
+    const values: DuetValue[] = [
+      duetNull(),
+      duetBool(true),
+      duetInt(7n),
+      duetFloat(1.5),
+      duetStr('a'),
+      duetBytes(new Uint8Array([1])),
+      duetList([duetInt(1n)]),
+      duetMap(new Map([['a', duetInt(1n)]])),
+    ];
+    for (const value of values) {
+      assert.equal(duetDynamicCodec.encode(value), value);
+      assert.equal(duetDynamicCodec.decode(value), value);
+    }
+    assert.equal(duetDynamicCodec.name, 'dynamic');
+  });
+
+  test('a required dynamic holding a null is present, not none', () => {
+    // The distinction a `DuetOptionalField` exists to make does not apply here:
+    // a `dynamic` field is not an option, so a null someone wrote is the value,
+    // not the absence of one.
+    assert.deepStrictEqual(
+      duetRequiredReading(duetDynamicCodec, duetNull()),
+      duetPresent(duetNull()),
+    );
+    assert.deepStrictEqual(duetRequiredReading(duetDynamicCodec, null), duetAbsent());
   });
 
   test('an integer is not silently widened to a double, or the reverse', () => {

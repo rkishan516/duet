@@ -72,6 +72,19 @@ const DuetCodec<String> duetStringCodec = _StringCodec();
 /// the wire tags them apart, and so does this.
 const DuetCodec<List<int>> duetBytesCodec = _BytesCodec();
 
+/// A codec for a value of no fixed type, mirroring Rust's `duet_core::Value`
+/// and the schema's `dynamic`.
+///
+/// The identity: it accepts every [DuetValue] and refuses none, so a `dynamic`
+/// field never reports a mismatch. That is the definition of the arm — the
+/// schema says nothing about what is there, so nothing about what is there can
+/// contradict it.
+///
+/// [DuetNull] included. A required `dynamic` holding a null reads as
+/// `DuetPresent(DuetNull())`, not [DuetNone]: the field is not an option, and
+/// the null is the value some guest actually wrote.
+const DuetCodec<DuetValue> duetDynamicCodec = _DynamicCodec();
+
 /// A codec for a homogeneous list, mirroring Rust's `Vec<T>` and `Value::List`.
 ///
 /// Refuses the whole list if any element is refused, rather than dropping the
@@ -150,6 +163,19 @@ final class _BytesCodec implements DuetCodec<List<int>> {
 
   @override
   List<int>? decode(DuetValue value) => value is DuetBytes ? value.value : null;
+}
+
+final class _DynamicCodec implements DuetCodec<DuetValue> {
+  const _DynamicCodec();
+
+  @override
+  String get name => 'dynamic';
+
+  @override
+  DuetValue encode(DuetValue value) => value;
+
+  @override
+  DuetValue? decode(DuetValue value) => value;
 }
 
 final class _ListCodec<T extends Object> implements DuetCodec<List<T>> {
