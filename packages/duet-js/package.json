@@ -1,6 +1,6 @@
 {
   "name": "duet-protocol",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "The Duet wire protocol in TypeScript: a tagged-JSON value codec, a message envelope codec, and a guest client that speaks it over any text transport.",
   "keywords": [
     "duet",
@@ -28,6 +28,10 @@
     "./wry": {
       "types": "./dist/wry.d.ts",
       "default": "./dist/wry.js"
+    },
+    "./typed": {
+      "types": "./dist/typed/index.d.ts",
+      "default": "./dist/typed/index.js"
     }
   },
   "files": [
@@ -42,7 +46,7 @@
   "scripts": {
     "build": "tsc --build --force",
     "typecheck": "tsc -p tsconfig.test.json",
-    "test": "npm run typecheck && node --test test/*.test.ts",
+    "test": "npm run typecheck && node --test test/*.test.ts test/typed/*.test.ts",
     "prepublishOnly": "npm run build && npm test"
   },
   "devDependencies": {

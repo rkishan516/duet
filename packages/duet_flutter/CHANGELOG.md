@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1
+
+- Widen the `duet` constraint to `>=0.1.0 <0.3.0`. `duet` 0.2.0 adds the typed
+  runtime as a separate library; nothing in this binding changes, and it works
+  against either version.
+
 ## 0.1.0
 
 First release. Extracted from the `duet_guest` Flutter fixture, which is now a

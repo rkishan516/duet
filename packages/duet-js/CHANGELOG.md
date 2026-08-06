@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.2.0
+
+The typed runtime, behind a new `duet-protocol/typed` entry point. Additive:
+the package root and `duet-protocol/wry` are unchanged, and a guest that only
+speaks the wire pays nothing for a layer it does not import. Still zero runtime
+dependencies.
+
+- `duetValueAt` and `duetValueWith` — read and functionally update a value at a
+  path. Both iterative and both total: a locally built tree far past the wire's
+  depth limit is handled rather than throwing `RangeError: Maximum call stack
+  size exceeded`.
+- `duetMergeMirror` — the three-case merge of one host patch into one watcher's
+  mirror. A patch may name a path *at*, *below* or *above* the watched one,
+  because `Store::set` always sends the path that was written. Kept a pure
+  function so it is testable without a client.
+- `DuetCodec<T extends {}>` — the seam between a TypeScript type and a
+  `DuetValue`. The non-nullable bound is load-bearing: it is what lets `decode`
+  answer `null` for "refused" without colliding with "decoded to null".
+- `DuetReading` with four arms — `present`, `none`, `absent` and `mismatch`. A
+  type mismatch is a first-class outcome, not an exception, because another
+  guest may write any type to any path and a push has no call stack to throw
+  into.
+- `DuetRouter` — one owner of the client's push slot, id-keyed routing, a
+  bounded early-arrival buffer, a refetch when a patch cannot be merged
+  locally, and a resync when a value will not decode.
+- `DuetField<T>` and `DuetOptionalField<T>` — typed `get`/`set`/`watch` at one
+  fixed path, keeping `None` and "no such path" apart end to end.
+
 ## 0.1.0
 
 First release. The TypeScript peer of `packages/duet` (Dart) and the

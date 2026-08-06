@@ -15,6 +15,7 @@ protocol. This package is the Dart half of that protocol.
 | Paths | `DuetPath`, `DuetSegment` | `duet_core::Path` |
 | Envelope | `DuetRequest`, `DuetResponse`, `DuetPush` | `duet-protocol` |
 | Client | `DuetClient`, `DuetTransport` | `window.__duet` in `duet-webview` |
+| Typed runtime | `DuetField`, `DuetRouter`, `DuetCodec` … | (`package:duet/typed.dart`) |
 
 ## Using it
 
@@ -52,6 +53,55 @@ cannot be *loaded* under `dart test` — importing it is a compile error
 the transport abstracted, the entire wire format is exercised by the plain Dart
 SDK, so conformance runs in CI in seconds instead of needing a full Flutter
 install.
+
+## The typed runtime
+
+A second, optional library — `package:duet/typed.dart` — turns the untyped
+value tree into typed fields with a local mirror that stays correct while
+another guest writes the same store:
+
+```dart
+import 'package:duet/duet.dart';
+import 'package:duet/typed.dart';
+
+final DuetRouter router = DuetRouter(DuetClient(myTransport))..attach();
+final DuetField<double> zoom = DuetField(router, 'editor.zoom', duetFloatCodec);
+
+final DuetWatch<double> watch = await zoom.watch((DuetReading<double> r) {
+  switch (r) {
+    case DuetPresent<double>(:final double value): repaint(value);
+    case DuetNone<double>():     // the path holds Value::Null
+    case DuetAbsent<double>():   // there is no node at the path
+    case DuetMismatch<double>(:final DuetValue found): report(found);
+  }
+});
+```
+
+Four things it is worth knowing before reading the code:
+
+**A type mismatch is a reading, not an exception.** Another guest can write any
+value to any path — the repository's two-guest proof has a webview and a Flutter
+engine writing one store simultaneously — so a typed watcher *will* meet a value
+its codec refuses. It arrives through a push, where there is no call stack to
+throw into, so `get` reports it the same way `watch` does.
+
+**`None` and "no such path" stay apart.** Rust's `Option<T>` lowers `None` to
+`Value::Null`, which is a value that exists. A path with no node at all is a
+different thing, and `DuetOptionalField` reports `DuetNone` for the first and
+`DuetAbsent` for the second. Measured on the host, with `Option<Editor> = None`,
+a child path behaves three different ways at once: `get` answers null,
+`subscribe` succeeds, and `set` **fails**. The typed layer surfaces all three
+rather than papering over them.
+
+**`DuetCodec<T extends Object>`'s bound is not stylistic.** `decode` answers
+`null` for "refused"; a nullable `T` would make that indistinguishable from
+"decoded, and the answer is null" — collapsing the very distinction the layer
+above is built on.
+
+**One router owns the push slot.** `DuetClient.onPush` is a single mutable slot,
+so a second owner silently steals the first one's notifications, and the symptom
+is a watcher that just stops updating. `DuetRouter.attach` refuses to install
+itself over an existing owner.
 
 ## Conformance
 
