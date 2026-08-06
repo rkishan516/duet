@@ -21,6 +21,7 @@ protocol. This package is the JavaScript half of that protocol.
 | Envelope | `DuetRequest`, `DuetResponse`, `DuetPush` and their codecs | `duet-protocol` |
 | Client | `DuetClient`, `DuetTransport` | `window.__duet` in `duet-webview` |
 | Webview | `WryTransport`, `connectWryDuet` (from `duet-protocol/wry`) | `crates/duet-webview` |
+| Typed runtime | `DuetField`, `DuetRouter`, `DuetCodec` … (from `duet-protocol/typed`) | (hand-written; Phase 4 generates against it) |
 
 ## Using it
 
@@ -106,6 +107,58 @@ writes the JSON text itself, sorting as it goes. Strings still go through
 `crates/duet-webview/src/bootstrap.rs` documents the integer-like-key problem as
 a caveat its guests must live with. This package does not have that caveat, and
 `test/json.test.ts` pins the difference.
+
+## The typed runtime
+
+A second, optional entry point — `duet-protocol/typed` — turns the untyped value
+tree into typed fields with a local mirror that stays correct while another guest
+writes the same store:
+
+```ts
+import { DuetClient } from 'duet-protocol';
+import { DuetField, DuetRouter, duetFloatCodec } from 'duet-protocol/typed';
+
+const router = new DuetRouter(new DuetClient(transport));
+router.attach();
+
+const zoom = new DuetField(router, 'editor.zoom', duetFloatCodec);
+const watch = await zoom.watch((reading) => {
+  switch (reading.kind) {
+    case 'present':  repaint(reading.value); break;
+    case 'none':     break;  // the path holds Value::Null
+    case 'absent':   break;  // there is no node at the path
+    case 'mismatch': report(reading.found); break;
+  }
+});
+```
+
+Four things it is worth knowing before reading the code:
+
+**A type mismatch is a reading, not an exception.** Another guest can write any
+value to any path — the repository's two-guest proof has a webview and a Flutter
+engine writing one store simultaneously — so a typed watcher *will* meet a value
+its codec refuses. It arrives through a push, where there is no call stack to
+throw into, so `get` reports it the same way `watch` does.
+
+**`None` and "no such path" stay apart.** Rust's `Option<T>` lowers `None` to
+`Value::Null`, which is a value that exists. A path with no node at all is a
+different thing, and `DuetOptionalField` reports `'none'` for the first and
+`'absent'` for the second. Measured on the host, with `Option<Editor> = None`, a
+child path behaves three different ways at once: `get` answers null, `subscribe`
+succeeds, and `set` **fails**. The typed layer surfaces all three rather than
+papering over them.
+
+**`DuetCodec<T extends {}>`'s bound is not stylistic.** `decode` answers `null`
+for "refused"; a nullable `T` would make that indistinguishable from "decoded,
+and the answer is null" — collapsing the very distinction the layer above is
+built on. `test/typed/codec.test.ts` pins it with `@ts-expect-error`, which fails
+the build in *both* directions: if the nullable codec ever compiles, and if the
+directive is ever left dangling.
+
+**One router owns the push slot.** `DuetClient.onPush` is a single mutable slot,
+so a second owner silently steals the first one's notifications, and the symptom
+is a watcher that just stops updating. `DuetRouter.attach` refuses to install
+itself over an existing owner.
 
 ## Conformance
 
