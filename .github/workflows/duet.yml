@@ -29,6 +29,35 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - name: Format
         run: cargo fmt --all -- --check
+      # `duet-core` has NO dependencies, and the whole crate split exists to
+      # keep it that way: everything that needs `serde_json`, a thread, or a
+      # window lives in a crate above it. That guarantee is the reason a third
+      # party can embed the store without inheriting Duet's dependency tree, and
+      # it is the kind of property that erodes by accident — one `serde` derive
+      # added for convenience and it is gone, with nothing failing.
+      #
+      # `cargo tree -p duet-core` prints exactly one line when the crate depends
+      # on nothing:
+      #
+      #     duet-core v0.1.0 (/path/to/crates/duet-core)
+      #
+      # `--edges all` widens this to dev- and build-dependencies too, so a test
+      # helper cannot smuggle one in either. Verified against the real command
+      # before being relied on here.
+      - name: Assert duet-core is dependency-free
+        run: |
+          set -euo pipefail
+          tree="$(cargo tree -p duet-core --all-features --edges all --locked)"
+          printf '%s\n' "$tree"
+          count="$(printf '%s\n' "$tree" | wc -l | tr -d ' ')"
+          if [ "$count" != "1" ]; then
+            echo "::error::duet-core must depend on nothing; cargo tree printed $count entries"
+            exit 1
+          fi
+          case "$tree" in
+            "duet-core v"*) ;;
+            *) echo "::error::unexpected cargo tree output: $tree"; exit 1 ;;
+          esac
       # duet-backend-macos links FlutterMacOS.framework and calls into
       # tao/objc2-app-kit, none of which exist on ubuntu-latest — this
       # runner has no window server and no Flutter toolchain, so the crate

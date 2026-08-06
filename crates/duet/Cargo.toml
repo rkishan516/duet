@@ -1,0 +1,21 @@
+[package]
+name = "duet"
+description = "One Rust type definition, typed clients in Rust, Dart and TypeScript"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# The facade. A user depends on this crate and nothing else; the split into
+# `duet-core`, `duet-runtime` and `duet-schema` is an internal boundary that
+# exists so `duet-core` can stay dependency-free, not a choice a user should
+# have to make.
+#
+# `duet-derive` arrives in increment 6, behind a `derive` feature. It is not
+# declared here yet: a feature that enables nothing is a promise the crate
+# cannot keep, and `--all-features` would advertise it.
+[dependencies]
+duet-core = { path = "../duet-core" }
+duet-runtime = { path = "../duet-runtime" }
+duet-schema = { path = "../duet-schema" }
