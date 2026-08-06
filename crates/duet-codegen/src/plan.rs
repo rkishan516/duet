@@ -262,31 +262,7 @@ fn plan_classes(root: &str, types: &[PlannedType]) -> Result<Vec<PlannedClass>, 
             // unreachable through `Plan::build`; skipping keeps it total.
             continue;
         };
-        let mut accessors = Vec::with_capacity(def.fields.len());
-        for field in &def.fields {
-            let child_path = join(&path, &field.key);
-            validate_path(&child_path, &path, &field.key)?;
-            let nested = match &field.ty.inner {
-                Ty::Named(name) => {
-                    let child_stem = format!("{stem}{}", upper_camel(&field.key));
-                    pending.push(Pending {
-                        stem: child_stem.clone(),
-                        type_name: name.clone(),
-                        path: child_path.clone(),
-                        optional: field.ty.optional,
-                    });
-                    Some(class_name(&child_stem))
-                }
-                _ => None,
-            };
-            accessors.push(PlannedAccessor {
-                key: field.key.clone(),
-                accessor: field.accessor.clone(),
-                path: child_path,
-                ty: field.ty.clone(),
-                nested,
-            });
-        }
+        let accessors = plan_accessors(&stem, &path, def, &mut pending)?;
         classes.push(PlannedClass {
             name: class_name(&stem),
             type_name,
@@ -296,6 +272,42 @@ fn plan_classes(root: &str, types: &[PlannedType]) -> Result<Vec<PlannedClass>, 
         });
     }
     Ok(classes)
+}
+
+/// Names and addresses every field of `def` as reached at `path`, queueing each
+/// struct-typed one for a class of its own.
+fn plan_accessors(
+    stem: &str,
+    path: &str,
+    def: &PlannedType,
+    pending: &mut Vec<Pending>,
+) -> Result<Vec<PlannedAccessor>, EmitError> {
+    let mut accessors = Vec::with_capacity(def.fields.len());
+    for field in &def.fields {
+        let child_path = join(path, &field.key);
+        validate_path(&child_path, path, &field.key)?;
+        let nested = match &field.ty.inner {
+            Ty::Named(name) => {
+                let child_stem = format!("{stem}{}", upper_camel(&field.key));
+                pending.push(Pending {
+                    stem: child_stem.clone(),
+                    type_name: name.clone(),
+                    path: child_path.clone(),
+                    optional: field.ty.optional,
+                });
+                Some(class_name(&child_stem))
+            }
+            _ => None,
+        };
+        accessors.push(PlannedAccessor {
+            key: field.key.clone(),
+            accessor: field.accessor.clone(),
+            path: child_path,
+            ty: field.ty.clone(),
+            nested,
+        });
+    }
+    Ok(accessors)
 }
 
 /// One struct-typed path waiting to be expanded into a class.

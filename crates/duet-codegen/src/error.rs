@@ -220,60 +220,72 @@ pub enum EmitError {
     },
 }
 
-impl fmt::Display for EmitError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl EmitError {
+    /// The message for a rejection that names one field.
+    fn field_message(&self) -> Option<String> {
         match self {
-            EmitError::RootNotNamed { found } => write!(
-                f,
-                "the schema's root is {}, but a generated client needs a named \
-                 struct at the root to take its name and its fields from",
-                truncate(found)
-            ),
-            EmitError::MisplacedOptional { type_name, key } => write!(
-                f,
+            EmitError::MisplacedOptional { type_name, key } => Some(format!(
                 "field \"{}\" of type \"{}\" puts an optional inside a container \
                  or inside another optional; a codec's type argument is \
                  non-nullable, so lift the option to the field itself",
                 truncate(key),
                 truncate(type_name)
-            ),
+            )),
             EmitError::UnspellableKey {
                 type_name,
                 key,
                 because,
-            } => write!(
-                f,
+            } => Some(format!(
                 "key \"{}\" on type \"{}\" cannot be a generated accessor: {because}",
                 truncate(key),
                 truncate(type_name)
-            ),
-            EmitError::AccessorCollision {
-                type_name,
-                accessor,
-            } => write!(
-                f,
-                "two fields of type \"{}\" both want the accessor \"{}\"; rename one",
-                truncate(type_name),
-                truncate(accessor)
-            ),
-            EmitError::DeclarationCollision { name } => write!(
-                f,
-                "two generated declarations both want the name \"{}\"; rename the \
-                 schema type that clashes with the accessor class",
-                truncate(name)
-            ),
-            EmitError::TooManyClasses { max } => write!(
-                f,
-                "the schema reaches more than {max} struct-typed paths; \
-                 expanding them all would generate an unbounded amount of source"
-            ),
-            EmitError::UnsupportedType { type_name, key } => write!(
-                f,
+            )),
+            EmitError::UnsupportedType { type_name, key } => Some(format!(
                 "field \"{}\" of type \"{}\" has a schema type this emitter has \
                  no spelling for; the emitter needs updating",
                 truncate(key),
                 truncate(type_name)
+            )),
+            _ => None,
+        }
+    }
+
+    /// The message for a rejection about the schema as a whole.
+    fn schema_message(&self) -> String {
+        match self {
+            EmitError::RootNotNamed { found } => format!(
+                "the schema's root is {}, but a generated client needs a named \
+                 struct at the root to take its name and its fields from",
+                truncate(found)
             ),
+            EmitError::AccessorCollision {
+                type_name,
+                accessor,
+            } => format!(
+                "two fields of type \"{}\" both want the accessor \"{}\"; rename one",
+                truncate(type_name),
+                truncate(accessor)
+            ),
+            EmitError::DeclarationCollision { name } => format!(
+                "two generated declarations both want the name \"{}\"; rename the \
+                 schema type that clashes with the accessor class",
+                truncate(name)
+            ),
+            EmitError::TooManyClasses { max } => format!(
+                "the schema reaches more than {max} struct-typed paths; \
+                 expanding them all would generate an unbounded amount of source"
+            ),
+            // Unreachable: every remaining arm answered `field_message`.
+            other => format!("{other:?}"),
+        }
+    }
+}
+
+impl fmt::Display for EmitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.field_message() {
+            Some(message) => f.write_str(&message),
+            None => f.write_str(&self.schema_message()),
         }
     }
 }
