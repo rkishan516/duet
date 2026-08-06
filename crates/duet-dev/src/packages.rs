@@ -62,9 +62,9 @@ impl PackageConfig {
             what: "valid JSON in package_config.json",
             path: path.display().to_string(),
         })?;
-        let base = path.parent().unwrap_or(Path::new("."));
+        let base = absolute(path.parent().unwrap_or(Path::new(".")));
         Ok(PackageConfig {
-            mappings: read_mappings(&json, base),
+            mappings: read_mappings(&json, &base),
         })
     }
 
@@ -73,8 +73,16 @@ impl PackageConfig {
     ///
     /// The longest matching `lib` directory wins, so a package nested inside
     /// another package's tree resolves to the inner one.
+    ///
+    /// A relative `file` is resolved against the process's working directory
+    /// first, exactly as the package roots were. Without that, a caller that
+    /// read a relative `package_config.json` but hands over an absolute file
+    /// path — which is what a directory walk naturally produces — would match
+    /// nothing and silently fall back to `file://` for its entire project.
+    /// That fallback still compiles, which is precisely why it needs to be
+    /// prevented rather than noticed.
     pub fn uri_for(&self, file: &Path) -> String {
-        let file = normalise(file);
+        let file = absolute(file);
         let best = self
             .mappings
             .iter()
@@ -146,6 +154,28 @@ fn resolve(base: &Path, root_uri: &str) -> PathBuf {
     match root_uri.strip_prefix("file://") {
         Some(absolute) => PathBuf::from(absolute),
         None => base.join(root_uri),
+    }
+}
+
+/// Makes `path` absolute against the working directory, then normalises it.
+///
+/// Everything this type compares — package roots and candidate files — goes
+/// through here, so the two can never be in different forms. That is the whole
+/// point: mixing a relative root with an absolute file is the failure that
+/// silently degrades every URI to `file://`.
+///
+/// Deliberately not `canonicalize`: this must work for a path that does not
+/// exist yet, and resolving symlinks would make a project reached through one
+/// stop matching the paths a caller reports.
+fn absolute(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        return normalise(path);
+    }
+    match std::env::current_dir() {
+        Ok(cwd) => normalise(&cwd.join(path)),
+        // No working directory is a strange enough state that the lexical
+        // form is the best available answer, and still better than failing.
+        Err(_) => normalise(path),
     }
 }
 

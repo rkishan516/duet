@@ -224,3 +224,63 @@ fn the_default_config_maps_nothing_and_is_harmless() {
             .starts_with("file://")
     );
 }
+
+#[test]
+fn a_relative_config_and_an_absolute_file_still_match() {
+    // The failure this exists to prevent, and it is a silent one: a caller
+    // that reads `fixtures/app/.dart_tool/package_config.json` but walks the
+    // tree into absolute paths — which is what a directory walk naturally
+    // produces — would match nothing and degrade every URI to `file://`. That
+    // still compiles, so nothing would ever report it; the only symptom is
+    // that library identity no longer matches the running program's kernel.
+    let project = scratch("mixedforms");
+    let config = write_config(&project, &[("mixed", "../", "lib/")]);
+
+    // Re-derive the config path as a *relative* one, as a caller working from
+    // the repository root would have it.
+    let cwd = std::env::current_dir().expect("a working directory");
+    let relative = pathdiff(&cwd, &config);
+    let packages = PackageConfig::read(&relative).expect("a relative config path should read");
+
+    // And hand it an absolute file.
+    assert_eq!(
+        packages.uri_for(&project.join("lib/main.dart")),
+        "package:mixed/main.dart",
+        "an absolute file must match a relatively-read config"
+    );
+    let _ = std::fs::remove_dir_all(&project);
+}
+
+#[test]
+fn a_relative_file_matches_an_absolutely_read_config() {
+    // The mirror image, so the normalisation is symmetric rather than
+    // accidentally working in one direction.
+    let project = scratch("relfile");
+    let config = write_config(&project, &[("rel", "../", "lib/")]);
+    let packages = PackageConfig::read(&config).expect("read");
+
+    let cwd = std::env::current_dir().expect("a working directory");
+    let relative_file = pathdiff(&cwd, &project.join("lib/thing.dart"));
+    assert_eq!(
+        packages.uri_for(&relative_file),
+        "package:rel/thing.dart",
+        "a relative file must match an absolutely-read config"
+    );
+    let _ = std::fs::remove_dir_all(&project);
+}
+
+/// `target` expressed relative to `base`, for the mixed-form tests.
+///
+/// Only has to handle the shape these tests produce — a temp directory that
+/// shares no prefix with the repository — so it walks up from `base` and then
+/// down, rather than being a general implementation.
+fn pathdiff(base: &Path, target: &Path) -> PathBuf {
+    let mut relative = PathBuf::new();
+    for _ in base.components() {
+        relative.push("..");
+    }
+    for component in target.components().skip(1) {
+        relative.push(component);
+    }
+    relative
+}

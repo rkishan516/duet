@@ -32,6 +32,12 @@ const String kModePath = 'mode';
 /// The [kModePath] value that selects `lib/duet_driver.dart`.
 const String kDuetMode = 'duet';
 
+/// The [kModePath] value that selects `lib/reload_driver.dart`.
+///
+/// The only driver that calls `runApp`, because the only one whose claim is
+/// about a rendered frame rather than about the transport.
+const String kReloadMode = 'reload';
+
 /// How long to wait for the host to register its `duet/rpc` handler before
 /// giving up. There is no readiness signal on the channel: a
 /// `BasicMessageChannel` with no handler on the other side completes with

@@ -432,6 +432,7 @@ version = "0.1.0"
 dependencies = [
  "block2",
  "duet-core",
+ "duet-dev",
  "duet-host",
  "duet-protocol",
  "duet-runtime",
