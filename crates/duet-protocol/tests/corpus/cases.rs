@@ -321,6 +321,7 @@ pub fn reject_cases() -> Vec<RejectCase> {
     let mut all = Vec::new();
     all.extend(reject_id_cases());
     all.extend(reject_value_cases());
+    all.extend(reject_surrogate_cases());
     all.extend(reject_envelope_cases());
     all.extend(reject_parser_cases());
     all
@@ -419,6 +420,64 @@ fn reject_value_cases() -> Vec<RejectCase> {
             Layer::Value,
             r#"{"t":"b","v":"!!!"}"#,
             "bad_base64",
+        ),
+    ]
+}
+
+/// Unpaired UTF-16 surrogates, in every field that carries text.
+///
+/// # Why these are here
+///
+/// A lone surrogate is not a character: it has **no UTF-8 encoding at all**.
+/// `serde_json` refuses `"\ud800"` outright, so a Rust `String` can never hold
+/// one — but Dart and JavaScript strings are sequences of UTF-16 code units and
+/// both `jsonDecode` and `JSON.parse` accept the escape happily (measured on
+/// Dart 3 and Node v24). Encoding the result to UTF-8 then substitutes U+FFFD
+/// **silently**, with no error on either side.
+///
+/// That makes this the worst shape of divergence the corpus can catch: not a
+/// message rejected in one language and accepted in another, but a *value* that
+/// changes on the way across while every layer reports success.
+///
+/// Every text-carrying field gets a case, because the check has to be on the
+/// walk rather than on one field: a decoder that validated `Str` payloads and
+/// not map keys would pass a single-case corpus and still corrupt data.
+fn reject_surrogate_cases() -> Vec<RejectCase> {
+    vec![
+        reject(
+            "value/str/lone_high_surrogate",
+            Layer::Value,
+            r#"{"t":"s","v":"\ud800"}"#,
+            BAD_JSON,
+        ),
+        // The mirrored case: a low surrogate with nothing before it. A scan
+        // that only looked ahead from a high surrogate would miss this one.
+        reject(
+            "value/str/lone_low_surrogate",
+            Layer::Value,
+            r#"{"t":"s","v":"\udc00"}"#,
+            BAD_JSON,
+        ),
+        // A high surrogate followed by an ordinary character, rather than by
+        // the low surrogate that would complete the pair.
+        reject(
+            "value/str/high_surrogate_then_text",
+            Layer::Value,
+            r#"{"t":"s","v":"\ud800a"}"#,
+            BAD_JSON,
+        ),
+        reject(
+            "value/map/lone_surrogate_key",
+            Layer::Value,
+            r#"{"t":"m","v":{"\ud800":{"t":"n"}}}"#,
+            BAD_JSON,
+        ),
+        // In the envelope, not just in a value: `path` is text a guest chooses.
+        reject(
+            "envelope/path/lone_surrogate",
+            Layer::Request,
+            r#"{"kind":"get","id":"1","path":"\ud800"}"#,
+            BAD_JSON,
         ),
     ]
 }

@@ -29,6 +29,35 @@ use duet_core::{Notification, Path, SubscriptionId, Value};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RequestId(pub u64);
 
+impl RequestId {
+    /// The id a [`Response::Failed`] carries when the host could not read the
+    /// id of the request it is refusing.
+    ///
+    /// Not a correlation id: it means *"this reply answers no request you can
+    /// name"*. The host emits it when the message was unparseable, nested past
+    /// the wire's limit, or carried an id outside the canonical spelling or the
+    /// wire's domain — see [`crate::text`]. Guessing an id it cannot trust would
+    /// be worse, because a reply naming an id the guest never sent goes
+    /// unmatched *and* consumes the guest's chance to notice.
+    ///
+    /// # Every guest must handle a reply carrying this
+    ///
+    /// A guest keying pending requests by the id it sent will find nothing for
+    /// this one. Dropping it there leaves that request's promise or completer
+    /// unsettled forever — a hang with no error, which is the failure shape this
+    /// project has now found three times. A guest must surface it instead: see
+    /// `onResponse` in `crates/duet-webview/src/bootstrap.rs` and
+    /// `WryTransport` in `packages/duet-js/src/wry.ts` for the two
+    /// implementations that hold a pending map.
+    ///
+    /// `0` is a legal request id in its own right, and the wire cannot tell the
+    /// two apart. It does not have to: every Duet client allocates ids from 1
+    /// upward precisely so that `0` is never one of its own, which makes an
+    /// unmatched `0` unambiguous *to the guest* even though it is ambiguous on
+    /// the wire.
+    pub const UNCORRELATED: RequestId = RequestId(0);
+}
+
 /// Something a guest asks the host to do.
 ///
 /// The variants mirror `duet_runtime::StoreHandle`'s operations one-for-one.

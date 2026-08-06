@@ -8,8 +8,20 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
-import { decodeValueText, DuetTransportError, duetInt, duetValueEquals, type DuetValue } from '../src/index.ts';
-import { connectWryDuet, stringifyHostMessage, WryTransport, type WryWindow } from '../src/wry.ts';
+import {
+  decodeValueText,
+  DuetTransportError,
+  duetInt,
+  duetValueEquals,
+  type DuetValue,
+} from '../src/index.ts';
+import {
+  connectWryDuet,
+  stringifyHostMessage,
+  UNCORRELATED_ID,
+  WryTransport,
+  type WryWindow,
+} from '../src/wry.ts';
 
 /** A stand-in for the page `wry` injects into. */
 function fakeWindow(): WryWindow & { posted: string[] } {
@@ -18,6 +30,12 @@ function fakeWindow(): WryWindow & { posted: string[] } {
 }
 
 describe('correlation', () => {
+  // `timeout` is the assertion, not decoration: `node --test` applies no
+  // per-test deadline of its own, so a client that never settles this promise
+  // would WEDGE the whole run rather than fail one test. Measured — the
+  // pre-fix bootstrap hung the suite until it was killed by hand.
+  const HANG_TIMEOUT_MS = 5_000;
+
   test('a reply is routed to the call that is waiting for it', async () => {
     const host = fakeWindow();
     const transport = new WryTransport(host);
@@ -30,8 +48,16 @@ describe('correlation', () => {
     ]);
 
     // Out of order, as a host is free to answer.
-    host.__duet?.onResponse({ id: '2', kind: 'value', value: { t: 'i', v: '2' } });
-    host.__duet?.onResponse({ id: '1', kind: 'value', value: { t: 'i', v: '1' } });
+    host.__duet?.onResponse({
+      id: '2',
+      kind: 'value',
+      value: { t: 'i', v: '2' },
+    });
+    host.__duet?.onResponse({
+      id: '1',
+      kind: 'value',
+      value: { t: 'i', v: '1' },
+    });
 
     assert.match((await second) as string, /"v":"2"/);
     assert.match((await first) as string, /"v":"1"/);
@@ -47,6 +73,83 @@ describe('correlation', () => {
     assert.doesNotThrow(() => host.__duet?.onResponse({ id: '9', kind: 'done' }));
     assert.doesNotThrow(() => host.__duet?.onResponse('not an object'));
     assert.doesNotThrow(() => host.__duet?.onResponse(null));
+
+    host.__duet?.onResponse({ id: '1', kind: 'done' });
+    assert.match((await pending) as string, /"kind":"done"/);
+  });
+
+  test(
+    'a reply the host could not correlate settles the call instead of hanging',
+    { timeout: HANG_TIMEOUT_MS },
+    async () => {
+      // THE regression test. `{"kind":"failed","id":"0"}` is the host saying it
+      // could not read the id of the request it is refusing — a lone UTF-16
+      // surrogate does it, and so does nesting past the wire's limit. This map is
+      // keyed by the id the request carried, so "0" matches nothing; the previous
+      // behaviour dropped the reply there and left this promise unsettled
+      // forever, with no error and no timeout.
+      const host = fakeWindow();
+      const transport = new WryTransport(host);
+      const pending = transport.send('{"id":"1","kind":"get","path":"a"}');
+
+      host.__duet?.onResponse({
+        kind: 'failed',
+        id: UNCORRELATED_ID,
+        message: 'malformed JSON: lone leading surrogate in hex escape',
+      });
+
+      await assert.rejects(pending, (error: unknown) => {
+        assert.ok(error instanceof DuetTransportError, 'must be a transport error');
+        // The host's own account of what went wrong has to survive: it is the
+        // only explanation of *why*, and a bare correlation complaint is the
+        // wrong half of the story.
+        assert.match(error.message, /surrogate/);
+        return true;
+      });
+    },
+  );
+
+  test(
+    'every outstanding call is settled, not just the first',
+    { timeout: HANG_TIMEOUT_MS },
+    async () => {
+      // Neither the host nor this transport can say WHICH request the host failed
+      // to read. Rejecting the set that contains it is the only sound superset:
+      // a spurious rejection is visible and retryable, a hang is neither.
+      const host = fakeWindow();
+      const transport = new WryTransport(host);
+      const first = transport.send('{"id":"1","kind":"get","path":"a"}');
+      const second = transport.send('{"id":"2","kind":"get","path":"b"}');
+
+      host.__duet?.onResponse({
+        kind: 'failed',
+        id: UNCORRELATED_ID,
+        message: 'nope',
+      });
+
+      await assert.rejects(first, DuetTransportError);
+      await assert.rejects(second, DuetTransportError);
+    },
+  );
+
+  test('an unmatched id that is NOT the sentinel still leaves pending calls alone', async () => {
+    // A reply to a request this client never sent — a second guest sharing the
+    // page, or a stale reply after a reload. Dropping that one is correct;
+    // failing every in-flight call because of it would not be.
+    const host = fakeWindow();
+    const transport = new WryTransport(host);
+    const pending = transport.send('{"id":"1","kind":"get","path":"a"}');
+
+    host.__duet?.onResponse({
+      kind: 'failed',
+      id: '9',
+      message: 'someone else',
+    });
+    host.__duet?.onResponse({
+      kind: 'value',
+      id: UNCORRELATED_ID,
+      value: null,
+    });
 
     host.__duet?.onResponse({ id: '1', kind: 'done' });
     assert.match((await pending) as string, /"kind":"done"/);
@@ -110,7 +213,11 @@ describe('the installed bridge', () => {
 
     const pending = duet.get('editor.zoom');
     assert.deepStrictEqual(host.posted, ['{"id":"1","kind":"get","path":"editor.zoom"}']);
-    host.__duet?.onResponse({ id: '1', kind: 'value', value: { t: 'i', v: '42' } });
+    host.__duet?.onResponse({
+      id: '1',
+      kind: 'value',
+      value: { t: 'i', v: '42' },
+    });
     assert.ok(duetValueEquals((await pending) as DuetValue, duetInt(42n)));
 
     // And pushes reach the client without a separate `start()` call.

@@ -36,12 +36,6 @@ const String _corpusPath = '../../corpus/wire-corpus.json';
 /// The schema version this file knows how to read.
 const int _schemaVersion = 1;
 
-/// The case counts the corpus must contain.
-///
-/// Pinned as literals on purpose. A corpus test that silently consumes
-/// whatever it is given is worthless: a file truncated to one case would pass
-/// every assertion below and prove nothing. If these numbers need changing,
-/// that is a deliberate review step.
 /// How deep `equals` may recurse when comparing a witness.
 ///
 /// `package:matcher`'s default is 100, and `value/nesting/at_limit` is deeper
@@ -52,8 +46,14 @@ const int _schemaVersion = 1;
 /// divergence. Comfortably above the ceiling, so it can never be what fails.
 const int _matcherRecursionLimit = 4 * maxJsonDepth;
 
+/// The case counts the corpus must contain.
+///
+/// Pinned as literals on purpose. A corpus test that silently consumes
+/// whatever it is given is worthless: a file truncated to one case would pass
+/// every assertion below and prove nothing. If these numbers need changing,
+/// that is a deliberate review step.
 const int _acceptCaseCount = 51;
-const int _rejectCaseCount = 21;
+const int _rejectCaseCount = 26;
 
 void main() {
   final Map<String, Object?> corpus = _loadCorpus();

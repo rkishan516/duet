@@ -79,7 +79,7 @@ const FALLBACK_FAILURE: &str =
 ///
 /// "Readable" means it passes [`duet_codec::parse_wire_id`] — canonically
 /// spelled *and* within the wire's id domain. Anything else is not recovered,
-/// and the failure carries `RequestId(0)` instead.
+/// and the failure carries [`RequestId::UNCORRELATED`] instead.
 ///
 /// Recovering `7` from `"007"` would reintroduce the very mismatch the
 /// canonical rule exists to prevent: the reply would name an id the guest never
@@ -87,7 +87,7 @@ const FALLBACK_FAILURE: &str =
 /// anyway — while this function's whole purpose is to stop exactly that hang.
 /// An id above `duet_codec::MAX_WIRE_ID` is refused for the mirrored reason:
 /// echoing it back would send a Dart guest a number its own `int` cannot parse,
-/// so the "recovery" would fail on arrival. `RequestId(0)` is the honest answer
+/// so the "recovery" would fail on arrival. [`RequestId::UNCORRELATED`] is the honest answer
 /// in both cases: this reply answers no request the guest can name.
 ///
 /// # The depth pre-scan runs before the parser, not after it
@@ -106,13 +106,13 @@ const FALLBACK_FAILURE: &str =
 ///
 /// Over-deep text is reported exactly like any other unparseable input: the id
 /// is *not* recovered, because recovering it would mean parsing the very
-/// document being refused. `RequestId(0)` again means "this reply answers no
+/// document being refused. [`RequestId::UNCORRELATED`] again means "this reply answers no
 /// request you can name" — which a guest must handle, see
 /// `crates/duet-webview/src/bootstrap.rs`.
 fn decode(text: &str) -> Result<crate::Request, (RequestId, String)> {
     if duet_codec::exceeds_max_json_depth(text) {
         return Err((
-            RequestId(0),
+            RequestId::UNCORRELATED,
             format!(
                 "malformed JSON: nests deeper than {} containers",
                 duet_codec::MAX_JSON_DEPTH
@@ -121,14 +121,14 @@ fn decode(text: &str) -> Result<crate::Request, (RequestId, String)> {
     }
     let json: serde_json::Value = match serde_json::from_str(text) {
         Ok(j) => j,
-        Err(e) => return Err((RequestId(0), format!("malformed JSON: {e}"))),
+        Err(e) => return Err((RequestId::UNCORRELATED, format!("malformed JSON: {e}"))),
     };
     let id = json
         .get("id")
         .and_then(|v| v.as_str())
         .and_then(duet_codec::parse_wire_id)
         .map(RequestId)
-        .unwrap_or(RequestId(0));
+        .unwrap_or(RequestId::UNCORRELATED);
 
     crate::decode_request(&json).map_err(|e| (id, e.to_string()))
 }
@@ -264,7 +264,7 @@ mod tests {
         // Recovery exists so a guest can fail one specific call. Recovering
         // `7` from `"007"` would defeat that: the guest keys its pending map
         // by the string it SENT, so a reply carrying `"7"` never matches and
-        // the call hangs anyway — silently. `RequestId(0)` is the honest
+        // the call hangs anyway — silently. `RequestId::UNCORRELATED` is the honest
         // answer: "this reply answers no request you can name".
         let rt = rt();
         for raw in ["007", "+1", "0000000000000000000007", " 1", "1 ", ""] {
@@ -340,7 +340,7 @@ mod tests {
         //
         // The discriminator is the echoed id, not the response kind: a request
         // that got *parsed* has its id recovered, while one refused by the
-        // pre-scan answers `RequestId(0)` because reading its id would mean
+        // pre-scan answers `RequestId::UNCORRELATED` because reading its id would mean
         // parsing the document being refused. That stays true regardless of
         // what the store later decides about a value this deep.
         /// A `set` request whose document nests exactly `containers` JSON

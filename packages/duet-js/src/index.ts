@@ -46,6 +46,7 @@ export {
   compareDuetMapKeys,
   decodeDuetJson,
   encodeDuetJson,
+  hasUnpairedSurrogate,
   isCanonicalSignedDecimal,
   isCanonicalUnsignedDigits,
   jsonTypeName,

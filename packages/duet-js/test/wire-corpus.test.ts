@@ -70,7 +70,7 @@ const GENERATOR = 'cargo test -p duet-protocol --test wire_corpus -- --ignored r
  * deliberate review step.
  */
 const ACCEPT_CASE_COUNT = 51;
-const REJECT_CASE_COUNT = 21;
+const REJECT_CASE_COUNT = 26;
 
 interface AcceptCase {
   readonly layer: string;

@@ -75,8 +75,13 @@ export class WryTransport implements DuetTransport {
   /**
    * Requests awaiting a reply, keyed by the canonical decimal `id` string the
    * request carried — the same spelling the host echoes back.
+   *
+   * Each entry keeps `reject` as well as `resolve`. Without it the only thing
+   * this transport could do with a reply it cannot route is drop it, and a
+   * dropped reply is a promise that never settles — see
+   * {@link WryTransport.handleResponse}'s notes.
    */
-  readonly #pending = new Map<string, (reply: string) => void>();
+  readonly #pending = new Map<string, PendingCall>();
 
   /**
    * @param host the object carrying `ipc` and receiving `__duet`; defaults to
@@ -118,8 +123,8 @@ export class WryTransport implements DuetTransport {
       // `DuetClient` turns it into a DuetTransportError naming the request.
       return Promise.resolve(null);
     }
-    return new Promise<string>((resolve) => {
-      this.#pending.set(id, resolve);
+    return new Promise<string>((resolve, reject) => {
+      this.#pending.set(id, { resolve, reject });
       ipc.postMessage(request);
     });
   }
@@ -127,20 +132,74 @@ export class WryTransport implements DuetTransport {
   /**
    * Routes one response to the call that is waiting for it.
    *
-   * A response whose id matches nothing pending is dropped. That happens for a
-   * reply to a request this client never sent (a second guest sharing the page,
-   * or a host bug), and there is no caller to hand it to.
+   * # A reply that matches nothing pending is not simply dropped
+   *
+   * The host answers `{"kind":"failed","id":"0"}` when it could not read the id
+   * of the request it is refusing — a lone UTF-16 surrogate anywhere in the
+   * message does it, and so does nesting past the wire's limit. See
+   * `RequestId::UNCORRELATED` in crates/duet-protocol/src/message.rs, and note
+   * the host is right not to guess an id it cannot trust.
+   *
+   * This map is keyed by the id the request carried, so `"0"` finds nothing.
+   * Dropping it there leaves that call's promise unsettled forever: no error, no
+   * timeout, no way for the caller to notice — the exact failure shape this
+   * project has already found twice. So every outstanding call is rejected
+   * instead.
+   *
+   * **All of them, deliberately.** Neither the host nor this transport can say
+   * which request the host failed to read; one of the pending calls is now dead
+   * and will never be answered. Rejecting the set that contains it is the only
+   * sound superset, and a spurious rejection is visible and retryable where a
+   * hang is neither. `0` is a legal request id on the wire, but never one this
+   * client sends — {@link DuetClient} counts from 1 — so an unmatched `"0"` is
+   * unambiguous here.
+   *
+   * Any *other* unmatched id is a reply to a request this client never sent — a
+   * second guest sharing the page, or a stale reply after a reload — and
+   * dropping that one is correct: there is no caller to hand it to, and no
+   * reason to think any pending call is affected.
    */
   #handleResponse(response: unknown): void {
     const text = stringifyHostMessage(response);
     const id = readReplyId(response);
     if (id === null) return;
-    const resolve = this.#pending.get(id);
-    if (resolve === undefined) return;
-    this.#pending.delete(id);
-    resolve(text);
+    const waiting = this.#pending.get(id);
+    if (waiting !== undefined) {
+      this.#pending.delete(id);
+      waiting.resolve(text);
+      return;
+    }
+    if (id === UNCORRELATED_ID && readKindField(response) === 'failed') {
+      this.#rejectAllPending(text);
+    }
+  }
+
+  /** Fails every outstanding call, naming the reply that could not be routed. */
+  #rejectAllPending(reply: string): void {
+    const orphaned = [...this.#pending.values()];
+    this.#pending.clear();
+    const error = new DuetTransportError(
+      `the host refused a request it could not correlate, so this call cannot be ` +
+        `matched to a reply: ${reply}`,
+    );
+    for (const call of orphaned) call.reject(error);
   }
 }
+
+/** One outstanding call's settlement functions. */
+interface PendingCall {
+  readonly resolve: (reply: string) => void;
+  readonly reject: (error: Error) => void;
+}
+
+/**
+ * The `id` the host sends when it could not read the id of the request it is
+ * refusing.
+ *
+ * Mirrors `duet_protocol::RequestId::UNCORRELATED`
+ * (crates/duet-protocol/src/message.rs).
+ */
+export const UNCORRELATED_ID = '0';
 
 /**
  * Installs a {@link WryTransport}, wraps it in a started {@link DuetClient},
@@ -226,8 +285,23 @@ function readIdFromText(text: string): string | null {
  * `Object.prototype` can masquerade as a field the peer sent.
  */
 function readIdField(json: unknown): string | null {
+  return readOwnStringField(json, 'id');
+}
+
+/** Reads the `kind` discriminator out of a host reply, text or object. */
+function readKindField(reply: unknown): string | null {
+  if (typeof reply !== 'string') return readOwnStringField(reply, 'kind');
+  try {
+    return readOwnStringField(JSON.parse(reply) as unknown, 'kind');
+  } catch {
+    return null;
+  }
+}
+
+/** Reads an own property that is a string, or `null`. */
+function readOwnStringField(json: unknown, name: string): string | null {
   if (json === null || typeof json !== 'object' || Array.isArray(json)) return null;
-  if (!Object.hasOwn(json, 'id')) return null;
-  const id = (json as { id?: unknown })['id'];
-  return typeof id === 'string' ? id : null;
+  if (!Object.hasOwn(json, name)) return null;
+  const value = (json as Record<string, unknown>)[name];
+  return typeof value === 'string' ? value : null;
 }

@@ -42,6 +42,7 @@ export 'src/duet_json.dart'
         compareDuetMapKeys,
         decodeDuetJson,
         encodeDuetJson,
+        hasUnpairedSurrogate,
         isCanonicalSignedDecimal,
         isCanonicalUnsignedDigits,
         sortedJsonObject;

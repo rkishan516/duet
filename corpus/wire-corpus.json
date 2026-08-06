@@ -1131,6 +1131,36 @@
       "wire": "{\"t\":\"b\",\"v\":\"!!!\"}"
     },
     {
+      "layer": "value",
+      "name": "value/str/lone_high_surrogate",
+      "reason": "bad_json",
+      "wire": "{\"t\":\"s\",\"v\":\"\\ud800\"}"
+    },
+    {
+      "layer": "value",
+      "name": "value/str/lone_low_surrogate",
+      "reason": "bad_json",
+      "wire": "{\"t\":\"s\",\"v\":\"\\udc00\"}"
+    },
+    {
+      "layer": "value",
+      "name": "value/str/high_surrogate_then_text",
+      "reason": "bad_json",
+      "wire": "{\"t\":\"s\",\"v\":\"\\ud800a\"}"
+    },
+    {
+      "layer": "value",
+      "name": "value/map/lone_surrogate_key",
+      "reason": "bad_json",
+      "wire": "{\"t\":\"m\",\"v\":{\"\\ud800\":{\"t\":\"n\"}}}"
+    },
+    {
+      "layer": "request",
+      "name": "envelope/path/lone_surrogate",
+      "reason": "bad_json",
+      "wire": "{\"kind\":\"get\",\"id\":\"1\",\"path\":\"\\ud800\"}"
+    },
+    {
       "layer": "request",
       "name": "envelope/kind/unknown",
       "reason": "unknown_tag",
