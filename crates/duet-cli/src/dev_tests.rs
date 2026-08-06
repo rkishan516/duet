@@ -556,3 +556,70 @@ fn an_empty_host_command_is_refused_rather_than_spawned() {
     };
     assert_eq!(e.stage(), Stage::LocateVmService);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_host_that_announces_and_then_exits_is_blamed_rather_than_the_network() {
+    // The failure this rewrite exists for, and it is not exotic: a host that
+    // announces its VM service and then finishes before the driver's baseline
+    // compile does produces `Connection refused`, which points at the network
+    // when the cause is a host that was never going to stay up. This crate's
+    // own `flutter_state` example finishes in about a second and a half.
+    let (mut session, _lines) = spawn_host(&[
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "exit 7".to_string(),
+    ])
+    .expect("the host should start");
+
+    // Wait for it to be reapable, so the rewrite has something to observe.
+    for _ in 0..200 {
+        if matches!(session.child.try_wait(), Ok(Some(_))) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let original = DevError::Io {
+        stage: Stage::Connect,
+        doing: "connecting to the Dart VM service",
+        source: std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "Connection refused"),
+    };
+    let rewritten = blame_the_host_if_it_died(&mut session, original);
+    assert_eq!(
+        rewritten.stage(),
+        Stage::Connect,
+        "the stage is preserved — it is still where the failure surfaced"
+    );
+    let text = rewritten.to_string();
+    assert!(text.contains("exited"), "got {text}");
+    assert!(
+        text.contains("stays up"),
+        "the advice belongs in it: {text}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_host_that_is_still_alive_keeps_its_original_error() {
+    // A live host refusing connections is a different problem, and rewriting
+    // it would replace a true message with a false one.
+    let (mut session, _lines) = spawn_host(&[
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "sleep 30".to_string(),
+    ])
+    .expect("the host should start");
+
+    let rewritten = blame_the_host_if_it_died(
+        &mut session,
+        DevError::Timeout {
+            stage: Stage::FindIsolate,
+            after: Duration::from_secs(1),
+        },
+    );
+    assert!(
+        matches!(rewritten, DevError::Timeout { .. }),
+        "a live host must not be blamed: {rewritten:?}"
+    );
+}

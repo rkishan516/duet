@@ -150,7 +150,8 @@ fn start(request: &Dev, out: &mut dyn Write, err: &mut dyn Write) -> Result<u8, 
         entrypoint,
         vm_service,
         timeouts: Timeouts::default(),
-    })?;
+    })
+    .map_err(|e| blame_the_host_if_it_died(&mut session, e))?;
     report_compile(&started.baseline, out, err);
     let mut driver = started.driver;
     let _ = writeln!(
@@ -373,6 +374,32 @@ fn report_compile(baseline: &CompileOutcome, out: &mut dyn Write, err: &mut dyn 
 /// Milliseconds, rounded, for a progress line.
 fn millis(duration: Duration) -> u128 {
     duration.as_millis()
+}
+
+/// Rewrites a startup failure as "the host exited" when that is what happened.
+///
+/// A host that announces its VM service and then exits before the driver
+/// finishes its baseline compile — which takes seconds — produces
+/// `Connection refused` from the connect stage. That message is *true* and
+/// almost useless: it points at the network, and the actual cause is a host
+/// that was never going to stay running. Short-lived hosts are not exotic;
+/// this crate's own `flutter_state` example finishes its whole sequence in
+/// about a second and a half.
+///
+/// Only rewrites when the child has genuinely been reaped. A host that is
+/// still alive and refusing connections is a different problem and keeps its
+/// original error.
+fn blame_the_host_if_it_died(session: &mut Session, original: DevError) -> DevError {
+    let Ok(Some(status)) = session.child.try_wait() else {
+        return original;
+    };
+    DevError::NotFound {
+        stage: original.stage(),
+        what: "a running host (it announced its VM service and then exited, \
+               before the driver had finished starting; `duet dev` needs a host \
+               that stays up)",
+        path: format!("exited with {status}"),
+    }
 }
 
 /// Picks the Flutter SDK: the flag if given, else `FLUTTER_ROOT`.
