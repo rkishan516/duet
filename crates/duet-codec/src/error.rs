@@ -1,19 +1,20 @@
 //! Errors produced when encoding or decoding the wire format.
 
-/// How much guest-supplied text to include in a `Display` message.
+/// Bounds guest-supplied text before it reaches a `Display` message.
 ///
 /// This crate decodes untrusted input, so an unbounded echo would let a guest
 /// turn a 1 MB payload into a 1 MB log line. `Debug` and the struct fields keep
 /// the full value.
-const MAX_ECHO_CHARS: usize = 48;
-
+///
+/// Delegates to [`duet_core::truncated`] rather than reimplementing it. This
+/// crate carried its own four-line copy until the same bound was needed a third
+/// time, in `duet-command`; three transcriptions of one rule is two too many,
+/// and the copy here differed from `duet-core`'s in *how* it allocated — it
+/// built the whole string before trimming it, so bounding a 1 MB tag
+/// transiently cost 1 MB, which is most of what the bound exists to prevent.
+/// `duet-core` is dependency-free, so delegating downwards costs no new edge.
 fn truncated(s: &str) -> String {
-    let shown: String = s.chars().take(MAX_ECHO_CHARS).collect();
-    if shown.chars().count() < s.chars().count() {
-        format!("{shown}…")
-    } else {
-        shown
-    }
+    duet_core::truncated(&s)
 }
 
 /// Why a payload could not be encoded or decoded.
@@ -124,6 +125,36 @@ mod tests {
             field_len = Some(t.len());
         }
         assert_eq!(field_len, Some(10_000));
+    }
+
+    #[test]
+    fn the_bound_is_duet_cores_and_not_a_second_copy_of_the_number() {
+        // The point of delegating is that there is now ONE cap, not two that
+        // happen to agree today. Asserting `< 200` (above) would still pass if
+        // this crate quietly grew its own constant again, so the assertion here
+        // is on the exact character count `duet_core::MAX_ECHO_CHARS` produces:
+        // the cap's worth of text plus one ellipsis.
+        let rendered = truncated(&"z".repeat(duet_core::MAX_ECHO_CHARS + 1));
+        assert_eq!(rendered.chars().count(), duet_core::MAX_ECHO_CHARS + 1);
+        assert!(rendered.ends_with('…'), "got {rendered}");
+
+        // And exactly at the cap nothing is dropped, so no ellipsis appears.
+        let exact = "z".repeat(duet_core::MAX_ECHO_CHARS);
+        assert_eq!(truncated(&exact), exact);
+    }
+
+    #[test]
+    fn multibyte_guest_text_is_capped_by_character_not_by_byte() {
+        // A guest picks these characters. `&str[..n]` on a byte index inside a
+        // multi-byte sequence panics, so a byte-indexed cap would turn a
+        // log-bloat bug into a host crash. Delegating to `duet-core` is what
+        // buys this; the assertion pins the observable property here too, since
+        // this is the crate a guest's bytes actually reach first.
+        let rendered = CodecError::UnknownTag("\u{1F600}".repeat(1_000)).to_string();
+        assert_eq!(
+            rendered.matches('\u{1F600}').count(),
+            duet_core::MAX_ECHO_CHARS
+        );
     }
 
     #[test]

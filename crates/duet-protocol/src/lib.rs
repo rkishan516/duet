@@ -14,26 +14,56 @@
 //! [`Push`] is separate because it answers nothing — it arrives because
 //! something the guest subscribed to changed.
 //!
+//! # Reading state, and running logic
+//!
+//! Four of the five request kinds address the store. The fifth,
+//! [`Request::Invoke`], runs a **host command** — logic the guest cannot
+//! perform itself — and has three possible answers rather than two:
+//!
+//! | Answer | Means |
+//! |---|---|
+//! | [`Response::Returned`] | the command ran and returned `Ok` |
+//! | [`Response::Raised`] | the command ran and returned `Err`, carried as a typed value |
+//! | [`Response::Failed`] | the host refused: no such command, bad arguments, a body that panicked |
+//!
+//! `raised` and `failed` are deliberately different kinds. Collapsing a
+//! developer's typed error into a `failed`'s prose is not reversible, and the
+//! two say different things about whether retrying is safe.
+//!
+//! [`dispatch()`] and [`handle_text()`] register no commands and answer every
+//! `invoke` with a `failed`; [`dispatch_with()`] and [`handle_text_with()`] take
+//! a [`CommandHost`]. Which commands a guest may reach is decided entirely by
+//! which host its *surface* was built with — see [`CommandHost`].
+//!
 //! # Untrusted input
 //!
 //! Guests are separate processes and their messages are untrusted. Every decode
 //! path is total: malformed bytes produce an error, never a panic. And
 //! [`Request::Subscribe`] deliberately carries no `SubscriberId` — the host
-//! supplies it, so one guest cannot subscribe as another.
+//! supplies it, so one guest cannot subscribe as another. [`Request::Invoke`]
+//! carries no caller identity for the same reason.
+//!
+//! A command body is the one thing here that is *not* this crate's code, so the
+//! two ways it can break the host — panicking, and returning a value too deep
+//! for any envelope — are caught at a single choke point rather than asked of
+//! each implementor. See [`command`].
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod command;
 pub mod dispatch;
 pub mod message;
 pub mod text;
 mod wire;
 
-pub use dispatch::dispatch;
+pub use command::{CommandHost, NoCommands, Outcome};
 
-pub use message::{Push, Request, RequestId, Response};
+pub use dispatch::{dispatch, dispatch_with};
 
-pub use text::{handle_text, push_text};
+pub use message::{Args, Push, Request, RequestId, Response};
+
+pub use text::{handle_text, handle_text_with, push_text};
 
 /// Encodes a [`Request`] for transmission.
 pub fn encode_request(request: &Request) -> serde_json::Value {

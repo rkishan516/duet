@@ -9,11 +9,20 @@
 //! does not control, which is a denial-of-service primitive, not a formatting
 //! nit.
 //!
-//! `duet-codec` solves the same problem for the text *it* decodes, with the
-//! same 48-character cap. This module is the `duet-core` equivalent; it is
-//! written by hand rather than shared, because `duet-core` is deliberately
-//! zero-dependency and must not take one on `duet-codec` (which sits above it)
-//! to get four lines of string handling.
+//! # This is the one implementation, and it lives at the bottom of the stack
+//!
+//! Every crate above this one decodes guest text and renders some of it back:
+//! `duet-codec` in `CodecError`'s `Display`, `duet-command` in the message
+//! naming an unknown command. Each of them used to carry its own copy of these
+//! forty lines, and copies drift — one capped by byte, one by character, one
+//! forgetting the ellipsis, and a bound that is only as strong as its weakest
+//! transcription.
+//!
+//! It lives *here*, at the bottom, for the only reason that works: `duet-core`
+//! is deliberately zero-dependency, so every crate in the workspace can already
+//! see it, and delegating costs nobody a new edge in the dependency graph. The
+//! direction cannot be reversed — putting it in `duet-codec` would force
+//! `duet-core` to depend upwards.
 //!
 //! Truncation is by **character**, never by byte. `&str[..n]` panics when `n`
 //! lands inside a multi-byte UTF-8 sequence, and paths are guest-chosen, so a
@@ -26,25 +35,35 @@
 
 use std::fmt::{Display, Write};
 
-/// How many characters of guest-supplied text to include in a `Display`
-/// message.
+/// How many characters of guest-supplied text any Duet error message includes:
+/// **48**.
 ///
-/// Matches `duet_codec`'s `MAX_ECHO_CHARS`. Long enough that a realistic path
-/// (`documents[3].title`) is shown whole, short enough that no guest input can
+/// Long enough that a realistic path (`documents[3].title`) or command name
+/// (`document.rename`) is shown whole, short enough that no guest input can
 /// make an error message meaningfully large.
-const MAX_ECHO_CHARS: usize = 48;
+///
+/// Public so that the crates above this one — which decode the *same* untrusted
+/// text and echo it back through their own error types — bind to this number
+/// rather than restating it. See this module's docs for why the shared
+/// implementation lives at the bottom of the stack.
+pub const MAX_ECHO_CHARS: usize = 48;
 
 /// The character appended when text was dropped, so a reader can tell a
 /// truncated path from a short one.
 const ELLIPSIS: char = '…';
 
-/// Renders `value` and caps it at [`MAX_ECHO_CHARS`] characters, appending
-/// [`ELLIPSIS`] if anything was dropped.
+/// Renders `value` and caps it at [`MAX_ECHO_CHARS`] characters, appending an
+/// ellipsis if anything was dropped.
+///
+/// Takes anything [`Display`] rather than a `&str` so that a caller never has
+/// to build the full string first in order to bound it: `truncated(&path)`
+/// costs the cap, `truncated(&path.to_string())` would cost the path.
 ///
 /// Never allocates more than the cap: the rendered text is discarded as it is
 /// produced rather than being buffered whole and then trimmed, so formatting a
-/// 1 MB path does not transiently cost 1 MB.
-pub(crate) fn truncated(value: &impl Display) -> String {
+/// 1 MB path does not transiently cost 1 MB. That is the property that makes
+/// this safe to call on text a hostile guest chose the length of.
+pub fn truncated(value: &impl Display) -> String {
     let mut writer = Truncating::new(MAX_ECHO_CHARS);
     // `Truncating::write_str` is infallible, so this cannot fail. Even if a
     // future `Display` implementation returned `Err`, a partial rendering is a

@@ -8,6 +8,7 @@ members = [
     "crates/duet-schema",
     "crates/duet-codegen",
     "crates/duet-cli",
+    "crates/duet-command",
     "crates/duet-derive",
     "crates/duet-dev",
     "crates/duet-supervisor",

@@ -110,13 +110,14 @@
 
 #![deny(missing_docs)]
 
-mod echo;
+pub mod echo;
 pub mod lifecycle;
 pub mod path;
 pub mod policy;
 pub mod store;
 pub mod value;
 
+pub use echo::{MAX_ECHO_CHARS, truncated};
 pub use lifecycle::{Instant, InvalidTransition, LifecycleEvent, SurfaceState, transition};
 pub use path::{Path, PathParseError, Segment};
 pub use policy::{Decision, Policy, PolicyInput, evaluate};

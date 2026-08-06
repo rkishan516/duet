@@ -1,6 +1,30 @@
 //! The messages guests and the host exchange.
 
+use std::collections::BTreeMap;
+
 use duet_core::{Notification, Path, SubscriptionId, Value};
+
+/// A command's named arguments. Always a map: a command's parameter list is a
+/// struct's field list, and [`Value::Map`] is the only shape either guest emits.
+///
+/// # Why this is a `BTreeMap` and not a [`Value`]
+///
+/// Typed as a `Value`, `"args":{"t":"i","v":"1"}` would decode perfectly well
+/// and then fail two layers later — inside a command body that expected to look
+/// up a field on something that is not a map, with no request id in scope and
+/// no natural place to report it. Narrowing at the decoder instead makes the
+/// illegal state unrepresentable: by the time an [`Args`] exists, it is a map.
+///
+/// The wire still carries a *tagged* value (`{"t":"m","v":{…}}`), because that
+/// path is already total against hostile input and re-deriving it here would be
+/// a second decoder to keep correct. [`crate::decode_request`] decodes the
+/// tagged value first and then narrows, reporting `bad_shape` if it is anything
+/// but a map.
+///
+/// A `BTreeMap` specifically, matching [`Value::Map`]: key order is then
+/// deterministic, which is what keeps an encoded `invoke` byte-stable across
+/// runs and languages.
+pub type Args = BTreeMap<String, Value>;
 
 /// Correlates a [`Request`] with the [`Response`] that answers it.
 ///
@@ -99,6 +123,24 @@ pub enum Request {
         /// Subscription to cancel.
         subscription: SubscriptionId,
     },
+    /// Run a host command.
+    ///
+    /// Deliberately carries **no** caller identity — no `subscriber`, no
+    /// `surface` — for the same reason [`Request::Subscribe`] carries no
+    /// `SubscriberId`. Which commands a guest may reach is decided by which
+    /// [`crate::CommandHost`] its surface was built with, never by the guest.
+    /// A guest that could name its own caller identity could name another
+    /// guest's, and authorization decided by the party being authorized is not
+    /// authorization.
+    Invoke {
+        /// Correlation id.
+        id: RequestId,
+        /// Which command to run. Guest-chosen, and therefore untrusted: bound
+        /// it with [`duet_core::truncated`] before putting it in any message.
+        command: String,
+        /// The command's named arguments.
+        args: Args,
+    },
 }
 
 impl Request {
@@ -108,7 +150,8 @@ impl Request {
             Request::Get { id, .. }
             | Request::Set { id, .. }
             | Request::Subscribe { id, .. }
-            | Request::Unsubscribe { id, .. } => *id,
+            | Request::Unsubscribe { id, .. }
+            | Request::Invoke { id, .. } => *id,
         }
     }
 }
@@ -139,11 +182,48 @@ pub enum Response {
         snapshot: Option<Value>,
     },
     /// The operation failed. Carries a message safe to show a developer.
+    ///
+    /// For an [`Request::Invoke`] this means the host **refused**: there is no
+    /// command by that name, the arguments did not decode, or the body panicked.
+    /// It never means the command ran and returned an error — that is
+    /// [`Response::Raised`].
     Failed {
         /// The request this answers.
         id: RequestId,
         /// Why it failed.
         message: String,
+    },
+    /// The command ran and returned.
+    ///
+    /// Always a tagged value; a command returning nothing sends `{"t":"n"}`,
+    /// i.e. [`Value::Null`]. There is no absent case here, which is why this
+    /// carries a `Value` and not an `Option<Value>`: JSON `null` already means
+    /// *"the path is absent"* everywhere else in this format — see
+    /// [`Response::Value`] — and spending that distinction twice, on two
+    /// different questions, is how a format ends up with a value nobody can
+    /// interpret without knowing which field they are looking at.
+    Returned {
+        /// The request this answers.
+        id: RequestId,
+        /// What the command returned.
+        value: Value,
+    },
+    /// The command returned `Err(E)` — a **domain** outcome, decoded typed by
+    /// the guest, not a refusal.
+    ///
+    /// # Why this is not a [`Response::Failed`]
+    ///
+    /// `failed` carries a `String`, and flattening a developer's typed error
+    /// into prose is not reversible: a guest that wanted to match on
+    /// `InsufficientFunds { short_by }` gets a sentence to regex instead. The
+    /// two are also different *events* — `failed` says the call did not happen,
+    /// `raised` says it happened and the answer was a failure — and a guest
+    /// that cannot tell them apart cannot decide whether retrying is safe.
+    Raised {
+        /// The request this answers.
+        id: RequestId,
+        /// The error the command returned, tagged like any other value.
+        error: Value,
     },
 }
 
@@ -154,7 +234,9 @@ impl Response {
             Response::Value { id, .. }
             | Response::Done { id }
             | Response::Subscribed { id, .. }
-            | Response::Failed { id, .. } => *id,
+            | Response::Failed { id, .. }
+            | Response::Returned { id, .. }
+            | Response::Raised { id, .. } => *id,
         }
     }
 }
@@ -215,6 +297,58 @@ mod tests {
             .id(),
             RequestId(10)
         );
+        assert_eq!(
+            Request::Invoke {
+                id: RequestId(11),
+                command: "add".to_string(),
+                args: Args::new(),
+            }
+            .id(),
+            RequestId(11)
+        );
+    }
+
+    #[test]
+    fn invoke_requests_cannot_name_a_caller() {
+        // The same compile-time property `subscribe_requests_cannot_name_a_...`
+        // pins for subscriptions, at the point it matters most: a command runs
+        // host code, so "which guest is asking" is an authorization question.
+        // Duet answers it by construction — a surface reaches exactly the
+        // commands its own `CommandHost` holds — and this destructuring stops
+        // compiling the moment a `subscriber` or `surface` field appears.
+        let r = Request::Invoke {
+            id: RequestId(1),
+            command: "add".to_string(),
+            args: Args::from([("a".to_string(), Value::Int(2))]),
+        };
+        match r {
+            Request::Invoke { id, command, args } => {
+                assert_eq!(id, RequestId(1));
+                assert_eq!(command, "add");
+                assert_eq!(args.get("a"), Some(&Value::Int(2)));
+            }
+            other => panic!("expected Invoke, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn args_are_a_map_and_cannot_be_any_other_shape() {
+        // `Args` is a `BTreeMap`, not a `Value`. If it were a `Value`, this
+        // would be a legal `Args` — and every command body would have to
+        // re-check it. The assertion is that the type does not admit the
+        // value: `Args::from` below only accepts key/value pairs, so making
+        // this line compile with a scalar is impossible.
+        let args: Args = Args::from([
+            ("b".to_string(), Value::Int(1)),
+            ("a".to_string(), Value::Int(2)),
+        ]);
+        // And the ordering is deterministic, which is what keeps an encoded
+        // `invoke` byte-stable: `b` was inserted first and still sorts second.
+        assert_eq!(
+            args.keys().collect::<Vec<_>>(),
+            vec!["a", "b"],
+            "args must iterate in key order"
+        );
     }
 
     #[test]
@@ -236,6 +370,69 @@ mod tests {
             .id(),
             RequestId(9)
         );
+        assert_eq!(
+            Response::Returned {
+                id: RequestId(10),
+                value: Value::Int(5)
+            }
+            .id(),
+            RequestId(10)
+        );
+        assert_eq!(
+            Response::Raised {
+                id: RequestId(11),
+                error: Value::Str("store".into())
+            }
+            .id(),
+            RequestId(11)
+        );
+    }
+
+    #[test]
+    fn a_command_returning_nothing_is_null_the_value_not_null_the_absence() {
+        // The distinction `Returned` deliberately does not spend: a unit return
+        // is `Value::Null`, which encodes as the tagged `{"t":"n"}`. JSON
+        // `null` in this position means nothing at all, and the decoder refuses
+        // it — see `wire.rs`. Compare `Response::Value`, where `None` really
+        // does mean "the path is absent" and encodes as bare JSON `null`.
+        let unit = Response::Returned {
+            id: RequestId(1),
+            value: Value::Null,
+        };
+        let absent = Response::Value {
+            id: RequestId(1),
+            value: None,
+        };
+        match (unit, absent) {
+            (Response::Returned { value, .. }, Response::Value { value: absent, .. }) => {
+                assert_eq!(value, Value::Null);
+                assert_eq!(absent, None, "the two nulls are different questions");
+            }
+            other => panic!("expected Returned and Value, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_raised_error_keeps_its_structure_where_failed_would_flatten_it() {
+        // The reason `raised` exists as its own kind. A typed error survives as
+        // a value a guest can decode back into its own type; `failed` would
+        // have reduced it to prose on the way out, and prose does not decode.
+        let raised = Response::Raised {
+            id: RequestId(1),
+            error: Value::map([
+                ("code", Value::Str("insufficient_funds".into())),
+                ("short_by", Value::Int(250)),
+            ]),
+        };
+        match raised {
+            Response::Raised { error, .. } => match error {
+                Value::Map(fields) => {
+                    assert_eq!(fields.get("short_by"), Some(&Value::Int(250)));
+                }
+                other => panic!("expected a map, got {other:?}"),
+            },
+            other => panic!("expected Raised, got {other:?}"),
+        }
     }
 
     #[test]
