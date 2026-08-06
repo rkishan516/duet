@@ -1,0 +1,14 @@
+name: duet
+description: >-
+  The Duet wire protocol in pure Dart: a tagged-JSON value codec, a message
+  envelope codec, and a guest client that speaks it over any text transport.
+version: 0.1.0
+repository: https://github.com/rkishan516/tauri-flutter
+issue_tracker: https://github.com/rkishan516/tauri-flutter/issues
+
+environment:
+  sdk: ^3.5.0
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.25.0

@@ -1,0 +1,15 @@
+# Local development only. `pubspec_overrides.yaml` is read by `pub` alongside
+# `pubspec.yaml` but is NEVER published — `dart pub publish` refuses to include
+# it — so this file points at the sibling checkout without making the package
+# unpublishable.
+#
+# The same two lines in `pubspec.yaml` under `dependency_overrides` would be a
+# publishing error, and a `path:` under `dependencies` would be worse: pub
+# rejects a path dependency at publish time outright. Keeping the real
+# constraint (`duet: ^0.1.0`) in `pubspec.yaml` means the manifest that goes to
+# pub.dev is already correct and needs no edit at release time.
+#
+# Delete this file to resolve against the published `duet` instead.
+dependency_overrides:
+  duet:
+    path: ../duet

@@ -34,10 +34,9 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:duet/duet.dart';
 import 'package:flutter/widgets.dart';
 
-import 'duet_client.dart';
-import 'duet_value.dart';
 import 'guest_support.dart';
 
 /// The one store path this driver publishes its whole observable state at.
@@ -183,7 +182,12 @@ Future<void> runSoloGuest(DuetClient duet) async {
   duet.onPush = (DuetNotification n) {
     report = report.copyWith(
       pushes: report.pushes + 1,
-      lastPushPath: n.path,
+      // `DuetNotification.path` is a parsed `DuetPath` now, not the raw string
+      // the fixture's old client passed through opaquely. `toString()` is the
+      // documented inverse of `DuetPath.parse`, so the text the host sent is
+      // the text republished here — which is what the Rust side compares
+      // against `COUNTER_PATH`.
+      lastPushPath: n.path.toString(),
       lastPushValue: n.value,
     );
     guestLog('PUSH #${report.pushes} path=${n.path} value=${n.value}');
@@ -203,7 +207,7 @@ Future<void> runSoloGuest(DuetClient duet) async {
     report = report.copyWith(
       stage: 'probed',
       doubles: _doubleProbes(),
-      hostile: await _probeHostile(),
+      hostile: await _probeHostile(duet.transport),
     );
     await _publish(duet, report);
 
@@ -264,7 +268,15 @@ Map<String, double> _doubleProbes() => <String, double>{
 /// Bypassing the client is the point: this proves the *host's* rejection path
 /// is total even when the guest is not this client at all — a guest is a
 /// separate renderer and nothing constrains what it puts on the wire.
-Future<Map<String, _Exchange>> _probeHostile() async {
+///
+/// Takes the [DuetTransport] rather than reaching for a channel constant. It is
+/// the same channel either way — `DuetClient` exposes the very transport it
+/// speaks over — but going through it keeps this file free of any Flutter
+/// import, and, more importantly, makes it impossible for the probes to reach
+/// the host by some path the client does not use. A separate channel handle
+/// would prove the host rejects hostile text *somewhere*, not on the wire under
+/// test.
+Future<Map<String, _Exchange>> _probeHostile(DuetTransport transport) async {
   final Map<String, String> cases = <String, String>{
     // An empty payload. `StringCodec` puts zero bytes on the wire, which the
     // engine hands the host as a nil `NSData*` — the host's null arm, not a
@@ -287,7 +299,7 @@ Future<Map<String, _Exchange>> _probeHostile() async {
   final Map<String, _Exchange> results = <String, _Exchange>{};
   for (final MapEntry<String, String> probe in cases.entries) {
     final String text = probe.value;
-    final String? reply = await kDuetChannel.send(text);
+    final String? reply = await transport.send(text);
     final _Exchange exchange = _Exchange(
       requestBytes: utf8.encode(text).length,
       replyBytes: reply == null ? -1 : utf8.encode(reply).length,

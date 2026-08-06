@@ -1,0 +1,52 @@
+{
+  "name": "duet-protocol",
+  "version": "0.1.0",
+  "description": "The Duet wire protocol in TypeScript: a tagged-JSON value codec, a message envelope codec, and a guest client that speaks it over any text transport.",
+  "keywords": [
+    "duet",
+    "wry",
+    "webview",
+    "ipc",
+    "tauri",
+    "flutter",
+    "protocol"
+  ],
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rkishan516/tauri-flutter.git",
+    "directory": "packages/duet-js"
+  },
+  "bugs": "https://github.com/rkishan516/tauri-flutter/issues",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./wry": {
+      "types": "./dist/wry.d.ts",
+      "default": "./dist/wry.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "scripts": {
+    "build": "tsc --build --force",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "test": "npm run typecheck && node --test test/*.test.ts",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "typescript": "^5.9.2"
+  }
+}

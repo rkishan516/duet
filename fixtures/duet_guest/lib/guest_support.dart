@@ -16,9 +16,8 @@
 // no host-side change to keep working.
 import 'dart:async';
 
+import 'package:duet/duet.dart';
 import 'package:flutter/widgets.dart';
-
-import 'duet_client.dart';
 
 /// One log prefix for every driver, so embedded output is greppable.
 void guestLog(String s) => debugPrint('[duet_guest] $s');

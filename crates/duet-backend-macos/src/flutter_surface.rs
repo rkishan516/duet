@@ -90,7 +90,8 @@ use crate::engine::{FlutterEngine, catch_to_backend_error};
 
 /// The one channel the whole protocol travels on, in both directions.
 ///
-/// Must match `kDuetChannel` in `fixtures/duet_guest/lib/duet_client.dart`.
+/// Must match `duetChannelName` in `packages/duet/lib/src/duet_message.dart`,
+/// which is what `packages/duet_flutter` builds its `duetRpcChannel` from.
 /// The Dart side uses `BasicMessageChannel<String>` with `StringCodec`, which
 /// puts the payload on the wire as raw UTF-8 with no envelope and no length
 /// prefix — exactly the shape [`duet_protocol::handle_text`] already consumes
@@ -637,11 +638,12 @@ mod tests {
 
     #[test]
     fn the_channel_name_matches_the_dart_guest() {
-        // `fixtures/duet_guest/lib/duet_client.dart` hard-codes this string
-        // in `kDuetChannel`. Nothing links the two at build time, so a
-        // rename on either side would silently produce a guest that talks to
-        // a channel with no host handler — which surfaces as a null reply,
-        // not an error. Pinned here so the Rust side at least fails loudly.
+        // `packages/duet` hard-codes this string in `duetChannelName`, and
+        // pins it in a test of its own; so does `packages/duet_flutter`.
+        // Nothing links the languages at build time, so a rename on either
+        // side would silently produce a guest that talks to a channel with no
+        // host handler — which surfaces as a null reply, not an error. Pinned
+        // here so the Rust side fails loudly too.
         assert_eq!(DUET_RPC_CHANNEL, "duet/rpc");
     }
 }

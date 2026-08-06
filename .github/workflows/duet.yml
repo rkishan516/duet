@@ -5,13 +5,21 @@ on:
     paths:
       - 'crates/**'
       - 'fixtures/**'
+      # The golden wire corpus and the packages that consume it. Without these,
+      # a change to `corpus/wire-corpus.json` alone would not trigger the run
+      # that contains `corpus_matches_the_committed_file` — the one check that
+      # says the committed corpus is still what the Rust codec generates. A
+      # stale corpus is worse than no corpus: every guest would be conforming to
+      # a phantom.
+      - 'corpus/**'
+      - 'packages/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/duet.yml'
   pull_request:
 
 jobs:
-  test:
+  rust:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,5 +46,99 @@ jobs:
           RUSTDOCFLAGS: -D warnings
       - name: Test with coverage gate
         run: cargo llvm-cov --workspace --exclude duet-backend-macos --locked --fail-under-lines 90
-      - name: Test single-threaded
+      # Runs duet-protocol's `corpus_matches_the_committed_file`, which
+      # regenerates the corpus in memory and compares bytes against the
+      # committed file. Both this step and the coverage step above execute it;
+      # it is named here so that nobody narrowing the test selection removes the
+      # only staleness check without realising what it was.
+      - name: Test single-threaded (includes the corpus staleness check)
         run: cargo test --workspace --exclude duet-backend-macos --locked -- --test-threads=1
+
+  # The pure-Dart client. This job is the entire reason `packages/duet` and
+  # `packages/duet_flutter` are separate packages: `package:flutter/services.dart`
+  # cannot be *loaded* under `dart test` — importing it is a compile error, not
+  # a lint — so a client that depended on it could only be tested by installing
+  # the whole Flutter SDK. Split out, the complete wire format is verified
+  # against the golden corpus by the plain Dart SDK in seconds.
+  dart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+      - name: Resolve
+        run: dart pub get
+        working-directory: packages/duet
+      - name: Analyze
+        run: dart analyze --fatal-infos
+        working-directory: packages/duet
+      - name: Test
+        run: dart test
+        working-directory: packages/duet
+
+  # The Flutter binding: a small `DuetTransport` over a `BasicMessageChannel`.
+  #
+  # Cost versus coverage, since this is the one job here that needs a whole SDK
+  # download (~1-2 minutes with the action's cache, against ~15 seconds for the
+  # `dart` job above):
+  #
+  # WITHOUT this job, `packages/duet_flutter` is verified NOWHERE in CI. The
+  # three macOS examples that exercise it end to end cannot run here — they need
+  # FlutterMacOS.framework and a window server, which is why `duet-backend-macos`
+  # is excluded from every Rust step above — so they are a developer's local
+  # check, not a gate. That would leave the adapter as the only unguarded seam
+  # between the verified wire format and a real Flutter app, and it is exactly
+  # the kind of code that breaks silently: a renamed channel constant or a
+  # dropped null reply produces a guest that hangs with no error at all.
+  #
+  # A minute and a half of runner time is a small price for that seam not being
+  # a blind spot, so the job is included.
+  flutter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Resolve
+        run: flutter pub get
+        working-directory: packages/duet_flutter
+      - name: Analyze
+        run: flutter analyze
+        working-directory: packages/duet_flutter
+      - name: Test
+        run: flutter test
+        working-directory: packages/duet_flutter
+
+  # The TypeScript client. No bundler and no test framework: sources import each
+  # other with explicit `.ts` specifiers, so Node's built-in type stripping runs
+  # them directly under `node --test`. `npm ci` installs TypeScript and
+  # `@types/node`, which are the package's only dependencies of any kind — its
+  # runtime dependency count is zero, and the `npm ls --omit=dev` step is what
+  # keeps it that way.
+  node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: packages/duet-js/package-lock.json
+      - name: Install
+        run: npm ci
+        working-directory: packages/duet-js
+      - name: Assert zero runtime dependencies
+        run: npm ls --omit=dev --all
+        working-directory: packages/duet-js
+      - name: Build
+        run: npm run build
+        working-directory: packages/duet-js
+      # Type-checks `src` and `test`, then runs the suite — including the
+      # conformance run against `corpus/wire-corpus.json` and the differential
+      # run against `BOOTSTRAP_HTML` in `crates/duet-webview/src/bootstrap.rs`,
+      # both of which are read from the repository checkout rather than from a
+      # copy inside the package.
+      - name: Test
+        run: npm test
+        working-directory: packages/duet-js

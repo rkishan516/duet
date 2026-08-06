@@ -1,6 +1,6 @@
 name: duet_guest
 description: >-
-  The Dart guest client for duet-protocol: a tracked fixture, not a published
+  The Flutter guest driver for duet-protocol: a tracked fixture, not a published
   package. See README.md for what it is and how to build it.
 publish_to: 'none'
 version: 1.0.0+1
@@ -9,6 +9,12 @@ environment:
   sdk: ^3.13.0-133.0.dev
 
 dependencies:
+  # The protocol and its Flutter binding, both resolved from this repository by
+  # pubspec_overrides.yaml. This fixture used to carry its own copy of the
+  # client; it does not any more, because two copies is how a fixture and the
+  # package it mirrors drift apart without either one ever looking wrong.
+  duet: ^0.1.0
+  duet_flutter: ^0.1.0
   flutter:
     sdk: flutter
 

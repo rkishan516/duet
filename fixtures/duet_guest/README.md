@@ -1,24 +1,33 @@
 # duet_guest
 
-A tracked fixture, not a published package: the Dart guest client for
+A tracked fixture, not a published package: the Flutter guest **driver** for
 [`duet-protocol`](../../crates/duet-protocol), the Rust message envelope a
 Flutter engine and a `wry` webview both speak to a Rust host that owns the
 shared state ("Duet").
 
-This package plays the same role for a Flutter guest that
+This app plays the same role for a Flutter guest that
 `crates/duet-webview/src/bootstrap.rs`'s `window.__duet` JavaScript plays for
 a webview guest: it is the thing on the other end of one platform channel,
 `duet/rpc` (a `BasicMessageChannel<String>` using `StringCodec` — raw UTF-8,
 no envelope), talking to `duet_protocol::handle_text` in
 `crates/duet-protocol/src/text.rs` on the Rust side.
 
+## It no longer contains a client
+
+The client itself lives in [`packages/duet`](../../packages/duet) (pure Dart:
+values, paths, the envelope, `DuetClient` over a `DuetTransport`) and
+[`packages/duet_flutter`](../../packages/duet_flutter) (that transport, over the
+`duet/rpc` channel). This fixture depends on both — see `pubspec_overrides.yaml`
+for why by path — and is now only the drivers.
+
+That is the point of the split. This fixture used to carry its own copy of the
+client, and two copies of a wire format is how the copy and the package drift
+apart while both keep passing their own tests. What remains here is what the
+packages cannot have: code that only makes sense when a real Rust host is on the
+other end.
+
 ## What is here
 
-- `lib/duet_value.dart` — encodes and decodes `duet-codec`'s tagged JSON value
-  format (mirrors `crates/duet-codec/src/value.rs`).
-- `lib/duet_client.dart` — `DuetClient`: `get`/`set`/`subscribe`/`unsubscribe`
-  request/response calls over `kDuetChannel`, plus an `onPush` hook for
-  unsolicited host notifications.
 - `lib/main.dart` — a **headless** entry point (`WidgetsFlutterBinding`, no
   `runApp`, no widget tree). It is not exercised by `flutter test`; it is what
   a Rust example boots inside a `FlutterEngine` to drive `DuetClient` against
@@ -42,15 +51,14 @@ no envelope), talking to `duet_protocol::handle_text` in
   one shared path and one of its own, and publishes every push it receives —
   including the ones it must keep receiving while the webview tries to
   unsubscribe it and is then torn down.
-- `test/duet_client_test.dart` — unit tests against a mocked
-  `TestDefaultBinaryMessenger`, including the wire rules that must match
-  Rust exactly (canonical decimal `id`/`subscription`/`subscriber` strings,
-  `Int` never traveling as a JSON number, and totality of the push handler
-  against malformed input).
-- `test/rust_goldens_test.dart` — the same round trip, but replayed against
-  byte-for-byte output captured from a real Rust host run, so a wire-shape
-  regression on either side fails here even if the hand-written unit tests
-  above do not exercise that exact byte sequence.
+- `test/guest_support_test.dart` — the handshake, which is the only fixture
+  logic with a contract of its own. The wire format is tested in
+  `packages/duet` against the golden corpus, and the channel seam in
+  `packages/duet_flutter`; neither is re-tested here.
+
+The drivers themselves have no `flutter test` coverage and cannot have any:
+what they assert is what a real Rust host does, so the three macOS examples
+below *are* their test.
 
 ## Building `App.framework`
 
@@ -85,7 +93,8 @@ cd fixtures/duet_guest && /Users/kishan/dev/rkishan516/flutterDC/bin/flutter tes
 `flutter create --platforms=macos` scaffolds an Xcode project (`macos/`),
 IDE metadata (`.idea/`, `*.iml`), and other regeneratable boilerplate
 alongside the hand-written Dart. Only the hand-written parts are tracked —
-`pubspec.yaml`, this `README.md`, `lib/`, and `test/` — following the same
+`pubspec.yaml`, `pubspec_overrides.yaml`, this `README.md`, `lib/`, and
+`test/` — following the same
 precedent `spikes/spike_app/` set in the repository root `.gitignore`. If the
 untracked scaffolding is ever missing (a fresh clone, or after `flutter
 clean`), regenerate it with:

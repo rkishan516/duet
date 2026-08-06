@@ -21,7 +21,7 @@
 //! These predicates are public so third-party guest implementations in Rust
 //! can enforce the identical rule from the one definition of it, rather than
 //! writing a fourth near-copy. The Dart guest client mirrors them in
-//! `fixtures/duet_guest/lib/duet_value.dart`, and `duet-protocol` gates every
+//! `packages/duet/lib/src/duet_json.dart`, and `duet-protocol` gates every
 //! `u64` wire field on [`parse_wire_id`].
 
 /// True if `s` is a canonical, sign-free decimal digit string: at least one

@@ -4,6 +4,16 @@ build/
 node_modules/
 .DS_Store
 
+# `packages/duet-js` build output. `src/` is the source of truth and Node runs
+# it directly via type stripping, so `dist/` is only ever what `npm run build`
+# just produced — committing it would create a second copy that can go stale.
+# Nothing in this repository `include_str!`s or imports it; see the
+# "This is not the client a real app uses" note on `BOOTSTRAP_HTML` in
+# crates/duet-webview/src/bootstrap.rs for why the webview bootstrap is not
+# built from it.
+dist/
+*.tsbuildinfo
+
 # Phase 0 spike fixture — regenerate with:
 #   flutter create --platforms=macos --project-name spike_app spikes/spike_app
 #   (cd spikes/spike_app && flutter build macos --debug)
@@ -25,10 +35,17 @@ spikes/*/target/
 # new one was silently skipped instead. Excluding the directory's *children*
 # leaves the negations able to do their job.
 fixtures/duet_guest/*
-# ...except the hand-written package: the Dart guest client, its tests, the
-# package manifest, and this fixture's own README. `flutter create` will NOT
-# regenerate these, so they are tracked explicitly.
+# ...except the hand-written app: the guest drivers, their tests, the manifests,
+# and this fixture's own README. `flutter create` will NOT regenerate these, so
+# they are tracked explicitly.
+#
+# `pubspec_overrides.yaml` is tracked too, and must be: it is what points this
+# fixture at `packages/duet` and `packages/duet_flutter` in THIS checkout rather
+# than at whatever is on pub.dev. The three macOS examples are the only
+# end-to-end proof that the Dart packages and the Rust host still agree, so they
+# have to run against the working tree.
 !fixtures/duet_guest/lib/
 !fixtures/duet_guest/test/
 !fixtures/duet_guest/pubspec.yaml
+!fixtures/duet_guest/pubspec_overrides.yaml
 !fixtures/duet_guest/README.md
