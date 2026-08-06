@@ -80,7 +80,11 @@ describe('the fake host matches what the real host was measured to do', () => {
       client.set('editor.zoom', duetFloat(2)),
       (error: unknown) =>
         error instanceof DuetFailure &&
-        error.message === 'path "editor.zoom" addresses the wrong kind of node',
+        // The prefix is `duet_runtime::RuntimeError::Store`'s, and it is part
+        // of what a guest actually sees; `live-host.test.ts` asserts the same
+        // shape against the real host.
+        error.message ===
+          'store rejected the write: path "editor.zoom" addresses the wrong kind of node',
     );
   });
 

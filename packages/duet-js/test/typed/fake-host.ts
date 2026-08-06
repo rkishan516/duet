@@ -43,6 +43,23 @@ export interface FakeSubscription {
 /** Thrown internally when a write is refused; becomes a `failed` response. */
 class SetRefused extends Error {}
 
+/**
+ * A refusal as it reaches a **guest**, which is not the same string as the
+ * `duet_core::SetError` text.
+ *
+ * A refused write travels `Value::set` -> `duet_core::SetError` ->
+ * `duet_runtime::RuntimeError::Store` -> `Response::Failed`, and the middle step
+ * prefixes it: `RuntimeError`'s `Display` is `"store rejected the write: {e}"`
+ * (crates/duet-runtime/src/error.rs). This fake used to omit that prefix, so
+ * every guest-side assertion on an exact refusal message was written against a
+ * string the real host never sends — found by `packages/duet/test/live_host_test.dart`
+ * the first time a generated client was driven against `duet-host-stdio`, and
+ * not findable any other way.
+ */
+function onTheWire(refusal: string): string {
+  return `store rejected the write: ${refusal}`;
+}
+
 /** A transport that answers as a real Duet host would. */
 export class FakeHost implements DuetTransport {
   /** The whole state tree. */
@@ -122,7 +139,11 @@ export class FakeHost implements DuetTransport {
           );
         } catch (error) {
           if (!(error instanceof SetRefused)) throw error;
-          return encodeResponseText({ kind: 'failed', id: req.id, message: error.message });
+          return encodeResponseText({
+            kind: 'failed',
+            id: req.id,
+            message: onTheWire(error.message),
+          });
         }
         this.notify(req.path, req.value);
         return encodeResponseText({ kind: 'done', id: req.id });
