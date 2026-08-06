@@ -1,0 +1,15 @@
+{
+  // Type-checks the tests as well as the sources.
+  //
+  // A separate config rather than widening `include` in the base one, because
+  // the base config is what `npm run build` emits from: adding `test` there
+  // would publish the test files into `dist` and drag `@types/node` into the
+  // package's declared surface.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "types": ["node"]
+  },
+  "include": ["src", "test"]
+}

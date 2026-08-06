@@ -4,6 +4,16 @@ build/
 node_modules/
 .DS_Store
 
+# `packages/duet-js` build output. `src/` is the source of truth and Node runs
+# it directly via type stripping, so `dist/` is only ever what `npm run build`
+# just produced — committing it would create a second copy that can go stale.
+# Nothing in this repository `include_str!`s or imports it; see the
+# "This is not the client a real app uses" note on `BOOTSTRAP_HTML` in
+# crates/duet-webview/src/bootstrap.rs for why the webview bootstrap is not
+# built from it.
+dist/
+*.tsbuildinfo
+
 # Phase 0 spike fixture — regenerate with:
 #   flutter create --platforms=macos --project-name spike_app spikes/spike_app
 #   (cd spikes/spike_app && flutter build macos --debug)
