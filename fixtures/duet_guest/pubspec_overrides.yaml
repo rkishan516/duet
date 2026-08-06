@@ -1,0 +1,14 @@
+# This fixture always tests the packages in THIS checkout, never whatever
+# happens to be on pub.dev. That is the whole point of it: the three macOS
+# examples that boot this app are the only end-to-end proof that the Dart
+# packages and the Rust host still agree on the wire, so they must run against
+# the working tree.
+#
+# In `pubspec_overrides.yaml` rather than in `pubspec.yaml`, matching
+# `packages/duet_flutter` — so both places that point at a local checkout do it
+# the same way, and the manifests keep stating the real published constraints.
+dependency_overrides:
+  duet:
+    path: ../../packages/duet
+  duet_flutter:
+    path: ../../packages/duet_flutter

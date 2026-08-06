@@ -42,10 +42,9 @@
 // ownership check.
 import 'dart:async';
 
+import 'package:duet/duet.dart';
 import 'package:flutter/widgets.dart';
 
-import 'duet_client.dart';
-import 'duet_value.dart';
 import 'guest_support.dart';
 
 /// The one store path this driver publishes its whole observable state at.
@@ -198,7 +197,10 @@ Future<void> runDuetGuest(DuetClient duet) async {
   duet.onPush = (DuetNotification n) {
     report = report.copyWith(
       pushes: report.pushes + 1,
-      lastPushPath: n.path,
+      // A parsed `DuetPath` now, not the raw string the fixture's old client
+      // passed through opaquely; `toString()` is the documented inverse of
+      // `DuetPath.parse`, so the host gets back the text it sent.
+      lastPushPath: n.path.toString(),
       lastPushValue: n.value,
       lastPushSubscriber: n.subscriber,
       lastPushSubscription: n.subscription,
