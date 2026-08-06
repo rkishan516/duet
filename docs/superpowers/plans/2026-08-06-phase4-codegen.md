@@ -119,7 +119,7 @@ The CI `--check` step runs against `examples/generated/`, not the committed gold
 ## Deferred, deliberately
 
 **Phase 4b** (pure extension of a proven pipeline): narrowing integer types, `char`, `[T; N]`, `BTreeSet`, tuples, data enums, `Cow`, custom guest types.
-**Phase 5:** `duet dev` / hot reload (Spike C already retired the risk at median 123.3 ms, so shipping it late costs no project risk), `#[command]` RPC codegen, collection handles, reactive adapters, per-subscription sequence numbers.
+**Phase 5:** `duet dev` / hot reload (Spike C already retired the risk at median 123.3 ms, so shipping it late costs no project risk), `#[command]` RPC codegen, collection handles, reactive adapters, per-subscription sequence numbers. — *hot reload shipped 2026-08-06; see `2026-08-06-phase5-hot-reload.md`. The rest is still deferred.*
 
 ---
 

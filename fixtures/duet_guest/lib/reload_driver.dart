@@ -57,10 +57,12 @@ import 'guest_support.dart';
 /// library. It is read inside [_ReloadProbeState.build], which is what makes a
 /// changed value observable only *after* a real rebuild.
 ///
-/// Anything that reformats this file must leave the `const String
-/// kReloadMarker = '…';` spelling intact: the host finds it by that exact
-/// prefix, and reports a clear failure rather than a wrong reload if it
-/// cannot.
+/// Anything that reformats this file must leave the declaration's spelling
+/// intact — `const`, `String`, the name, ` = `, then a single quote, all on one
+/// line. The host finds it by exactly that prefix and reports a clear failure
+/// rather than a wrong reload if it cannot. `test/guest_support_test.dart`
+/// pins it from this side, including that the prefix occurs exactly once in
+/// this file, so a comment can never be edited by mistake.
 const String kReloadMarker = 'MARKER_V1';
 
 /// Where this driver publishes what it has rendered.

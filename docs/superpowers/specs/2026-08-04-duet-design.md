@@ -495,6 +495,32 @@ expose.
 >   it from native code. Workable but ugly — look for a cleaner route (a known
 >   `--vm-service-port`, or reading it off the engine object) before shipping this in the CLI.
 
+> **SHIPPED by Phase 5 (2026-08-06), and the fd-1 redirect is gone.** `crates/duet-dev` is the
+> driver and `duet dev` is the command. Two things the note above asked for both turned out to
+> be available, and neither redirects a file descriptor:
+>
+> - **`duet dev` runs the host as a child process**, so the engine's fd 1 is the *child's*
+>   fd 1 — an ordinary pipe the parent reads and echoes through. This is not a workaround; it
+>   falls out of the architecture the diagram above already describes. The VM service keeps its
+>   authentication code, and a host that speaks a protocol on its own stdout is unaffected.
+> - **For a host driving its own reload in-process**, the macOS embedder reads engine switches
+>   from `FLUTTER_ENGINE_SWITCHES` / `FLUTTER_ENGINE_SWITCH_N`. With `vm-service-port=<n>` and
+>   `disable-service-auth-codes`, the URI is known *before the engine boots*. Measured: the
+>   engine announced exactly `http://127.0.0.1:45671/`. The cost is that the VM service is then
+>   unauthenticated on loopback for that port, which is why the child-process route is the
+>   default wherever a child exists.
+>
+> `write-service-info=<path>` was tried first — it would have given a known URI *with* the auth
+> code. The string is in `FlutterMacOS.framework`'s binary but no file ever appeared, as a plain
+> path or as a `file://` URI. It is not wired up in this embedder.
+>
+> Re-measured end to end against a real engine, 30 reloads across three runs: **median 43 ms**
+> from `fs::write` to the change being in a rendered frame *and* readable back out of the Rust
+> store — a longer path than Spike C measured, and still under half its 123.3 ms median, because
+> the fixture rebuilds three widgets rather than a whole `MaterialApp`. The recompile leg is
+> comparable at 6–19 ms. **The Duet store's contents survive every reload**, asserted by
+> `crates/duet-backend-macos/examples/hot_reload.rs`.
+
 ### 8.3 `duet build`
 
 AOT `flutter assemble` → web production bundle → `cargo build --release` → platform bundling
