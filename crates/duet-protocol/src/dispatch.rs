@@ -3,9 +3,10 @@
 use duet_core::SubscriberId;
 use duet_runtime::StoreHandle;
 
+use crate::command::{CommandHost, NoCommands};
 use crate::message::{Request, RequestId, Response};
 
-/// Serves one guest request against the store.
+/// Serves one guest request against the store, with no commands registered.
 ///
 /// `subscriber` is supplied by the **host**, from its own `SurfaceId` mapping —
 /// never by the guest. [`Request::Subscribe`] carries no subscriber precisely so
@@ -16,7 +17,49 @@ use crate::message::{Request, RequestId, Response};
 /// Never fails: every error becomes a [`Response::Failed`] carrying a message.
 /// A guest that sent a well-formed request always gets a well-formed answer,
 /// which is what lets a transport treat this as total.
+///
+/// # Commands
+///
+/// This entry point predates [`Request::Invoke`] and registers no commands, so
+/// an `invoke` is answered with a [`Response::Failed`] naming the command — see
+/// [`crate::NoCommands`]. Every other request kind behaves exactly as it always
+/// has; `dispatch_answers_identically_with_and_without_a_command_host` pins
+/// that, reply for reply. A host that wants commands calls [`dispatch_with`]
+/// instead.
 pub fn dispatch(store: &StoreHandle, subscriber: SubscriberId, request: Request) -> Response {
+    dispatch_with(store, subscriber, &NoCommands, request)
+}
+
+/// Serves one guest request against the store and `commands`.
+///
+/// Identical to [`dispatch`] for every request kind except [`Request::Invoke`],
+/// which is routed into `commands`.
+///
+/// # `commands` is per-surface, and that is the authorization boundary
+///
+/// Which commands a guest may reach is decided entirely by which
+/// [`CommandHost`] the caller passes here. An `invoke` carries no caller
+/// identity to check, because there is nothing for a guest to assert: a webview
+/// running untrusted content simply has no name for a command its own surface's
+/// host does not hold. Two surfaces sharing one store may be built with two
+/// different command hosts, exactly as they are already given two different
+/// `SubscriberId`s.
+///
+/// # Total, including against a command body that is not
+///
+/// A command body is arbitrary user code, so this is the one path here that
+/// could fail in ways `duet-protocol` does not control. Both hazards are handled
+/// at a single choke point rather than asked of each implementor — a panic
+/// becomes a [`Response::Failed`], and a return too deep for any envelope to
+/// carry becomes one too. See [`crate::command`] for both, and
+/// [`CommandHost::invoke`] for which thread a body runs on and what it may do
+/// there.
+pub fn dispatch_with(
+    store: &StoreHandle,
+    subscriber: SubscriberId,
+    commands: &dyn CommandHost,
+    request: Request,
+) -> Response {
     let id = request.id();
     match request {
         Request::Get { path, .. } => match store.get(&path) {
@@ -52,6 +95,15 @@ pub fn dispatch(store: &StoreHandle, subscriber: SubscriberId, request: Request)
                 Ok(_) => Response::Done { id },
                 Err(e) => failed(id, e),
             }
+        }
+        // The store is handed through so a body need not capture a handle of
+        // its own; `subscriber` deliberately is *not*. A command is host code
+        // running with the host's authority, not a guest's — giving it the
+        // caller's subscriber id would invite exactly the "act on behalf of
+        // whoever asked" pattern that `Request::Subscribe` carrying no
+        // subscriber exists to prevent.
+        Request::Invoke { command, args, .. } => {
+            crate::command::run(commands, store, id, &command, args)
         }
     }
 }
@@ -378,6 +430,155 @@ mod tests {
             "the owner's own unsubscribe must really have removed it"
         );
 
+        rt.shutdown().expect("shutdown should succeed");
+    }
+
+    #[test]
+    fn dispatch_answers_identically_with_and_without_a_command_host() {
+        // `dispatch` became a delegation to `dispatch_with` when commands were
+        // added. That is a real change to a function three transports call, and
+        // the claim it has to earn is that a host with no commands behaves
+        // exactly as before. Reply equality across every non-command request
+        // kind is that claim, checked rather than asserted in a comment.
+        //
+        // `Response` derives `PartialEq`, so this compares the whole reply —
+        // id, kind and payload — not just the discriminant.
+        let rt = rt();
+        let handle = rt.handle();
+        let subscription = match dispatch(
+            &handle,
+            SubscriberId(1),
+            Request::Subscribe {
+                id: RequestId(30),
+                path: Path::root(),
+            },
+        ) {
+            Response::Subscribed { subscription, .. } => subscription,
+            other => panic!("expected Subscribed, got {other:?}"),
+        };
+
+        for request in [
+            Request::Get {
+                id: RequestId(31),
+                path: p("editor.zoom"),
+            },
+            Request::Get {
+                id: RequestId(32),
+                path: p("editor.absent"),
+            },
+            Request::Set {
+                id: RequestId(33),
+                path: p("editor.zoom"),
+                value: Value::Float(2.0),
+            },
+            Request::Set {
+                id: RequestId(34),
+                path: p("nope.deeper"),
+                value: Value::Null,
+            },
+            Request::Unsubscribe {
+                id: RequestId(35),
+                subscription,
+            },
+        ] {
+            let without = dispatch(&handle, SubscriberId(1), request.clone());
+            let with = dispatch_with(&handle, SubscriberId(1), &NoCommands, request.clone());
+            assert_eq!(
+                without, with,
+                "{request:?} must answer identically through both entry points"
+            );
+        }
+        rt.shutdown().expect("shutdown should succeed");
+    }
+
+    #[test]
+    fn an_invoke_with_no_commands_registered_is_failed_and_names_the_command() {
+        // What every host shipping today does with an `invoke`: the request
+        // decodes fine — it is a legal message — and is then refused because
+        // nothing is registered to serve it. Explicitly NOT an unknown-kind
+        // error, which would send a developer to debug an encoder that is
+        // working correctly.
+        let rt = rt();
+        let response = dispatch(
+            &rt.handle(),
+            SubscriberId(1),
+            Request::Invoke {
+                id: RequestId(40),
+                command: "add".to_string(),
+                args: crate::Args::new(),
+            },
+        );
+        match response {
+            Response::Failed { id, message } => {
+                assert_eq!(id, RequestId(40), "the guest must fail that one call");
+                assert!(message.contains("add"), "got {message}");
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+        rt.shutdown().expect("shutdown should succeed");
+    }
+
+    #[test]
+    fn dispatch_with_routes_an_invoke_into_the_command_host_and_nothing_else() {
+        // Two properties in one drive: an `invoke` reaches the host with its
+        // command name and arguments intact, and a `get` does not reach it at
+        // all. A `dispatch_with` that consulted the command host for every
+        // request would pass a test that only checked the first.
+        use crate::{CommandHost, Outcome};
+        use std::cell::RefCell;
+
+        struct Recording {
+            seen: RefCell<Vec<String>>,
+        }
+
+        impl CommandHost for Recording {
+            fn invoke(&self, command: &str, args: crate::Args, _: &StoreHandle) -> Outcome {
+                self.seen.borrow_mut().push(command.to_string());
+                match args.get("a") {
+                    Some(Value::Int(n)) => Outcome::Returned(Value::Int(n + 1)),
+                    _ => Outcome::Refused("expected an int argument \"a\"".to_string()),
+                }
+            }
+        }
+
+        let rt = rt();
+        let handle = rt.handle();
+        let host = Recording {
+            seen: RefCell::new(Vec::new()),
+        };
+
+        assert_eq!(
+            dispatch_with(
+                &handle,
+                SubscriberId(1),
+                &host,
+                Request::Invoke {
+                    id: RequestId(41),
+                    command: "add".to_string(),
+                    args: crate::Args::from([("a".to_string(), Value::Int(2))]),
+                },
+            ),
+            Response::Returned {
+                id: RequestId(41),
+                value: Value::Int(3)
+            }
+        );
+
+        dispatch_with(
+            &handle,
+            SubscriberId(1),
+            &host,
+            Request::Get {
+                id: RequestId(42),
+                path: p("editor.zoom"),
+            },
+        );
+
+        assert_eq!(
+            host.seen.borrow().as_slice(),
+            ["add"],
+            "only the invoke may reach the command host"
+        );
         rt.shutdown().expect("shutdown should succeed");
     }
 

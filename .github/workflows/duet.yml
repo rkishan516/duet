@@ -69,6 +69,57 @@ jobs:
             "duet-core v"*) ;;
             *) echo "::error::unexpected cargo tree output: $tree"; exit 1 ;;
           esac
+      # The facade's dependency set, pinned.
+      #
+      # `duet` is what a user depends on, so its tree is the whole cost of
+      # adopting Duet. The `duet-core` check above guards the bottom of the
+      # stack; this guards the top, and the failure it exists to catch is
+      # different in kind. Nothing breaks when a crate is added to `duet` — it
+      # compiles, every test passes, and a user quietly inherits a dependency
+      # they were never told about. `duet-command` is exactly such a candidate:
+      # it is useful, it is ours, and it is deliberately NOT re-exported here,
+      # because commands are a host-side concern an embedder opts into.
+      #
+      # Two sets, because the default and `--all-features` trees answer two
+      # different questions:
+      #
+      # - **default**: four workspace crates and *no third-party crate at all*.
+      #   That is the headline property — `duet` with default features links
+      #   nothing a user did not ask for.
+      # - **--all-features**: adds `duet-derive` and its proc-macro toolchain
+      #   (`syn`, `quote`, `proc-macro2`) plus `duet-codegen` and `serde_json`.
+      #   Every one of those is compiled for the *build* machine and never
+      #   linked into the shipped program, which is the whole reason `derive` is
+      #   an opt-in feature.
+      #
+      # Both are compared as sorted, deduplicated package names — not as tree
+      # drawings, which reformat between cargo releases, and not as counts,
+      # which a swap of one crate for another would pass.
+      - name: Pin the duet facade's dependency set
+        run: |
+          set -euo pipefail
+          packages() {
+            cargo tree -p duet --locked --edges normal,build --prefix none \
+              --format '{p}' "$@" \
+              | awk '{print $1}' | sort -u | tr '\n' ' '
+          }
+          default="$(packages)"
+          expected_default="duet duet-core duet-runtime duet-schema "
+          if [ "$default" != "$expected_default" ]; then
+            echo "::error::duet's default dependencies changed"
+            echo "  expected: $expected_default"
+            echo "  actual:   $default"
+            exit 1
+          fi
+          full="$(packages --all-features)"
+          expected_full="duet duet-codegen duet-core duet-derive duet-runtime duet-schema itoa memchr proc-macro2 quote serde_core serde_json syn unicode-ident zmij "
+          if [ "$full" != "$expected_full" ]; then
+            echo "::error::duet's --all-features dependencies changed"
+            echo "  expected: $expected_full"
+            echo "  actual:   $full"
+            exit 1
+          fi
+          printf 'default:      %s\nall-features: %s\n' "$default" "$full"
       # duet-backend-macos links FlutterMacOS.framework and calls into
       # tao/objc2-app-kit, none of which exist on ubuntu-latest — this
       # runner has no window server and no Flutter toolchain, so the crate

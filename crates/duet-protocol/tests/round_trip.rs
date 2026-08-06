@@ -51,6 +51,16 @@ fn every_request_survives_a_text_hop() {
                 id: RequestId(3),
                 subscription: SubscriptionId(duet_codec::MAX_WIRE_ID),
             },
+            // An argument value goes through the same tagged encoding as a
+            // `set`, so every awkward value has to survive as an argument too —
+            // a command taking an `i64` above 2^53 or a `Bytes` blob is
+            // ordinary, and an `args` decoder that quietly re-derived its own
+            // value handling would break here rather than in production.
+            Request::Invoke {
+                id: RequestId(4),
+                command: "documents.rename".to_string(),
+                args: duet_protocol::Args::from([("to".to_string(), value.clone())]),
+            },
         ] {
             let text = serde_json::to_string(&encode_request(&original)).expect("encodes");
             let reparsed: serde_json::Value = serde_json::from_str(&text).expect("parses");
@@ -63,7 +73,7 @@ fn every_request_survives_a_text_hop() {
             checked += 1;
         }
     }
-    assert_eq!(checked, 40, "enumeration changed; update deliberately");
+    assert_eq!(checked, 50, "enumeration changed; update deliberately");
 }
 
 #[test]
@@ -89,6 +99,18 @@ fn every_response_survives_a_text_hop() {
                 id: RequestId(5),
                 message: "café \"quoted\" 🦀".to_string(),
             },
+            // `Value::Null` among the awkward values is the case that matters
+            // here: it must come back as the *tagged* null a command returns,
+            // never collapsing into the bare JSON `null` that means "absent"
+            // one variant up.
+            Response::Returned {
+                id: RequestId(6),
+                value: value.clone(),
+            },
+            Response::Raised {
+                id: RequestId(7),
+                error: value.clone(),
+            },
         ] {
             let text = serde_json::to_string(&encode_response(&original)).expect("encodes");
             let reparsed: serde_json::Value = serde_json::from_str(&text).expect("parses");
@@ -101,7 +123,7 @@ fn every_response_survives_a_text_hop() {
             checked += 1;
         }
     }
-    assert_eq!(checked, 50, "enumeration changed; update deliberately");
+    assert_eq!(checked, 70, "enumeration changed; update deliberately");
 }
 
 #[test]

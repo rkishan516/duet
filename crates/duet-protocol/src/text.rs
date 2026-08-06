@@ -10,9 +10,11 @@
 use duet_core::SubscriberId;
 use duet_runtime::StoreHandle;
 
+use crate::command::{CommandHost, NoCommands};
 use crate::message::{Push, RequestId, Response};
 
-/// Serves one guest message and returns the JSON text to send back.
+/// Serves one guest message and returns the JSON text to send back, with no
+/// commands registered.
 ///
 /// Total by construction: malformed input becomes a [`Response::Failed`], so a
 /// guest always receives well-formed JSON. [`crate::dispatch()`] is itself
@@ -21,6 +23,28 @@ use crate::message::{Push, RequestId, Response};
 /// `subscriber` is the surface's own, supplied by the host. A `subscriber`
 /// field appearing in the message is **ignored** — [`crate::Request`] has no
 /// such field, so a guest cannot subscribe as another guest.
+///
+/// An `invoke` is answered with a `failed` naming the command; see
+/// [`crate::NoCommands`]. A host that registers commands calls
+/// [`handle_text_with`] instead, and gets identical text for everything else —
+/// `both_entry_points_produce_the_same_text_when_no_commands_are_registered`
+/// pins that byte for byte.
+pub fn handle_text(store: &StoreHandle, subscriber: SubscriberId, text: &str) -> String {
+    handle_text_with(store, subscriber, &NoCommands, text)
+}
+
+/// Serves one guest message against the store and `commands`, returning the
+/// JSON text to send back.
+///
+/// The text-level counterpart of [`crate::dispatch_with`], and the entry point
+/// a transport that serves commands should call. Identical to [`handle_text`]
+/// for every request kind except `invoke`.
+///
+/// Still total, and now over a strictly larger surface: a command body is
+/// arbitrary user code, and both of the ways it can misbehave that this crate
+/// can see — panicking, and returning a value too deep to encode — are turned
+/// into a `failed` reply before they reach here. See [`crate::CommandHost`] for
+/// which thread a body runs on and the one hazard nothing here can detect.
 ///
 /// # The reply is depth-checked too, not only the request
 ///
@@ -36,11 +60,21 @@ use crate::message::{Push, RequestId, Response};
 /// for the door that leaves open — a `Store` *seeded* over-deep by its embedder,
 /// where the value was never written at all. Turning that into a
 /// [`Response::Failed`] costs one linear scan of text already produced, and buys
-/// the guarantee outright: **`handle_text` never returns text it could not
+/// the guarantee outright: **`handle_text_with` never returns text it could not
 /// decode itself**.
-pub fn handle_text(store: &StoreHandle, subscriber: SubscriberId, text: &str) -> String {
+///
+/// A command return reaches this check too, and is stopped one layer earlier as
+/// well: [`crate::dispatch_with`] refuses an over-deep return outright, because
+/// by then the host is holding a `Value` whose *destructor* is the hazard. This
+/// scan remains the backstop for text, as it always was.
+pub fn handle_text_with(
+    store: &StoreHandle,
+    subscriber: SubscriberId,
+    commands: &dyn CommandHost,
+    text: &str,
+) -> String {
     let response = match decode(text) {
-        Ok(request) => crate::dispatch(store, subscriber, request),
+        Ok(request) => crate::dispatch_with(store, subscriber, commands, request),
         Err((id, message)) => Response::Failed { id, message },
     };
     // `encode_response` produces a plain JSON object; serializing it here is
@@ -236,6 +270,146 @@ mod tests {
                 "input {bad:?} should produce a failed response, got {reply}"
             );
         }
+        rt.shutdown().expect("shutdown should succeed");
+    }
+
+    #[test]
+    fn both_entry_points_produce_the_same_text_when_no_commands_are_registered() {
+        // `handle_text` became a delegation to `handle_text_with` when commands
+        // were added, and three transports call it. The claim that has to be
+        // earned is that a host with no commands emits the *same bytes* it
+        // always did — not merely an equivalent reply. String equality is that
+        // claim; anything weaker would let a reordered field or a reworded
+        // failure through unnoticed.
+        let rt = rt();
+        let handle = rt.handle();
+        for text in [
+            r#"{"kind":"get","id":"1","path":"editor.zoom"}"#,
+            r#"{"kind":"get","id":"2","path":"editor.absent"}"#,
+            r#"{"kind":"set","id":"3","path":"editor.zoom","value":{"t":"f","v":2.0}}"#,
+            r#"{"kind":"set","id":"4","path":"nope.deeper","value":{"t":"n"}}"#,
+            r#"{"kind":"unsubscribe","id":"5","subscription":"99"}"#,
+            // The malformed cases too: the recovery path is shared, and a
+            // regression there is the one that hangs a guest.
+            "",
+            "not json",
+            r#"{"kind":"nope","id":"6"}"#,
+            r#"{"kind":"get","id":"007","path":"a"}"#,
+            // And `invoke` itself, which is the one kind whose reply is
+            // *supposed* to differ once a command host is supplied. With
+            // `NoCommands` on both sides it must not.
+            r#"{"kind":"invoke","id":"7","command":"add","args":{"t":"m","v":{}}}"#,
+        ] {
+            assert_eq!(
+                handle_text(&handle, SubscriberId(1), text),
+                handle_text_with(&handle, SubscriberId(1), &crate::NoCommands, text),
+                "{text} must produce identical text through both entry points"
+            );
+        }
+        rt.shutdown().expect("shutdown should succeed");
+    }
+
+    #[test]
+    fn an_invoke_with_no_commands_registered_answers_failed_not_unknown_kind() {
+        // What every host shipping today does with an `invoke`, at the text
+        // layer a transport actually calls. The kind is `failed` — the message
+        // was legal and simply unserved — and the id is echoed, so the guest
+        // fails that one call instead of waiting on it.
+        let rt = rt();
+        let reply = handle_text(
+            &rt.handle(),
+            SubscriberId(1),
+            r#"{"kind":"invoke","id":"9","command":"add","args":{"t":"m","v":{"a":{"t":"i","v":"2"}}}}"#,
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&reply).expect("valid JSON");
+        assert_eq!(parsed["kind"], "failed", "got {reply}");
+        assert_eq!(
+            parsed["id"], "9",
+            "the refusal must name the request it answers, got {reply}"
+        );
+        assert!(
+            reply.contains("add"),
+            "the refusal must name the command, got {reply}"
+        );
+        // And it is a `Response` a guest can decode, not merely valid JSON.
+        crate::decode_response(&parsed).expect("the refusal must decode as a Response");
+        rt.shutdown().expect("shutdown should succeed");
+    }
+
+    #[test]
+    fn a_command_answers_over_text_and_can_read_and_write_the_store() {
+        // The whole increment, end to end at the text layer: guest text in,
+        // command runs, `returned` text out — and the write the command made is
+        // visible to Rust afterwards. The shared-state claim from
+        // `a_set_request_writes_and_is_visible_to_rust`, now through logic
+        // rather than through a bare write.
+        use crate::{Args, CommandHost, Outcome};
+
+        struct Zoomer;
+        impl CommandHost for Zoomer {
+            fn invoke(&self, command: &str, args: Args, store: &StoreHandle) -> Outcome {
+                if command != "zoom_by" {
+                    return Outcome::Refused(format!(
+                        "no command named \"{}\"",
+                        duet_core::truncated(&command)
+                    ));
+                }
+                let by = match args.get("by") {
+                    Some(Value::Float(by)) => *by,
+                    _ => return Outcome::Raised(Value::Str("expected a float \"by\"".into())),
+                };
+                let path = Path::parse("editor.zoom").expect("test path should parse");
+                let current = match store.get(&path) {
+                    Ok(Some(Value::Float(v))) => v,
+                    other => return Outcome::Raised(Value::Str(format!("unreadable: {other:?}"))),
+                };
+                match store.set(&path, Value::Float(current + by)) {
+                    Ok(()) => Outcome::Returned(Value::Float(current + by)),
+                    Err(e) => Outcome::Raised(Value::Str(e.to_string())),
+                }
+            }
+        }
+
+        let rt = rt();
+        let handle = rt.handle();
+        let reply = handle_text_with(
+            &handle,
+            SubscriberId(1),
+            &Zoomer,
+            r#"{"kind":"invoke","id":"1","command":"zoom_by","args":{"t":"m","v":{"by":{"t":"f","v":0.5}}}}"#,
+        );
+        assert_eq!(
+            reply, r#"{"id":"1","kind":"returned","value":{"t":"f","v":1.5}}"#,
+            "the reply's exact bytes are the contract the other two languages decode"
+        );
+        assert_eq!(
+            handle
+                .get(&Path::parse("editor.zoom").expect("path"))
+                .expect("read should succeed"),
+            Some(Value::Float(1.5)),
+            "a value written by a command must be readable from Rust"
+        );
+
+        // An `Err` from the same command is a `raised`, carrying a value rather
+        // than prose — the distinction the kind exists for.
+        let reply = handle_text_with(
+            &handle,
+            SubscriberId(1),
+            &Zoomer,
+            r#"{"kind":"invoke","id":"2","command":"zoom_by","args":{"t":"m","v":{"by":{"t":"s","v":"lots"}}}}"#,
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&reply).expect("valid JSON");
+        assert_eq!(parsed["kind"], "raised", "got {reply}");
+
+        // And an unknown name is a `failed` — the host would not run it at all.
+        let reply = handle_text_with(
+            &handle,
+            SubscriberId(1),
+            &Zoomer,
+            r#"{"kind":"invoke","id":"3","command":"drop_database","args":{"t":"m","v":{}}}"#,
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&reply).expect("valid JSON");
+        assert_eq!(parsed["kind"], "failed", "got {reply}");
         rt.shutdown().expect("shutdown should succeed");
     }
 

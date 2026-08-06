@@ -1,0 +1,22 @@
+[package]
+name = "duet-command"
+description = "A registry of host commands a Duet guest may invoke"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# `duet-protocol` owns the seam — `CommandHost`, `Outcome`, `Args` — because
+# `duet_protocol::dispatch_with` has to name it. This crate sits above it and
+# provides the ergonomic half: a registry built from closures. The dependency
+# cannot point the other way without a cycle.
+[dependencies]
+duet-core = { path = "../duet-core" }
+duet-protocol = { path = "../duet-protocol" }
+duet-runtime = { path = "../duet-runtime" }
+
+# Only the tests need to look at encoded replies; the library itself never
+# touches JSON — `duet-protocol` owns every byte this crate's output becomes.
+[dev-dependencies]
+serde_json = { version = "1", features = ["float_roundtrip"] }
