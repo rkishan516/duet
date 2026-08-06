@@ -87,16 +87,23 @@ jobs:
       # committed file. Both this step and the coverage step above execute it;
       # it is named here so that nobody narrowing the test selection removes the
       # only staleness check without realising what it was.
-      # Two staleness checks live in here, and both compare a committed artifact
-      # against a fresh regeneration:
+      # Three staleness checks live in here, and each compares a committed
+      # artifact against a fresh regeneration:
       #
-      # - `corpus_matches_the_committed_file` in `duet-protocol`.
+      # - `corpus_matches_the_committed_file` in `duet-protocol`, for
+      #   `corpus/wire-corpus.json`.
       # - `the_goldens_match_what_the_emitters_produce_now` in `duet-codegen`,
       #   which regenerates every file under `packages/*/test/generated/` from
       #   `schema/*.json`. A stale generated client is worse than none: the two
       #   guest packages would keep compiling and testing against a shape the
       #   host no longer has.
-      - name: Test single-threaded (includes both staleness checks)
+      # - `corpus_matches_the_committed_file` in `duet-codegen`, for
+      #   `corpus/schema-corpus.json`. That file states the seed the stdio host
+      #   starts from and every path a generated client binds, and BOTH guest
+      #   packages read it — the no-host codec checks and the live-host
+      #   conformance run alike. A stale one would have every language
+      #   conforming to a schema that no longer exists.
+      - name: Test single-threaded (includes all three staleness checks)
         run: cargo test --workspace --exclude duet-backend-macos --locked -- --test-threads=1
 
   # The pure-Dart client. This job is the entire reason `packages/duet` and
