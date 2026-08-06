@@ -40,25 +40,31 @@ impl Schema {
     pub fn of<T: SharedState>() -> Result<Schema, SchemaErrors> {
         let mut registry = Registry::new();
         let root = T::schema(&mut registry);
-        let (types, mut errors) = registry.into_parts();
+        let (types, errors) = registry.into_parts();
+        validate(root, types, errors)
+    }
 
-        // A cyclic or dangling graph makes the rest meaningless — a depth walk
-        // over a cycle would not terminate — so stop once the shape is wrong.
-        let order = match resolve(&root, &types) {
-            Ok(order) => order,
-            Err(structural) => {
-                errors.extend(structural);
-                return Err(SchemaErrors(deduped(errors)));
-            }
-        };
-        errors.extend(check_names_and_keys(&types));
-        errors.extend(check_depth(&root, &types, &order));
-
-        if errors.is_empty() {
-            Ok(Schema { root, types })
-        } else {
-            Err(SchemaErrors(deduped(errors)))
-        }
+    /// Builds and validates a schema from a root type and its definitions.
+    ///
+    /// The entry point for a schema that did **not** come from Rust types.
+    /// `duet-codegen`'s reader parses a rendered schema back into a [`Ty`] and
+    /// a `Vec<TypeDef>` and hands them here, so a parsed schema passes exactly
+    /// the checks a derived one does rather than a reimplementation of them
+    /// that could drift.
+    ///
+    /// `types` may arrive in any order and is sorted by name, because
+    /// [`render`](Schema::render)'s byte-stability must not depend on how the
+    /// caller happened to assemble the list.
+    ///
+    /// # Errors
+    ///
+    /// [`SchemaErrors`] carrying every distinct problem found. Beyond what
+    /// [`Schema::of`] can produce, a hand-assembled list can also contain two
+    /// [`TypeDef`]s sharing a name ([`SchemaError::NameCollision`]) or one
+    /// [`TypeDef`] with two fields on one key ([`SchemaError::DuplicateKey`]),
+    /// neither of which [`Registry`] can emit.
+    pub fn build(root: Ty, types: Vec<TypeDef>) -> Result<Schema, SchemaErrors> {
+        validate(root, types, Vec::new())
     }
 
     /// What a value of this schema looks like at the root.
@@ -82,6 +88,78 @@ impl Schema {
         let order = resolve(&self.root, &self.types).unwrap_or_default();
         declared_depth(&self.root, &self.types, &order)
     }
+}
+
+/// The checks every schema passes, however it was assembled.
+///
+/// `errors` carries what the [`Registry`] already found, so a derived schema
+/// reports registry problems and structural ones together.
+fn validate(
+    root: Ty,
+    mut types: Vec<TypeDef>,
+    mut errors: Vec<SchemaError>,
+) -> Result<Schema, SchemaErrors> {
+    // `Registry` yields types ordered by name already; a hand-assembled list
+    // may not be, and `render`'s byte-stability must not depend on the order a
+    // caller happened to build it in.
+    types.sort_by(|a, b| a.name.cmp(&b.name));
+    errors.extend(check_unique_names(&types));
+
+    // A cyclic or dangling graph makes the rest meaningless — a depth walk over
+    // a cycle would not terminate — so stop once the shape is wrong.
+    let order = match resolve(&root, &types) {
+        Ok(order) => order,
+        Err(structural) => {
+            errors.extend(structural);
+            return Err(SchemaErrors(deduped(errors)));
+        }
+    };
+    errors.extend(check_names_and_keys(&types));
+    errors.extend(check_duplicate_keys(&types));
+    errors.extend(check_depth(&root, &types, &order));
+
+    if errors.is_empty() {
+        Ok(Schema { root, types })
+    } else {
+        Err(SchemaErrors(deduped(errors)))
+    }
+}
+
+/// Rejects two [`TypeDef`]s sharing a name.
+///
+/// [`Registry`] cannot produce this — it is keyed by name — but a
+/// hand-assembled or parsed list can, and the by-name map [`resolve`] builds
+/// would silently keep only one of them.
+fn check_unique_names(types: &[TypeDef]) -> Vec<SchemaError> {
+    // `types` is sorted by name, so duplicates are adjacent.
+    types
+        .windows(2)
+        .filter(|pair| pair[0].name == pair[1].name)
+        .map(|pair| SchemaError::NameCollision {
+            name: pair[0].name.clone(),
+        })
+        .collect()
+}
+
+/// Rejects two fields of one type on one wire key.
+///
+/// [`Registry::define`] already refuses this as a schema is *built*; this
+/// refuses it however it was built, including from a parsed document.
+fn check_duplicate_keys(types: &[TypeDef]) -> Vec<SchemaError> {
+    let mut errors = Vec::new();
+    for def in types {
+        let mut seen: Vec<&str> = Vec::with_capacity(def.fields.len());
+        for field in &def.fields {
+            if seen.contains(&field.key.as_str()) {
+                errors.push(SchemaError::DuplicateKey {
+                    type_name: def.name.clone(),
+                    key: field.key.clone(),
+                });
+            }
+            seen.push(&field.key);
+        }
+    }
+    errors
 }
 
 /// Drops repeats while keeping first-seen order.

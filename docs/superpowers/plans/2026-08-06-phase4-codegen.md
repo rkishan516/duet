@@ -66,9 +66,19 @@ This is the hardest correctness in the whole feature, and it ships **hand-writte
 
 ---
 
-## Increment 4 — `crates/duet-codegen`
+## Increment 4 — `crates/duet-codegen` ✅ DONE
 
 A `serde_json` schema **reader** independent of the hand-rolled writer, so a round-trip across the two is a genuine cross-check. Dart and TS emitters. Hand-written `schema/app.json`, `schema/wide.json`, `schema/negative/*.json`. Goldens committed **into** the packages. Staleness, determinism, coverage-floor, totality-fuzz and mutation-sensitivity tests.
+
+**Shipped.** 686 Rust / 233 Dart / 279 TypeScript. `duet-codegen` at 98.4% lines.
+
+Decisions taken, each with a test that would fail if it were reversed:
+
+- **A wire key is never rewritten; an accessor name always is.** `snake_case` becomes `lowerCamelCase` in Dart and TypeScript alike; the path keeps the schema's own spelling. `tests/casing.rs` pins both directions, and `tests/real_host.rs` resolves every path literal in the committed goldens against a real `duet_core::Store`, so a camel-cased path fails against the host rather than against an assertion about it.
+- **`schema/negative/` and `schema/unemittable/` are different directories** because they are different rejections: one is "this file is not a schema", the other is "this schema has no faithful spelling in the target languages". Collapsing them would leave a developer unable to tell a corrupt file from a type definition that needs changing.
+- **Rejected at codegen time**: a non-struct root, an `optional` anywhere but a field's own type (no codec can have a nullable type argument), a key that is not an ASCII identifier, two keys that camel-case alike, a declaration-name collision, and more than 256 struct-typed paths.
+
+What the golden tests do **not** catch, and what covers it instead: a golden proves the emitter still emits what it emitted before. `tests/real_host.rs` resolves the paths on a real store; `dart analyze` and `tsc` compile the output; and each guest package drives its generated client against a fake host transcribed from `duet-core`'s write rules. Measured by mutation: a misspelled path fails 3 tests in each guest suite, a codec swapped alone does not compile, and a type and codec swapped together fail 1 test in each guest suite with a mismatch instead of a value.
 
 ---
 

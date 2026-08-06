@@ -6,6 +6,7 @@ members = [
     "crates/duet-runtime",
     "crates/duet-codec",
     "crates/duet-schema",
+    "crates/duet-codegen",
     "crates/duet-supervisor",
     "crates/duet-host",
     "crates/duet-backend-macos",

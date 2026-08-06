@@ -1,0 +1,21 @@
+{
+  "root": {"kind": "named", "name": "App"},
+  "types": [
+    {
+      "fields": [
+        {"key": "counter", "type": {"kind": "int"}},
+        {"key": "editor", "type": {"kind": "named", "name": "Editor"}},
+        {"key": "title", "type": {"kind": "string"}}
+      ],
+      "name": "App"
+    },
+    {
+      "fields": [
+        {"key": "zoom", "type": {"kind": "float"}},
+        {"key": "theme", "type": {"kind": "string"}}
+      ],
+      "name": "Editor"
+    }
+  ],
+  "version": 1
+}

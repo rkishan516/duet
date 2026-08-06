@@ -1,0 +1,26 @@
+{
+  "root": {
+    "kind": "named",
+    "name": "App"
+  },
+  "types": [
+    {
+      "fields": [
+        {
+          "key": "zoom",
+          "type": {
+            "kind": "int"
+          }
+        },
+        {
+          "key": "zoom",
+          "type": {
+            "kind": "string"
+          }
+        }
+      ],
+      "name": "App"
+    }
+  ],
+  "version": 1
+}

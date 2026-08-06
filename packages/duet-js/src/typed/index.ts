@@ -54,6 +54,7 @@ export {
 export {
   duetBoolCodec,
   duetBytesCodec,
+  duetDynamicCodec,
   duetFloatCodec,
   duetIntCodec,
   duetListCodec,

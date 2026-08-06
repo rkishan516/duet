@@ -12,6 +12,13 @@ on:
       # stale corpus is worse than no corpus: every guest would be conforming to
       # a phantom.
       - 'corpus/**'
+      # The hand-written schemas, for the same reason as the corpus: they are
+      # the input the committed Dart and TypeScript clients are generated from,
+      # and `crates/duet-codegen`'s staleness check is the only thing that says
+      # the committed clients are still what those schemas produce. A schema
+      # edited alone would otherwise leave two guest packages generated from a
+      # file that no longer exists in that form.
+      - 'schema/**'
       - 'packages/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -80,7 +87,16 @@ jobs:
       # committed file. Both this step and the coverage step above execute it;
       # it is named here so that nobody narrowing the test selection removes the
       # only staleness check without realising what it was.
-      - name: Test single-threaded (includes the corpus staleness check)
+      # Two staleness checks live in here, and both compare a committed artifact
+      # against a fresh regeneration:
+      #
+      # - `corpus_matches_the_committed_file` in `duet-protocol`.
+      # - `the_goldens_match_what_the_emitters_produce_now` in `duet-codegen`,
+      #   which regenerates every file under `packages/*/test/generated/` from
+      #   `schema/*.json`. A stale generated client is worse than none: the two
+      #   guest packages would keep compiling and testing against a shape the
+      #   host no longer has.
+      - name: Test single-threaded (includes both staleness checks)
         run: cargo test --workspace --exclude duet-backend-macos --locked -- --test-threads=1
 
   # The pure-Dart client. This job is the entire reason `packages/duet` and

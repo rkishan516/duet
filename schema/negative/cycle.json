@@ -1,0 +1,24 @@
+{
+  "root": {
+    "kind": "named",
+    "name": "Node"
+  },
+  "types": [
+    {
+      "fields": [
+        {
+          "key": "next",
+          "type": {
+            "kind": "optional",
+            "of": {
+              "kind": "named",
+              "name": "Node"
+            }
+          }
+        }
+      ],
+      "name": "Node"
+    }
+  ],
+  "version": 1
+}

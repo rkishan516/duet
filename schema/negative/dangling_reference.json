@@ -1,0 +1,21 @@
+{
+  "root": {
+    "kind": "named",
+    "name": "App"
+  },
+  "types": [
+    {
+      "fields": [
+        {
+          "key": "editor",
+          "type": {
+            "kind": "named",
+            "name": "Editor"
+          }
+        }
+      ],
+      "name": "App"
+    }
+  ],
+  "version": 1
+}
