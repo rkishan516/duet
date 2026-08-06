@@ -456,6 +456,7 @@ dependencies = [
 name = "duet-codegen"
 version = "0.1.0"
 dependencies = [
+ "duet-codec",
  "duet-core",
  "duet-runtime",
  "duet-schema",
