@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use duet_core::{MAX_VALUE_DEPTH, Path, Segment};
 
+use crate::command::{CommandDef, is_legal_command_name};
 use crate::error::{SchemaError, SchemaErrors};
 use crate::registry::Registry;
 use crate::state::SharedState;
@@ -28,10 +29,11 @@ use crate::ty::{Ty, TypeDef, is_legal_key, is_legal_type_name};
 pub struct Schema {
     root: Ty,
     types: Vec<TypeDef>,
+    commands: Vec<CommandDef>,
 }
 
 impl Schema {
-    /// Derives and validates the schema of `T`.
+    /// Derives and validates the schema of `T`, with no commands.
     ///
     /// # Errors
     ///
@@ -39,10 +41,39 @@ impl Schema {
     /// first: a developer fixing type definitions benefits from seeing all of
     /// them at once. See [`SchemaError`] for the individual reasons.
     pub fn of<T: SharedState>() -> Result<Schema, SchemaErrors> {
+        Schema::of_with_commands::<T>(|_| Vec::new())
+    }
+
+    /// Derives and validates the schema of `T` together with a set of commands.
+    ///
+    /// # Why `describe` is a closure and not a `Vec`
+    ///
+    /// Commands are described into the **same [`Registry`]** the root is, and
+    /// they have to be: a command taking or returning a struct must render as
+    /// `{"kind": "named", …}` and that struct must appear in `types`, whether
+    /// or not the root happens to reach it. A caller handed a finished
+    /// `Vec<CommandDef>` would have had to build it against a registry of its
+    /// own, and the definitions it registered would be in that one instead of
+    /// this one — a schema whose commands name types it does not define.
+    ///
+    /// `duet_command::describe` is the implementation of this closure an
+    /// embedder actually passes.
+    ///
+    /// # Errors
+    ///
+    /// [`SchemaErrors`] carrying every distinct problem found, including the
+    /// command-specific ones: an illegal or repeated command name, an illegal
+    /// or repeated parameter key, a parameter or return type naming a struct
+    /// nothing defines, and a command whose types nest deeper than the store
+    /// admits.
+    pub fn of_with_commands<T: SharedState>(
+        describe: impl FnOnce(&mut Registry) -> Vec<CommandDef>,
+    ) -> Result<Schema, SchemaErrors> {
         let mut registry = Registry::new();
         let root = T::schema(&mut registry);
+        let commands = describe(&mut registry);
         let (types, errors) = registry.into_parts();
-        validate(root, types, errors)
+        validate(root, types, commands, errors)
     }
 
     /// Builds and validates a schema from a root type and its definitions.
@@ -65,7 +96,26 @@ impl Schema {
     /// [`TypeDef`] with two fields on one key ([`SchemaError::DuplicateKey`]),
     /// neither of which [`Registry`] can emit.
     pub fn build(root: Ty, types: Vec<TypeDef>) -> Result<Schema, SchemaErrors> {
-        validate(root, types, Vec::new())
+        Schema::build_with_commands(root, types, Vec::new())
+    }
+
+    /// Builds and validates a schema from a root type, its definitions and its
+    /// commands.
+    ///
+    /// What `duet-codegen`'s reader calls for a version-2 document. `commands`
+    /// keeps the order the document gave it, which is the order it will be
+    /// rendered back in.
+    ///
+    /// # Errors
+    ///
+    /// [`SchemaErrors`] carrying every distinct problem found — see
+    /// [`Schema::build`] and [`Schema::of_with_commands`].
+    pub fn build_with_commands(
+        root: Ty,
+        types: Vec<TypeDef>,
+        commands: Vec<CommandDef>,
+    ) -> Result<Schema, SchemaErrors> {
+        validate(root, types, commands, Vec::new())
     }
 
     /// What a value of this schema looks like at the root.
@@ -78,6 +128,18 @@ impl Schema {
         &self.types
     }
 
+    /// Every command the schema declares, ordered by name.
+    ///
+    /// Sorted, exactly as [`types`](Schema::types) is, and for the same reason:
+    /// a command is reached by **name** and never by position, so the order it
+    /// was registered in carries no meaning and letting it into the file would
+    /// make reordering a `commands![…]` list a diff. A struct's *fields* are the
+    /// one thing here that keeps declaration order, because generated
+    /// constructors take them positionally.
+    pub fn commands(&self) -> &[CommandDef] {
+        &self.commands
+    }
+
     /// The deepest nesting a value of this schema declares.
     ///
     /// Comparable directly with [`MAX_VALUE_DEPTH`]
@@ -86,8 +148,9 @@ impl Schema {
     /// and a cached field is one more thing that can disagree with the data it
     /// describes.
     pub fn depth(&self) -> usize {
-        let order = resolve(&self.root, &self.types).unwrap_or_default();
-        declared_depth(&self.root, &self.types, &order)
+        let order = resolve(&self.root, &self.types, &self.commands).unwrap_or_default();
+        let table = depth_table(&self.types, &order);
+        deepest_declaration(&self.root, &self.commands, &table)
     }
 }
 
@@ -98,17 +161,21 @@ impl Schema {
 fn validate(
     root: Ty,
     mut types: Vec<TypeDef>,
+    mut commands: Vec<CommandDef>,
     mut errors: Vec<SchemaError>,
 ) -> Result<Schema, SchemaErrors> {
     // `Registry` yields types ordered by name already; a hand-assembled list
     // may not be, and `render`'s byte-stability must not depend on the order a
-    // caller happened to build it in.
+    // caller happened to build it in. Commands are sorted for the same reason
+    // and by the same rule — see `Schema::commands`.
     types.sort_by(|a, b| a.name.cmp(&b.name));
+    commands.sort_by(|a, b| a.name.cmp(&b.name));
     errors.extend(check_unique_names(&types));
+    errors.extend(check_unique_command_names(&commands));
 
     // A cyclic or dangling graph makes the rest meaningless — a depth walk over
     // a cycle would not terminate — so stop once the shape is wrong.
-    let order = match resolve(&root, &types) {
+    let order = match resolve(&root, &types, &commands) {
         Ok(order) => order,
         Err(structural) => {
             errors.extend(structural);
@@ -117,10 +184,15 @@ fn validate(
     };
     errors.extend(check_names_and_keys(&types));
     errors.extend(check_duplicate_keys(&types));
-    errors.extend(check_depth(&root, &types, &order));
+    errors.extend(check_commands(&commands));
+    errors.extend(check_depth(&root, &types, &commands, &order));
 
     if errors.is_empty() {
-        Ok(Schema { root, types })
+        Ok(Schema {
+            root,
+            types,
+            commands,
+        })
     } else {
         Err(SchemaErrors(deduped(errors)))
     }
@@ -137,6 +209,22 @@ fn check_unique_names(types: &[TypeDef]) -> Vec<SchemaError> {
         .windows(2)
         .filter(|pair| pair[0].name == pair[1].name)
         .map(|pair| SchemaError::NameCollision {
+            name: pair[0].name.clone(),
+        })
+        .collect()
+}
+
+/// Rejects two commands sharing a name.
+///
+/// A guest names a command and nothing else, so two definitions on one name are
+/// two things one `invoke` could mean — and which of them a registry would
+/// actually run is decided by insertion order, not by the developer.
+fn check_unique_command_names(commands: &[CommandDef]) -> Vec<SchemaError> {
+    // `commands` is sorted by name, so duplicates are adjacent.
+    commands
+        .windows(2)
+        .filter(|pair| pair[0].name == pair[1].name)
+        .map(|pair| SchemaError::CommandCollision {
             name: pair[0].name.clone(),
         })
         .collect()
@@ -189,7 +277,11 @@ fn deduped(errors: Vec<SchemaError>) -> Vec<SchemaError> {
 /// already refuses recursion as a schema is *built*; this refuses it however it
 /// was built, including through a hand-written [`SharedState`] impl that
 /// constructed a [`Ty::Named`] directly.
-fn resolve(root: &Ty, types: &[TypeDef]) -> Result<Vec<String>, Vec<SchemaError>> {
+fn resolve(
+    root: &Ty,
+    types: &[TypeDef],
+    commands: &[CommandDef],
+) -> Result<Vec<String>, Vec<SchemaError>> {
     let by_name: BTreeMap<&str, &TypeDef> = types.iter().map(|t| (t.name.as_str(), t)).collect();
     let mut walker = Walker::default();
     // Definitions unreachable from the root are walked too: they are still part
@@ -197,6 +289,12 @@ fn resolve(root: &Ty, types: &[TypeDef]) -> Result<Vec<String>, Vec<SchemaError>
     // validity depend on which fields happen to reference what.
     let mut starts = root.referenced_names();
     starts.extend(types.iter().map(|t| t.name.as_str()));
+    // A command's parameter, return and error types are references into the
+    // same graph. A command is very often the *only* thing that reaches an
+    // error type — nothing in the state tree mentions it — so leaving these out
+    // would let a schema name a struct it never defines, and the first sign of
+    // it would be a generated client with a dangling type.
+    starts.extend(commands.iter().flat_map(CommandDef::referenced_names));
     for start in starts {
         walker.walk(start, &by_name);
     }
@@ -287,7 +385,7 @@ fn check_names_and_keys(types: &[TypeDef]) -> Vec<SchemaError> {
             });
         }
         for field in &def.fields {
-            if !is_legal_key(&field.key) || !key_round_trips(&field.key) {
+            if !legal_wire_key(&field.key) {
                 errors.push(SchemaError::IllegalKey {
                     type_name: def.name.clone(),
                     key: field.key.clone(),
@@ -296,6 +394,56 @@ fn check_names_and_keys(types: &[TypeDef]) -> Vec<SchemaError> {
         }
     }
     errors
+}
+
+/// Name legality and parameter keys, for every command.
+///
+/// A parameter key goes through [`legal_wire_key`] — the same predicate a
+/// struct field's key does. The schema has **one** notion of a wire key, and
+/// two would be one too many: a parameter occupies a key in the `args` map
+/// exactly as a field occupies one in a `Value::Map`, and it has to survive as
+/// an identifier in Dart and TypeScript exactly as a field's does.
+fn check_commands(commands: &[CommandDef]) -> Vec<SchemaError> {
+    let mut errors = Vec::new();
+    for command in commands {
+        if !is_legal_command_name(&command.name) {
+            errors.push(SchemaError::IllegalCommandName {
+                name: command.name.clone(),
+            });
+        }
+        errors.extend(check_param_keys(command));
+    }
+    errors
+}
+
+/// One command's parameter keys: each legal, and no two the same.
+fn check_param_keys(command: &CommandDef) -> Vec<SchemaError> {
+    let mut errors = Vec::new();
+    let mut seen: Vec<&str> = Vec::with_capacity(command.params.len());
+    for param in &command.params {
+        if !legal_wire_key(&param.key) {
+            errors.push(SchemaError::IllegalParam {
+                command: command.name.clone(),
+                key: param.key.clone(),
+            });
+        }
+        if seen.contains(&param.key.as_str()) {
+            // Two parameters on one key occupy one entry of the `args` map: one
+            // of the two can never be supplied, and which one is not something
+            // the developer chose.
+            errors.push(SchemaError::DuplicateParam {
+                command: command.name.clone(),
+                key: param.key.clone(),
+            });
+        }
+        seen.push(&param.key);
+    }
+    errors
+}
+
+/// True if `key` is legal wherever the format admits a wire key.
+fn legal_wire_key(key: &str) -> bool {
+    is_legal_key(key) && key_round_trips(key)
 }
 
 /// True if `key` survives being rendered into a path string and parsed back as
@@ -320,8 +468,14 @@ fn key_round_trips(key: &str) -> bool {
 /// Every write of such a root would be refused by
 /// [`Store::set`](duet_core::Store::set), so it is a schema that can never be
 /// installed — worth finding at startup rather than on the first write.
-fn check_depth(root: &Ty, types: &[TypeDef], order: &[String]) -> Vec<SchemaError> {
-    let depth = declared_depth(root, types, order);
+fn check_depth(
+    root: &Ty,
+    types: &[TypeDef],
+    commands: &[CommandDef],
+    order: &[String],
+) -> Vec<SchemaError> {
+    let table = depth_table(types, order);
+    let depth = deepest_declaration(root, commands, &table);
     if depth > MAX_VALUE_DEPTH {
         vec![SchemaError::TooDeep {
             depth,
@@ -332,8 +486,28 @@ fn check_depth(root: &Ty, types: &[TypeDef], order: &[String]) -> Vec<SchemaErro
     }
 }
 
-/// The nesting the root's declared structure implies.
-fn declared_depth(root: &Ty, types: &[TypeDef], order: &[String]) -> usize {
+/// The deepest value this schema declares anywhere: the root, or a command's
+/// arguments, return or error.
+///
+/// # Why a command's types count
+///
+/// A command's argument map and its reply travel the same wire the store's
+/// values do, and `duet_protocol::dispatch_with` refuses a return past
+/// [`MAX_VALUE_DEPTH`] at the moment it is produced. A schema declaring a
+/// command that can only ever be refused is as broken as a root that can never
+/// be installed, and it is worth finding at startup rather than on the first
+/// call — which may be the first call in production, since nothing writes a
+/// command's return into the store on the way there.
+fn deepest_declaration(root: &Ty, commands: &[CommandDef], table: &BTreeMap<&str, usize>) -> usize {
+    commands
+        .iter()
+        .flat_map(CommandDef::declared_types)
+        .map(|ty| ty_depth(ty, table))
+        .fold(ty_depth(root, table), usize::max)
+}
+
+/// How deep each named type nests, keyed by name.
+fn depth_table<'a>(types: &'a [TypeDef], order: &[String]) -> BTreeMap<&'a str, usize> {
     let by_name: BTreeMap<&str, &TypeDef> = types.iter().map(|t| (t.name.as_str(), t)).collect();
     let mut table: BTreeMap<&str, usize> = BTreeMap::new();
     // `order` is dependency order, so every name a type references already has
@@ -352,7 +526,7 @@ fn declared_depth(root: &Ty, types: &[TypeDef], order: &[String]) -> usize {
         // A struct is a `Value::Map`: one container, plus its deepest field.
         table.insert(def.name.as_str(), deepest + 1);
     }
-    ty_depth(root, &table)
+    table
 }
 
 /// The nesting one [`Ty`] implies, resolving named types through `table`.

@@ -21,8 +21,9 @@
 
 use std::fmt::Write as _;
 
+use crate::command::CommandDef;
 use crate::schema::Schema;
-use crate::ty::{Ty, TypeDef};
+use crate::ty::{FieldDef, Ty, TypeDef};
 
 /// The schema format's version, emitted as `"version"`.
 ///
@@ -30,17 +31,43 @@ use crate::ty::{Ty, TypeDef};
 /// meeting a version it does not know can refuse rather than misread. Adding a
 /// new [`Ty`] arm is not a shape change: a reader that does not know the arm
 /// already has to reject it by name.
-pub const SCHEMA_VERSION: u32 = 1;
+///
+/// | Version | Shape |
+/// |---|---|
+/// | 1 | `root`, `types`, `version` |
+/// | 2 | adds `commands` |
+pub const SCHEMA_VERSION: u32 = 2;
 
 impl Schema {
     /// Renders this schema as deterministic, byte-stable JSON.
     ///
     /// The output ends with a newline so the file is a well-formed text file
     /// and a diff of it never reports "no newline at end of file".
+    ///
+    /// # `"commands"` is always emitted, even when empty
+    ///
+    /// Three reasons, in order of weight:
+    ///
+    /// 1. A version-1 document has no `commands` key at all, and the reader
+    ///    accepts both versions. If the writer *also* omitted the key when the
+    ///    list was empty, "absent" would be produced by two unrelated
+    ///    situations and a hand-edited version-1 file would be
+    ///    indistinguishable from a version-2 one that declares no commands.
+    ///    Always emitting makes it an invariant: version 2 implies the key.
+    /// 2. It is the rule the format already follows. `types` is emitted for a
+    ///    schema with no structs, and `fields` for a struct with none — an
+    ///    empty array, not an omission — so a `commands` that came and went
+    ///    would be the format's one exception rather than its one new key.
+    /// 3. The version bump moves every committed schema anyway, so the cost is
+    ///    paid once. Omitting when empty would instead make *adding the first
+    ///    command* a structural diff, which a reviewer reads as a new key
+    ///    rather than as a new entry.
     pub fn render(&self) -> String {
         let mut out = String::new();
         out.push_str("{\n");
-        out.push_str("  \"root\": ");
+        out.push_str("  \"commands\": ");
+        write_commands(&mut out, self.commands(), 1);
+        out.push_str(",\n  \"root\": ");
         write_ty(&mut out, self.root(), 1);
         out.push_str(",\n  \"types\": ");
         write_types(&mut out, self.types(), 1);
@@ -49,6 +76,61 @@ impl Schema {
         let _ = write!(out, ",\n  \"version\": {SCHEMA_VERSION}\n}}\n");
         out
     }
+}
+
+/// Writes the `commands` array, one object per command, sorted by name.
+fn write_commands(out: &mut String, commands: &[CommandDef], level: usize) {
+    if commands.is_empty() {
+        out.push_str("[]");
+        return;
+    }
+    out.push_str("[\n");
+    for (position, command) in commands.iter().enumerate() {
+        indent(out, level + 1);
+        write_command(out, command, level + 1);
+        if position + 1 < commands.len() {
+            out.push(',');
+        }
+        out.push('\n');
+    }
+    indent(out, level);
+    out.push(']');
+}
+
+/// Writes one command: `name`, `params`, then `raises` and `returns` if it has
+/// them — the four keys in sorted order.
+///
+/// A command with no return type omits `"returns"` entirely, and one that
+/// cannot fail omits `"raises"`. See [`CommandDef`] for why absence rather than
+/// a `null` or a `{"kind": "unit"}`.
+fn write_command(out: &mut String, command: &CommandDef, level: usize) {
+    out.push_str("{\n");
+    indent(out, level + 1);
+    out.push_str("\"name\": ");
+    write_string(out, &command.name);
+    out.push_str(",\n");
+    indent(out, level + 1);
+    out.push_str("\"params\": ");
+    write_key_types(out, &command.params, level + 1);
+    write_optional_ty(out, "raises", command.raises.as_ref(), level + 1);
+    write_optional_ty(out, "returns", command.returns.as_ref(), level + 1);
+    out.push('\n');
+    indent(out, level);
+    out.push('}');
+}
+
+/// Writes `,\n<indent>"<key>": <ty>` when there is one, and nothing when there
+/// is not.
+fn write_optional_ty(out: &mut String, key: &str, ty: Option<&Ty>, level: usize) {
+    let Some(ty) = ty else {
+        return;
+    };
+    out.push_str(",\n");
+    indent(out, level);
+    out.push('"');
+    out.push_str(key);
+    out.push_str("\": ");
+    write_ty(out, ty, level);
 }
 
 /// Two spaces per level, matching the fixed indentation of the rest.
@@ -82,7 +164,7 @@ fn write_type_def(out: &mut String, def: &TypeDef, level: usize) {
     out.push_str("{\n");
     indent(out, level + 1);
     out.push_str("\"fields\": ");
-    write_fields(out, def, level + 1);
+    write_key_types(out, &def.fields, level + 1);
     out.push_str(",\n");
     indent(out, level + 1);
     out.push_str("\"name\": ");
@@ -92,26 +174,30 @@ fn write_type_def(out: &mut String, def: &TypeDef, level: usize) {
     out.push('}');
 }
 
-/// Writes a definition's fields in **declaration order**.
+/// Writes a `[{"key": …, "type": …}, …]` array in **declaration order**.
 ///
-/// The one place ordering is not sorted, and deliberately so: field order is
-/// what generated positional constructors in Dart and TypeScript use, so it is
-/// part of the contract and must follow the Rust declaration rather than an
-/// alphabet.
-fn write_fields(out: &mut String, def: &TypeDef, level: usize) {
-    if def.fields.is_empty() {
+/// Serves both a struct's `fields` and a command's `params`, which are the same
+/// shape carrying the same meaning: a wire key and what lives under it. One
+/// writer rather than two, so the two can never render differently.
+///
+/// The one place ordering is not sorted, and deliberately so: declaration order
+/// is what generated positional constructors and argument lists in Dart and
+/// TypeScript use, so it is part of the contract and must follow the Rust
+/// declaration rather than an alphabet.
+fn write_key_types(out: &mut String, entries: &[FieldDef], level: usize) {
+    if entries.is_empty() {
         out.push_str("[]");
         return;
     }
     out.push_str("[\n");
-    for (position, field) in def.fields.iter().enumerate() {
+    for (position, entry) in entries.iter().enumerate() {
         indent(out, level + 1);
         out.push_str("{\"key\": ");
-        write_string(out, &field.key);
+        write_string(out, &entry.key);
         out.push_str(", \"type\": ");
-        write_ty(out, &field.ty, level + 1);
+        write_ty(out, &entry.ty, level + 1);
         out.push('}');
-        if position + 1 < def.fields.len() {
+        if position + 1 < entries.len() {
             out.push(',');
         }
         out.push('\n');

@@ -54,10 +54,24 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+mod context;
+mod entry;
+mod param;
+mod returns;
+
 use std::collections::BTreeMap;
 
-use duet_protocol::{Args, CommandHost, Outcome};
 use duet_runtime::StoreHandle;
+
+// Re-exported so a `#[command]` expansion and an embedder both name one crate.
+// `Args` and `Outcome` are `duet-protocol`'s and stay there — this is a second
+// path to them, not a second definition.
+pub use duet_protocol::{Args, CommandHost, Outcome};
+
+pub use context::{CommandContext, FromContext};
+pub use entry::{Command, CommandEntry, describe};
+pub use param::CommandParam;
+pub use returns::{CommandReturn, command_raises, command_returns, into_outcome, marker};
 
 /// One command's body.
 ///
@@ -126,6 +140,38 @@ impl Commands {
     ) -> Self {
         self.table.insert(name.into(), Box::new(handler));
         self
+    }
+
+    /// Builds a registry from a `static` table of [`CommandEntry`].
+    ///
+    /// The bridge between the declarative half — `#[command]` and
+    /// [`commands!`] — and this registry, which is what a surface is actually
+    /// built with. The table is `static` and costs nothing to hold; this turns
+    /// it into the by-name lookup [`CommandHost::invoke`] needs.
+    ///
+    /// ```text
+    /// static COMMANDS: [CommandEntry; 2] = commands![add, reset];
+    /// let commands = Commands::from_entries(&COMMANDS);
+    /// ```
+    ///
+    /// # A repeated name replaces, exactly as [`with`](Commands::with) does
+    ///
+    /// Two entries under one name leave the last one registered, and
+    /// [`names`](Commands::names) shows what survived. It is not an error here
+    /// because it is already an error where it matters: `Schema::of_with_commands`
+    /// refuses two commands on one name, so a duplicate that reached a shipped
+    /// registry could not have produced a schema.
+    #[must_use]
+    pub fn from_entries(entries: &'static [CommandEntry]) -> Commands {
+        entries.iter().fold(Commands::new(), |commands, entry| {
+            commands.with(entry.name(), move |args, store: &StoreHandle| {
+                // One context per invocation. `StoreHandle` is a channel sender
+                // and an `Arc`, so the clone is two pointer bumps; see
+                // `CommandContext` for why an owned handle rather than a
+                // borrowed one.
+                entry.run(args, &CommandContext::new(store.clone()))
+            })
+        })
     }
 
     /// Every registered name, in sorted order.

@@ -56,6 +56,10 @@ schema_only!(Root, "Root", |registry| {
     })
 });
 
+schema_only!(Orphan, "Orphan", |registry| {
+    registry.define::<Self>("Orphan", |_| vec![FieldDef::new("code", Ty::Str)])
+});
+
 schema_only!(SelfReferential, "SelfReferential", |registry| {
     registry.define::<Self>("Node", |r| {
         vec![FieldDef::new("next", SelfReferential::schema(r).optional())]
@@ -289,7 +293,7 @@ fn a_schema_deeper_than_the_store_accepts_is_rejected() {
     for _ in 0..=MAX_VALUE_DEPTH {
         ty = ty.list();
     }
-    let errors = check_depth(&ty, &[], &[]);
+    let errors = check_depth(&ty, &[], &[], &[]);
     assert_eq!(
         errors,
         [SchemaError::TooDeep {
@@ -304,7 +308,7 @@ fn a_schema_deeper_than_the_store_accepts_is_rejected() {
     for _ in 0..MAX_VALUE_DEPTH {
         at_limit = at_limit.list();
     }
-    assert!(check_depth(&at_limit, &[], &[]).is_empty());
+    assert!(check_depth(&at_limit, &[], &[], &[]).is_empty());
 }
 
 #[test]
@@ -340,6 +344,7 @@ fn the_whole_document_is_pinned() {
     assert_eq!(
         rendered,
         r#"{
+  "commands": [],
   "root": {"kind": "named", "name": "Root"},
   "types": [
     {
@@ -357,7 +362,7 @@ fn the_whole_document_is_pinned() {
       "name": "Root"
     }
   ],
-  "version": 1
+  "version": 2
 }
 "#
     );
@@ -367,7 +372,7 @@ fn the_whole_document_is_pinned() {
 fn a_schema_with_no_types_renders_an_empty_array() {
     assert_eq!(
         Schema::of::<i64>().expect("valid").render(),
-        "{\n  \"root\": {\"kind\": \"int\"},\n  \"types\": [],\n  \"version\": 1\n}\n"
+        "{\n  \"commands\": [],\n  \"root\": {\"kind\": \"int\"},\n  \"types\": [],\n  \"version\": 2\n}\n"
     );
 }
 
@@ -398,6 +403,7 @@ fn every_ty_arm_reaches_the_renderer_through_a_whole_document() {
                 name: "Leaf".to_string(),
                 fields: vec![FieldDef::new("zoom", Ty::Float)],
             }],
+            commands: Vec::new(),
         }
         .render();
         for expected in [spelling, "\"optional\"", "\"map\"", "\"list\""] {
@@ -526,4 +532,282 @@ fn build_rejects_a_dangling_reference() {
             name: "Missing".to_string()
         }]
     );
+}
+
+// --- Commands ---
+
+/// A command with one `i64` parameter, returning an `i64`.
+fn add() -> CommandDef {
+    CommandDef::new(
+        "add",
+        vec![FieldDef::new("a", Ty::Int), FieldDef::new("b", Ty::Int)],
+        Ty::Int,
+    )
+}
+
+/// The schema of [`Root`] plus `commands`.
+fn with_commands(commands: Vec<CommandDef>) -> Result<Schema, SchemaErrors> {
+    Schema::of_with_commands::<Root>(|_| commands)
+}
+
+#[test]
+fn a_schema_with_no_commands_still_renders_the_key() {
+    // The decision `Schema::render` documents, pinned so a "tidier" writer that
+    // omitted the empty array is a failing test rather than a silent format
+    // change that only version detection would catch.
+    let rendered = Schema::of::<Root>().expect("valid").render();
+    assert!(rendered.contains("\"commands\": [],"), "{rendered}");
+    assert!(Schema::of::<Root>().expect("valid").commands().is_empty());
+}
+
+#[test]
+fn a_command_renders_with_its_parameters_in_declaration_order() {
+    let rendered = with_commands(vec![add()]).expect("valid").render();
+    assert_eq!(
+        rendered,
+        r#"{
+  "commands": [
+    {
+      "name": "add",
+      "params": [
+        {"key": "a", "type": {"kind": "int"}},
+        {"key": "b", "type": {"kind": "int"}}
+      ],
+      "returns": {"kind": "int"}
+    }
+  ],
+  "root": {"kind": "named", "name": "Root"},
+  "types": [
+    {
+      "fields": [
+        {"key": "zoom", "type": {"kind": "float"}}
+      ],
+      "name": "Leaf"
+    },
+    {
+      "fields": [
+        {"key": "counter", "type": {"kind": "int"}},
+        {"key": "leaf", "type": {"kind": "named", "name": "Leaf"}},
+        {"key": "leaves", "type": {"kind": "list", "of": {"kind": "named", "name": "Leaf"}}}
+      ],
+      "name": "Root"
+    }
+  ],
+  "version": 2
+}
+"#
+    );
+}
+
+#[test]
+fn each_of_the_four_return_shapes_has_its_own_spelling() {
+    // The whole table on `CommandDef`, rendered. Absence is spelled by omitting
+    // the key, so the assertion has to be about what is *not* there as much as
+    // about what is.
+    let cases: [(CommandDef, &str); 4] = [
+        (
+            CommandDef::new("plain", Vec::new(), Ty::Int),
+            "{\n      \"name\": \"plain\",\n      \"params\": [],\n      \
+             \"returns\": {\"kind\": \"int\"}\n    }",
+        ),
+        (
+            CommandDef {
+                name: "nothing".to_string(),
+                params: Vec::new(),
+                returns: None,
+                raises: None,
+            },
+            "{\n      \"name\": \"nothing\",\n      \"params\": []\n    }",
+        ),
+        (
+            CommandDef {
+                name: "fallible".to_string(),
+                params: Vec::new(),
+                returns: Some(Ty::Int),
+                raises: Some(Ty::Str),
+            },
+            "{\n      \"name\": \"fallible\",\n      \"params\": [],\n      \
+             \"raises\": {\"kind\": \"string\"},\n      \
+             \"returns\": {\"kind\": \"int\"}\n    }",
+        ),
+        (
+            CommandDef {
+                name: "fallible_void".to_string(),
+                params: Vec::new(),
+                returns: None,
+                raises: Some(Ty::Str),
+            },
+            "{\n      \"name\": \"fallible_void\",\n      \"params\": [],\n      \
+             \"raises\": {\"kind\": \"string\"}\n    }",
+        ),
+    ];
+    for (command, expected) in cases {
+        let name = command.name.clone();
+        let rendered = with_commands(vec![command]).expect("valid").render();
+        assert!(rendered.contains(expected), "{name}: {rendered}");
+    }
+}
+
+#[test]
+fn commands_are_rendered_sorted_by_name_however_they_were_registered() {
+    // Byte-stability: reordering a `commands![…]` list must not move the file.
+    let names = |commands: Vec<CommandDef>| -> Vec<String> {
+        with_commands(commands)
+            .expect("valid")
+            .commands()
+            .iter()
+            .map(|c| c.name.clone())
+            .collect()
+    };
+    let one = |name: &str| CommandDef::new(name, Vec::new(), Ty::Int);
+    assert_eq!(
+        names(vec![one("zebra"), one("apple"), one("mango")]),
+        ["apple", "mango", "zebra"]
+    );
+    assert_eq!(
+        names(vec![one("apple"), one("mango"), one("zebra")]),
+        ["apple", "mango", "zebra"]
+    );
+}
+
+#[test]
+fn two_commands_on_one_name_are_rejected() {
+    let errors = with_commands(vec![add(), add()]).expect_err("one name, two commands");
+    assert_eq!(
+        errors.0,
+        vec![SchemaError::CommandCollision {
+            name: "add".to_string()
+        }]
+    );
+}
+
+#[test]
+fn an_illegal_command_name_is_rejected() {
+    let errors = with_commands(vec![CommandDef::new("2fast", Vec::new(), Ty::Int)])
+        .expect_err("not an identifier");
+    assert_eq!(
+        errors.0,
+        vec![SchemaError::IllegalCommandName {
+            name: "2fast".to_string()
+        }]
+    );
+}
+
+#[test]
+fn a_parameter_key_follows_the_same_rule_a_field_key_does() {
+    // One notion of a wire key, applied wherever the format admits one.
+    for bad in ["", "a.b", "a[0]"] {
+        let errors = with_commands(vec![CommandDef::new(
+            "bump",
+            vec![FieldDef::new(bad, Ty::Int)],
+            Ty::Int,
+        )])
+        .expect_err("not a wire key");
+        assert!(
+            errors.0.contains(&SchemaError::IllegalParam {
+                command: "bump".to_string(),
+                key: bad.to_string(),
+            }),
+            "{bad}: {:?}",
+            errors.0
+        );
+    }
+}
+
+#[test]
+fn two_parameters_on_one_key_are_rejected() {
+    let errors = with_commands(vec![CommandDef::new(
+        "bump",
+        vec![FieldDef::new("by", Ty::Int), FieldDef::new("by", Ty::Int)],
+        Ty::Int,
+    )])
+    .expect_err("one key, two parameters");
+    assert_eq!(
+        errors.0,
+        vec![SchemaError::DuplicateParam {
+            command: "bump".to_string(),
+            key: "by".to_string(),
+        }]
+    );
+}
+
+#[test]
+fn a_command_may_name_a_type_the_root_never_reaches() {
+    // The case that makes the walk over commands load-bearing: an error type is
+    // very often reachable from nothing else in the schema.
+    let schema = Schema::of_with_commands::<Root>(|registry| {
+        vec![CommandDef {
+            name: "save".to_string(),
+            params: Vec::new(),
+            returns: None,
+            raises: Some(Orphan::schema(registry)),
+        }]
+    })
+    .expect("the command's own type is defined by describing it");
+    assert!(
+        schema.types().iter().any(|t| t.name == "Orphan"),
+        "the error type must be in `types`: {:?}",
+        schema.types()
+    );
+}
+
+#[test]
+fn a_command_naming_a_type_nothing_defines_is_rejected() {
+    // The same walk, from the other side: without commands as walk starts this
+    // would build cleanly and emit a client with a dangling type.
+    let errors = Schema::build_with_commands(
+        Ty::Int,
+        Vec::new(),
+        vec![CommandDef::new(
+            "save",
+            vec![FieldDef::new("doc", Ty::Named("Ghost".to_string()))],
+            Ty::Int,
+        )],
+    )
+    .expect_err("a reference to nothing");
+    assert_eq!(
+        errors.0,
+        vec![SchemaError::UnknownType {
+            name: "Ghost".to_string()
+        }]
+    );
+}
+
+#[test]
+fn a_command_type_deeper_than_the_store_accepts_is_rejected() {
+    // Depth validation covers a command's parameters and its two reply types,
+    // not only the root. Each position separately, because a guard on one of
+    // the three is a guard that looks present and is not.
+    let mut deep = Ty::Int;
+    for _ in 0..=MAX_VALUE_DEPTH {
+        deep = deep.list();
+    }
+    let positions: [(&str, CommandDef); 3] = [
+        (
+            "a parameter",
+            CommandDef::new("f", vec![FieldDef::new("x", deep.clone())], Ty::Int),
+        ),
+        ("a return", CommandDef::new("f", Vec::new(), deep.clone())),
+        (
+            "an error",
+            CommandDef {
+                name: "f".to_string(),
+                params: Vec::new(),
+                returns: None,
+                raises: Some(deep.clone()),
+            },
+        ),
+    ];
+    for (position, command) in positions {
+        let errors =
+            Schema::build_with_commands(Ty::Int, Vec::new(), vec![command]).expect_err(position);
+        assert_eq!(
+            errors.0,
+            vec![SchemaError::TooDeep {
+                depth: MAX_VALUE_DEPTH + 1,
+                max: MAX_VALUE_DEPTH,
+            }],
+            "{position}"
+        );
+    }
 }

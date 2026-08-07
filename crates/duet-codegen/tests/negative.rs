@@ -139,6 +139,43 @@ const REFUSED: &[Rejection] = &[
         stem: "dangling_reference",
         message: "no type named \"Editor\" is defined",
     },
+    // --- The version-2 half: commands ---
+    Rejection {
+        stem: "commands_not_an_array",
+        message: "\"commands\" should be an array",
+    },
+    Rejection {
+        stem: "command_missing_params",
+        message: "commands[0] has no \"params\"",
+    },
+    Rejection {
+        stem: "command_unexpected_key",
+        message: "\"doc\"",
+    },
+    Rejection {
+        stem: "command_name_collision",
+        message: "two different commands are both named \"add\"",
+    },
+    Rejection {
+        stem: "illegal_command_name",
+        message: "\"2fast\" is not a legal command name",
+    },
+    Rejection {
+        stem: "illegal_param_key",
+        message: "parameter \"a.b\" of command \"add\" is not a legal wire key",
+    },
+    Rejection {
+        stem: "duplicate_param_key",
+        message: "command \"add\" has two parameters on the key \"by\"",
+    },
+    Rejection {
+        stem: "command_dangling_type",
+        message: "no type named \"Ghost\" is defined",
+    },
+    Rejection {
+        stem: "command_too_deep",
+        message: "past the store's limit",
+    },
 ];
 
 /// Valid schemas the emitters must refuse, and what they must say.

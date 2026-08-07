@@ -142,6 +142,7 @@
 #![forbid(unsafe_code)]
 
 mod bytes;
+pub mod command;
 pub mod decode;
 mod echo;
 pub mod error;
@@ -155,6 +156,7 @@ pub mod ty;
 pub mod typed;
 
 pub use bytes::Bytes;
+pub use command::CommandDef;
 pub use decode::{DecodeError, DecodeReason};
 pub use error::{SchemaError, SchemaErrors};
 pub use registry::Registry;

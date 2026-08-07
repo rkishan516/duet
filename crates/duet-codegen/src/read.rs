@@ -44,7 +44,7 @@
 //! that means different things to different readers is worse than one nobody
 //! accepts.
 
-use duet_schema::{FieldDef, Schema, Ty, TypeDef};
+use duet_schema::{CommandDef, FieldDef, Schema, Ty, TypeDef};
 use serde_json::{Map, Value as Json};
 
 use crate::error::ReadError;
@@ -92,11 +92,11 @@ pub fn read_schema(text: &str) -> Result<Schema, ReadError> {
     let root_object = object(&document, "the schema")?;
     let version = check_version(root_object)?;
     exact_keys(root_object, "the schema", document_keys(version))?;
-    check_commands(root_object)?;
 
     let root = read_ty(require(root_object, "the schema", "root")?, "root", 0)?;
     let types = read_types(require(root_object, "the schema", "types")?)?;
-    Schema::build(root, types).map_err(ReadError::Invalid)
+    let commands = read_commands(root_object)?;
+    Schema::build_with_commands(root, types, commands).map_err(ReadError::Invalid)
 }
 
 /// The keys a document of this version may carry.
@@ -132,30 +132,66 @@ fn check_version(document: &Map<String, Json>) -> Result<u32, ReadError> {
         })
 }
 
-/// Reads the `commands` array — as far as this reader understands it.
+/// Reads the `commands` array, which a version-1 document does not have.
 ///
-/// # What this deliberately does *not* do
-///
-/// It does not build anything. [`Schema`] has no command definitions to hold
-/// yet, so a version-2 document's commands are checked for shape and then
-/// ignored: this is the older reader, and ignoring what it does not understand
-/// is exactly what forward tolerance means.
-///
-/// The shape is still checked, because "ignore the content" and "accept any
-/// bytes at all" are different promises. A `"commands": 7` is a corrupt
-/// document however little of it this reader consumes, and saying so here costs
-/// one line and means the tolerance never silently swallowed a mistake.
-fn check_commands(document: &Map<String, Json>) -> Result<(), ReadError> {
+/// An absent key is an empty list rather than an error: version 1 defines no
+/// commands at all, so "this schema declares none" is the only thing its
+/// absence can mean.
+fn read_commands(document: &Map<String, Json>) -> Result<Vec<CommandDef>, ReadError> {
     let Some(node) = document.get("commands") else {
-        // Absent: a version-1 document, or a version-2 one that declares none.
-        return Ok(());
+        return Ok(Vec::new());
     };
-    node.as_array()
-        .map(|_| ())
-        .ok_or_else(|| ReadError::WrongKind {
-            at: "\"commands\"".to_string(),
-            expected: "an array",
-        })
+    let entries = node.as_array().ok_or(ReadError::WrongKind {
+        at: "\"commands\"".to_string(),
+        expected: "an array",
+    })?;
+    entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| read_command(entry, &format!("commands[{index}]")))
+        .collect()
+}
+
+/// Reads one `{"name": …, "params": […], "raises"?: …, "returns"?: …}`.
+///
+/// `raises` and `returns` are optional and absent means "there is no such
+/// type" — see [`CommandDef`] for why absence rather than a `null`. `name` and
+/// `params` are required, so a command with no arguments still says `[]` and a
+/// reader never has to guess whether a key was forgotten or meant.
+fn read_command(node: &Json, at: &str) -> Result<CommandDef, ReadError> {
+    let command = object(node, at)?;
+    exact_keys(command, at, &["name", "params", "raises", "returns"])?;
+    let name = string(require(command, at, "name")?, &format!("{at}.name"))?;
+    let params =
+        require(command, at, "params")?
+            .as_array()
+            .ok_or_else(|| ReadError::WrongKind {
+                at: format!("{at}.params"),
+                expected: "an array",
+            })?;
+    let params = params
+        .iter()
+        .enumerate()
+        .map(|(index, param)| read_field(param, &format!("{at}.params[{index}]")))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(CommandDef {
+        name: name.to_string(),
+        params,
+        returns: read_optional_ty(command, at, "returns")?,
+        raises: read_optional_ty(command, at, "raises")?,
+    })
+}
+
+/// Reads a type at `key` if the object carries one.
+fn read_optional_ty(
+    command: &Map<String, Json>,
+    at: &str,
+    key: &'static str,
+) -> Result<Option<Ty>, ReadError> {
+    command
+        .get(key)
+        .map(|node| read_ty(node, &format!("{at}.{key}"), 0))
+        .transpose()
 }
 
 /// Reads the `types` array.

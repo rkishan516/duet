@@ -298,6 +298,54 @@ fn not_nullable_holds_for_everything_that_cannot_lower_to_null() {
     assert!(implements!(Arc<i64>: NotNullable));
 }
 
+// --- The two absences `duet-command`'s `CommandReturn` is built on ---
+
+#[test]
+fn the_unit_type_and_result_have_no_shared_state_impl() {
+    // THE two lines. `duet_command::CommandReturn` describes what a `#[command]`
+    // hands back, and it has four impls that must never be candidates for one
+    // another:
+    //
+    //   T: SharedState            -> returns T,   raises nothing
+    //   ()                        -> returns nothing, raises nothing
+    //   Result<T, E>              -> returns T,   raises E
+    //   Result<(), E>             -> returns nothing, raises E
+    //
+    // Coherence permits all four only because each carries a different marker
+    // type parameter. What the markers do *not* buy is unambiguous inference:
+    // the macro writes `<R as CommandReturn<_>>` and lets the compiler pick, and
+    // the compiler can pick only while at most one impl applies to each `R`. The
+    // moment `(): SharedState` exists, both the first and the second impl apply
+    // to `()`, and every `#[command]` returning nothing fails with "type
+    // annotations needed" — pointing into generated code, for a change made in
+    // a different crate.
+    //
+    // Neither impl exists, and neither should: `()` is not a value the store can
+    // hold (`Value` has no arm for it), and `Result` is a control-flow type
+    // whose lowering would have to invent a tag the wire already spends
+    // `returned`/`raised` on.
+    assert!(!implements!((): SharedState), "() must stay unimplemented");
+    assert!(
+        !implements!(Result<i64, String>: SharedState),
+        "Result must stay unimplemented"
+    );
+}
+
+#[test]
+fn the_shapes_command_returns_are_built_from_are_themselves_accepted() {
+    // The control for the test above: it asserts two absences, and an absence is
+    // only meaningful next to the presences it sits between. If `i64` or
+    // `String` had lost its impl, the two assertions above would still pass
+    // while `CommandReturn` had nothing left to describe.
+    assert!(implements!(i64: SharedState));
+    assert!(implements!(String: SharedState));
+    // And the nesting a fallible command produces, one layer in: `Result<T, E>`
+    // is refused, but `T` and `E` are exactly the types the schema records for
+    // it.
+    assert!(!implements!(Result<(), String>: SharedState));
+    assert!(!implements!(Option<Result<i64, String>>: SharedState));
+}
+
 #[test]
 fn not_nullable_fails_for_everything_that_can() {
     assert!(!implements!(Option<i64>: NotNullable));
