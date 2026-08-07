@@ -90,6 +90,11 @@ sealed class DuetRequest {
           id: id,
           subscription: _idField(obj, 'subscription'),
         ),
+      'invoke' => DuetInvokeRequest(
+          id: id,
+          command: _stringField(obj, 'command'),
+          args: _argsField(obj),
+        ),
       final String other => throw DuetCodecException.unknownTag(
           'unknown request kind ${echoBounded(other)}',
         ),
@@ -185,6 +190,55 @@ final class DuetUnsubscribeRequest extends DuetRequest {
   String toString() => 'Unsubscribe(id: $id, subscription: $subscription)';
 }
 
+/// Runs a host command.
+///
+/// Deliberately carries **no** caller identity — no subscriber, no surface —
+/// for the same reason [DuetSubscribeRequest] carries no subscriber. Which
+/// commands a guest may reach is decided by the `CommandHost` its surface was
+/// built with (crates/duet-protocol/src/command.rs), never by the guest: a
+/// guest that could name its own caller identity could name another guest's,
+/// and authorization decided by the party being authorized is not
+/// authorization.
+final class DuetInvokeRequest extends DuetRequest {
+  /// Creates an `invoke` of [command] with [args].
+  const DuetInvokeRequest({
+    required int id,
+    required this.command,
+    required this.args,
+  }) : super(id);
+
+  /// Which command to run.
+  final String command;
+
+  /// The command's named arguments.
+  ///
+  /// A `Map<String, DuetValue>` and not a [DuetValue], mirroring
+  /// `duet_protocol::Args`: a command's parameter list is a struct's field
+  /// list, so a non-map `args` is an illegal state this type does not admit.
+  /// The *wire* still carries a tagged map — see [toJson] — so both ends reuse
+  /// the value codec they already have rather than growing a second,
+  /// arguments-only one that could disagree with the first.
+  final Map<String, DuetValue> args;
+
+  /// Encodes `args` through the ordinary tagged-value path, as a
+  /// [DuetMap], which sorts its keys canonically.
+  ///
+  /// That sort is what keeps an encoded `invoke` byte-stable: a Dart `Map`
+  /// iterates in insertion order, so without it the same call would encode to
+  /// different bytes depending on how the caller built its arguments, and would
+  /// never match the host's `BTreeMap` output.
+  @override
+  Map<String, Object?> toJson() => sortedJsonObject(<String, Object?>{
+        'kind': 'invoke',
+        'id': id.toString(),
+        'command': command,
+        'args': DuetMap(args).toJson(),
+      });
+
+  @override
+  String toString() => 'Invoke(id: $id, command: $command, args: $args)';
+}
+
 /// A host-to-guest reply to exactly one [DuetRequest].
 sealed class DuetResponse {
   const DuetResponse(this.id);
@@ -222,6 +276,14 @@ sealed class DuetResponse {
       'failed' => DuetFailedResponse(
           id: id,
           message: _stringField(obj, 'message'),
+        ),
+      'returned' => DuetReturnedResponse(
+          id: id,
+          value: _requiredValueField(obj, 'value'),
+        ),
+      'raised' => DuetRaisedResponse(
+          id: id,
+          error: _requiredValueField(obj, 'error'),
         ),
       final String other => throw DuetCodecException.unknownTag(
           'unknown response kind ${echoBounded(other)}',
@@ -312,6 +374,60 @@ final class DuetFailedResponse extends DuetResponse {
 
   @override
   String toString() => 'Failed(id: $id, message: $message)';
+}
+
+/// A command ran and returned.
+///
+/// Always carries a tagged value; a command with no result answers
+/// [DuetNull], spelled `{"t":"n"}`. There is no absent case here, which is why
+/// [value] is not nullable: JSON `null` already means *"the path is absent"*
+/// everywhere else in this format — see [DuetValueResponse] — and spending that
+/// spelling twice, on two different questions, is how a format ends up with a
+/// value nobody can interpret without knowing which field they are looking at.
+final class DuetReturnedResponse extends DuetResponse {
+  /// Creates a `returned` response carrying [value].
+  const DuetReturnedResponse({required int id, required this.value})
+      : super(id);
+
+  /// What the command returned.
+  final DuetValue value;
+
+  @override
+  Map<String, Object?> toJson() => sortedJsonObject(<String, Object?>{
+        'kind': 'returned',
+        'id': id.toString(),
+        'value': value.toJson(),
+      });
+
+  @override
+  String toString() => 'Returned(id: $id, value: $value)';
+}
+
+/// A command ran and returned an error — a **domain** outcome, not a refusal.
+///
+/// Distinct from [DuetFailedResponse] in two ways that both matter to a caller.
+/// `failed` carries a `String`, and flattening a developer's typed error into
+/// prose is not reversible: a guest that wanted to match on
+/// `InsufficientFunds { shortBy }` would get a sentence to regex instead. And
+/// the two are different *events* — `failed` says the call did not happen,
+/// `raised` says it happened and the answer was a failure — so a guest that
+/// could not tell them apart could not decide whether retrying is safe.
+final class DuetRaisedResponse extends DuetResponse {
+  /// Creates a `raised` response carrying [error].
+  const DuetRaisedResponse({required int id, required this.error}) : super(id);
+
+  /// The error the command returned, tagged like any other value.
+  final DuetValue error;
+
+  @override
+  Map<String, Object?> toJson() => sortedJsonObject(<String, Object?>{
+        'kind': 'raised',
+        'id': id.toString(),
+        'error': error.toJson(),
+      });
+
+  @override
+  String toString() => 'Raised(id: $id, error: $error)';
 }
 
 /// An unsolicited host-to-guest message, answering no request.
@@ -451,6 +567,61 @@ String _stringField(Map<String, Object?> obj, String name) {
 /// Reads a required path field.
 DuetPath _pathField(Map<String, Object?> obj) =>
     DuetPath.parse(_stringField(obj, 'path'));
+
+/// Reads an `args` field: a tagged value that must be a map.
+///
+/// Two steps, in this order, and the order is the point. The tagged value is
+/// decoded first, by the decoder that is already total against hostile input;
+/// only then is it narrowed to a map. Narrowing first would mean writing a
+/// second decoder for the same bytes. Mirrors `args_field`
+/// (crates/duet-protocol/src/wire.rs).
+Map<String, DuetValue> _argsField(Map<String, Object?> obj) {
+  final DuetValue decoded = DuetValue.fromJson(_field(obj, 'args'));
+  if (decoded is DuetMap) return decoded.entries;
+  throw DuetCodecException.badShape(
+    '"args" must be a tagged map, got a tagged ${_valueKindName(decoded)}',
+  );
+}
+
+/// Names a value's kind for an error message.
+///
+/// The kind alone, never anything derived from the value: the value is
+/// peer-supplied, so rendering *it* would be the unbounded echo this package's
+/// errors already bound against.
+String _valueKindName(DuetValue value) => switch (value) {
+      DuetNull() => 'null',
+      DuetBool() => 'bool',
+      DuetInt() => 'int',
+      DuetFloat() => 'float',
+      DuetStr() => 'string',
+      DuetBytes() => 'bytes',
+      DuetList() => 'list',
+      DuetMap() => 'map',
+    };
+
+/// Reads a field that must carry a tagged value, refusing JSON `null`.
+///
+/// The counterpart to [DuetValue.optionalFromJson], and the reason both exist.
+/// This format already spends JSON `null` on one meaning — *"the path is
+/// absent"* — and a `returned` or `raised` has no absent case to express: a
+/// command that returns nothing returns [DuetNull], which is `{"t":"n"}`.
+///
+/// Accepting bare `null` here would make `{"t":"n"}` and `null` two spellings of
+/// one thing on one field and two different things on another, which is exactly
+/// the kind of context-dependent rule three independent decoders cannot be
+/// expected to keep straight. So it is refused, and the refusal names what to
+/// send instead — kept short so [echoBounded] cannot cut the `{"t":"n"}` hint,
+/// which is the only actionable part. Mirrors `required_value`
+/// (crates/duet-protocol/src/wire.rs).
+DuetValue _requiredValueField(Map<String, Object?> obj, String name) {
+  final Object? raw = _field(obj, name);
+  if (raw == null) {
+    throw DuetCodecException.badShape(
+      '"$name" must be tagged; null is {"t":"n"}',
+    );
+  }
+  return DuetValue.fromJson(raw);
+}
 
 /// Reads one of the envelope's id fields through the single definition of the
 /// wire's id rule, [tryParseWireId].

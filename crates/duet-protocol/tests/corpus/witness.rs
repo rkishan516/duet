@@ -102,6 +102,22 @@ pub fn request(r: &Request) -> Json {
             "id": id.0.to_string(),
             "subscription": subscription.0.to_string(),
         }),
+        // `command` gets the UTF-8-bytes treatment every other free-form string
+        // in this file gets — the same argument `Response::Failed`'s `message`
+        // makes. It is not a `Path`, so there is no parse/`Display` inverse pair
+        // proving a round trip; it is arbitrary guest-chosen text, which is
+        // exactly the shape where escaping and normalisation diverge silently.
+        //
+        // `args` is an **ordered array of entries**, like a map's witness and
+        // for the same reason: it is a `BTreeMap` on the wire, its key order is
+        // what keeps an encoded `invoke` byte-stable, and no JSON parser is
+        // obliged to preserve an object's key order for a guest to compare.
+        Request::Invoke { id, command, args } => json!({
+            "k": "invoke",
+            "id": id.0.to_string(),
+            "command": value(&Value::Str(command.clone())),
+            "args": args.iter().map(|(k, v)| json!([k, value(v)])).collect::<Vec<_>>(),
+        }),
         other => panic!("{UNWITNESSED}: {other:?}"),
     }
 }
@@ -129,6 +145,21 @@ pub fn response(r: &Response) -> Json {
             "k": "failed",
             "id": id.0.to_string(),
             "message": value(&Value::Str(message.clone())),
+        }),
+        // `value` here is a plain `value(…)`, never `optional(…)`: a `returned`
+        // has no absent case at all. A command that returns nothing returns
+        // `Value::Null`, spelled `{"t":"n"}`. Using `optional` would make JSON
+        // `null` witness-equal to `{"t":"n"}` on this field and unequal on
+        // `Response::Value`'s, which is the exact confusion the wire refuses.
+        Response::Returned { id, value: v } => json!({
+            "k": "returned",
+            "id": id.0.to_string(),
+            "value": value(v),
+        }),
+        Response::Raised { id, error } => json!({
+            "k": "raised",
+            "id": id.0.to_string(),
+            "error": value(error),
         }),
         other => panic!("{UNWITNESSED}: {other:?}"),
     }

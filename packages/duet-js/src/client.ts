@@ -6,7 +6,7 @@
  * @module
  */
 
-import { DuetError, DuetFailure, DuetTransportError } from './errors.ts';
+import { DuetError, DuetFailure, DuetTransportError, echoBounded } from './errors.ts';
 import {
   decodePushText,
   decodeResponseText,
@@ -37,6 +37,66 @@ export interface DuetSubscription {
    */
   readonly snapshot: DuetValue | null;
 }
+
+/** The command ran and returned `Ok`. */
+export interface DuetReturned {
+  readonly kind: 'returned';
+  /** What the command returned. A command with no result answers kind `'null'`. */
+  readonly value: DuetValue;
+}
+
+/**
+ * The command ran and returned `Err` — a **domain** outcome.
+ *
+ * Carries the error as a value, not as prose, so an application can decode it
+ * back into its own error type. That is the entire reason this is not a
+ * {@link DuetFailure}: flattening a typed error into a sentence is not
+ * reversible.
+ */
+export interface DuetRaised {
+  readonly kind: 'raised';
+  /** The error the command returned, tagged like any other value. */
+  readonly error: DuetValue;
+}
+
+/**
+ * What {@link DuetClient.invoke} hands back: the two ways a command that **ran**
+ * can end.
+ *
+ * # Why this is a result and not two exceptions
+ *
+ * The protocol draws its line between *the command ran* and *the host would not
+ * run it*, and this type draws the same one. `returned` and `raised` are both
+ * answers from a body that executed, so they are **data**; `failed` — no such
+ * command, arguments that did not decode, a body that panicked — means the call
+ * never happened, so it stays a thrown {@link DuetFailure} alongside every other
+ * host refusal this client throws.
+ *
+ * This is the `DuetReading` argument applied to a narrower question.
+ * `DuetReading` has four arms because the host has four states a path can be in
+ * and the wire spends a distinct spelling on each; collapsing any two would
+ * delete a distinction the protocol pays for. An `invoke` that ran has exactly
+ * two, and the wire spends `returned` and `raised` on them. Where the two types
+ * differ is in what they do with *failure*: a `DuetReading` is also produced by a
+ * push, which has no call stack to throw into, so `get` may not throw either. An
+ * `invoke` is only ever a reply to a call this guest made, so there is a stack,
+ * and a refusal is free to use it.
+ *
+ * # What a caller must do with it
+ *
+ * `switch` over `kind`. TypeScript narrows a discriminated union exhaustively, so
+ * a `switch` that handles only {@link DuetReturned} and returns a non-`undefined`
+ * type fails to compile — which is the failure this type exists to make
+ * impossible, and which an `invoke` returning a bare {@link DuetValue} would
+ * invite.
+ *
+ * # Where this diverges from the Dart mirror, and why
+ *
+ * Dart's version is a `sealed` class hierarchy; TypeScript's unions are
+ * structural, so this is a union of two plain objects. Same arms, same tags,
+ * same semantics — the identical divergence `DuetReading` already documents.
+ */
+export type DuetInvocation = DuetReturned | DuetRaised;
 
 /**
  * A guest's handle on the host's shared state.
@@ -142,6 +202,44 @@ export class DuetClient {
       subscription,
     });
     this.#expect(reply, 'done');
+  }
+
+  /**
+   * Runs the host command named `command` with `args`.
+   *
+   * `args` is a `Map` because a command's parameter list is a struct's field
+   * list; it is encoded as a tagged map with its keys sorted, so the request
+   * bytes are canonical whatever order the caller built it in. A command that
+   * takes nothing is called with no second argument.
+   *
+   * @returns {@link DuetReturned} or {@link DuetRaised} for a command that
+   *   **ran**. See {@link DuetInvocation} for why a refusal is not an arm here.
+   * @throws DuetFailure if the host **refused** to run it: there is no command
+   *   by that name for this surface, the arguments did not decode, or the body
+   *   panicked.
+   * @throws DuetTransportError if the exchange never reached the protocol, or if
+   *   the host answered something that is neither a `returned` nor a `raised`.
+   */
+  async invoke(
+    command: string,
+    args: ReadonlyMap<string, DuetValue> = new Map<string, DuetValue>(),
+  ): Promise<DuetInvocation> {
+    const reply = await this.#call({ kind: 'invoke', id: this.#nextId++, command, args });
+    switch (reply.kind) {
+      case 'returned':
+        return { kind: 'returned', value: reply.value };
+      case 'raised':
+        return { kind: 'raised', error: reply.error };
+      default:
+        // A `failed` never reaches here — `#call` has already thrown it — so
+        // this arm is a host that answered an `invoke` with a `done` or a
+        // `value`. That is a protocol violation rather than an outcome, and it
+        // gets the same treatment `#expect` gives every other mismatched reply.
+        throw new DuetTransportError(
+          `expected a "returned" or "raised" response to invoke ` +
+            `${echoBounded(command)}, got "${reply.kind}"`,
+        );
+    }
   }
 
   /**

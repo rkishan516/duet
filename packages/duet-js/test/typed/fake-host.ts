@@ -163,6 +163,22 @@ export class FakeHost implements DuetTransport {
         this.subscriptions.delete(req.subscription);
         return encodeResponseText({ kind: 'done', id: req.id });
       }
+      // Refuses every command by name, transcribed from
+      // `duet_protocol::NoCommands` (crates/duet-protocol/src/command.rs).
+      // This fake stands in for `dispatch`, which registers **no** commands, so
+      // that is what it must do. Deliberately a `failed` naming the command
+      // rather than an unknown-kind error: the guest's message was perfectly
+      // well-formed and simply unserved, and saying otherwise would send a
+      // developer to debug an encoder that is working.
+      case 'invoke': {
+        return encodeResponseText({
+          kind: 'failed',
+          id: req.id,
+          message:
+            `this host registers no commands, so there is nothing named ` +
+            `"${req.command}" to run`,
+        });
+      }
     }
   }
 

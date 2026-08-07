@@ -80,6 +80,15 @@ void main() {
               snapshot: const DuetInt(42),
             ),
           DuetUnsubscribeRequest() => DuetDoneResponse(id: request.id),
+          // The command answer is computed from the *decoded* arguments, and
+          // subtraction is not commutative — so a request whose argument names
+          // were swapped on the way out changes this reply.
+          DuetInvokeRequest(:final Map<String, DuetValue> args) =>
+            DuetReturnedResponse(
+              id: request.id,
+              value: DuetInt((args['a']! as DuetInt).value -
+                  (args['b']! as DuetInt).value),
+            ),
         }.toWireText(),
       );
     });
@@ -91,12 +100,23 @@ void main() {
     expect(sub.id, 7);
     expect(sub.snapshot, const DuetInt(42));
     await duet.unsubscribe(sub.id);
+    // An `invoke` over the same channel, with its arguments built out of
+    // canonical order so the encoder's sort is what produces the bytes below.
+    expect(
+      await duet.invoke(
+        'subtract',
+        const <String, DuetValue>{'b': DuetInt(3), 'a': DuetInt(10)},
+      ),
+      const DuetReturned(DuetInt(7)),
+    );
 
     expect(seen, <String>[
       '{"id":"1","kind":"set","path":"counter","value":{"t":"i","v":"42"}}',
       '{"id":"2","kind":"get","path":"counter"}',
       '{"id":"3","kind":"subscribe","path":"counter"}',
       '{"id":"4","kind":"unsubscribe","subscription":"7"}',
+      '{"args":{"t":"m","v":{"a":{"t":"i","v":"10"},"b":{"t":"i","v":"3"}}},'
+          '"command":"subtract","id":"5","kind":"invoke"}',
     ]);
   });
 

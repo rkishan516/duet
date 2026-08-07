@@ -119,11 +119,14 @@ export {
   type DuetDoneResponse,
   type DuetFailedResponse,
   type DuetGetRequest,
+  type DuetInvokeRequest,
   type DuetNotification,
   type DuetNotificationPush,
   type DuetPush,
+  type DuetRaisedResponse,
   type DuetRequest,
   type DuetResponse,
+  type DuetReturnedResponse,
   type DuetSetRequest,
   type DuetSubscribeRequest,
   type DuetSubscribedResponse,
@@ -132,4 +135,10 @@ export {
 } from './message.ts';
 
 export type { DuetTransport } from './transport.ts';
-export { DuetClient, type DuetSubscription } from './client.ts';
+export {
+  DuetClient,
+  type DuetInvocation,
+  type DuetRaised,
+  type DuetReturned,
+  type DuetSubscription,
+} from './client.ts';
