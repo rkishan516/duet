@@ -100,8 +100,9 @@ void main() {
     expect(kModePath, 'mode');
     expect(kDuetMode, 'duet');
     expect(kReloadMode, 'reload');
+    expect(kCommandsMode, 'commands');
     // Every mode must be distinct, or one driver becomes unreachable.
-    expect(<String>{kDuetMode, kReloadMode}.length, 2);
+    expect(<String>{kDuetMode, kReloadMode, kCommandsMode}.length, 3);
     // A deadline shorter than one attempt would give up before ever asking.
     expect(kHandshakeInterval, lessThan(kHandshakeTimeout));
   });

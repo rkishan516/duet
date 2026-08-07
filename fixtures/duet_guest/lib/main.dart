@@ -9,9 +9,10 @@
 //
 // All this file does is shake hands with the host and choose a driver:
 //
-//   lib/solo_driver.dart   -> the single-guest proof (`example flutter_state`)
-//   lib/duet_driver.dart   -> the two-guest proof   (`example two_guests`)
-//   lib/reload_driver.dart -> the hot-reload proof  (`example hot_reload`)
+//   lib/solo_driver.dart    -> the single-guest proof (`example flutter_state`)
+//   lib/duet_driver.dart    -> the two-guest proof   (`example two_guests`)
+//   lib/reload_driver.dart  -> the hot-reload proof  (`example hot_reload`)
+//   lib/command_driver.dart -> the command-RPC proof (`example flutter_commands`)
 //
 // See `lib/guest_support.dart` for why the choice is made from a value in the
 // shared store rather than from a second entry point, and why an absent or
@@ -23,6 +24,7 @@
 import 'package:duet_flutter/duet_flutter.dart';
 import 'package:flutter/widgets.dart';
 
+import 'command_driver.dart';
 import 'duet_driver.dart';
 import 'guest_support.dart';
 import 'reload_driver.dart';
@@ -46,6 +48,9 @@ Future<void> main() async {
     case kDuetMode:
       guestLog('host mode is "$kDuetMode": running the two-guest driver');
       await runDuetGuest(duet);
+    case kCommandsMode:
+      guestLog('host mode is "$kCommandsMode": running the command driver');
+      await runCommandGuest(duet);
     case kReloadMode:
       guestLog('host mode is "$kReloadMode": running the hot-reload driver');
       await runReloadGuest(duet);

@@ -32,6 +32,13 @@ const String kModePath = 'mode';
 /// The [kModePath] value that selects `lib/duet_driver.dart`.
 const String kDuetMode = 'duet';
 
+/// The [kModePath] value that selects `lib/command_driver.dart`.
+///
+/// The only driver that asks the host to *do* things rather than to read and
+/// write state, and so the only one that proves an `invoke` survives a Flutter
+/// platform channel.
+const String kCommandsMode = 'commands';
+
 /// The [kModePath] value that selects `lib/reload_driver.dart`.
 ///
 /// The only driver that calls `runApp`, because the only one whose claim is
