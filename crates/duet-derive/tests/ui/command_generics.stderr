@@ -1,0 +1,6 @@
+error: `#[command]` cannot describe a generic function: the schema names a command once, and every instantiation of a generic would claim that one name with a different argument shape.
+       Fix: write one `#[command]` per concrete instantiation you want to expose, each delegating to the generic function.
+ --> tests/ui/command_generics.rs:6:12
+  |
+6 | fn identity<T>(a: T) -> T {
+  |            ^^^

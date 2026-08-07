@@ -1,0 +1,7 @@
+error: `#[command]` cannot describe an `async fn`: a command body runs synchronously, on the thread that called `dispatch_with`, and there is no async runtime anywhere in Duet to hand a future to.
+       That is deliberate rather than unimplemented — on macOS that thread also drives the UI, so a command that waits freezes the window it was called from.
+       Fixes: make the body synchronous, or spawn a thread of your own, return immediately, and write the result into the store when it arrives — a subscription will deliver it.
+ --> tests/ui/command_async.rs:6:1
+  |
+6 | async fn slow(a: i64) -> i64 {
+  | ^^^^^

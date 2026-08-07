@@ -82,6 +82,8 @@
 #![forbid(unsafe_code)]
 
 mod attr;
+#[cfg(feature = "commands")]
+mod command;
 mod errors;
 mod generate;
 mod keys;
@@ -115,6 +117,63 @@ fn expand(input: TokenStream) -> TokenStream {
         Ok(model) => generate::impls(&model),
         Err(errors) => errors.to_compile_error(),
     }
+}
+
+/// Describes a Rust function as a host command a Duet guest may invoke.
+///
+/// Available with the `commands` feature, which `duet`'s own `commands` feature
+/// turns on:
+///
+/// ```toml
+/// duet = { version = "0.1", features = ["derive", "commands"] }
+/// ```
+///
+/// ```text
+/// #[command]
+/// fn subtract(a: i64, b: i64) -> i64 { a - b }
+///
+/// #[command]
+/// fn bump(ctx: &CommandContext, path: String, by: i64) -> Result<i64, BumpError> { … }
+///
+/// static COMMANDS: [CommandEntry; 2] = commands![subtract, bump];
+/// ```
+///
+/// # What it generates
+///
+/// The function, unchanged, plus a hidden `struct` of the same name carrying an
+/// `impl duet::Command`. The function stays callable from Rust exactly as it
+/// was; the macro adds a description of it beside it rather than replacing it.
+///
+/// # Arguments by value, the context by reference
+///
+/// A parameter written **by value** is an argument: it is decoded out of the
+/// invocation's `args` under its own name, and its type must implement
+/// `SharedState`. A parameter written **by reference** is the invocation's
+/// context, and its type must be `&CommandContext`.
+///
+/// That is the one decision made from syntax, and it has to be — a macro sees
+/// tokens and never resolved types. *What* either one is remains a question for
+/// trait resolution, so `u64` is refused by having no `SharedState` impl and
+/// `&str` by having no `FromContext` impl, and a type alias for either changes
+/// nothing.
+///
+/// # The two attributes
+///
+/// ```text
+/// #[command(rename = "documents.add", crate = ::my_reexport)]
+/// fn add(#[duet(rename = "window_title")] title: String) { … }
+/// ```
+///
+/// `#[derive(SharedState)]`'s third attribute, `skip`, has no meaning here: a
+/// command's arguments are the whole of its input, so a skipped one would be an
+/// argument the guest cannot supply and the body still requires.
+#[cfg(feature = "commands")]
+#[proc_macro_attribute]
+pub fn command(
+    attr: proc_macro::TokenStream,
+    item: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    command::expand(attr.into(), item.into()).into()
 }
 
 #[cfg(test)]

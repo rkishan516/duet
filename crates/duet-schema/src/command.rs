@@ -117,11 +117,22 @@ impl CommandDef {
 /// a registry of any size stays readable, and it is the one separator already
 /// meaningful to a reader of this project's own command tables.
 ///
-/// The per-segment rule is [`is_legal_type_name`] rather than a second grammar:
+/// The per-segment rule is `is_legal_type_name` rather than a second grammar:
 /// a segment has to survive as an identifier in Dart and TypeScript exactly as
 /// a type name does, and one predicate that is right in two places is better
 /// than two that can drift apart.
-pub(crate) fn is_legal_command_name(name: &str) -> bool {
+///
+/// # Public so `#[command]` can refuse at `cargo check`
+///
+/// `Schema::of_with_commands` already refuses an illegal name, but that is a
+/// **runtime** failure of a program that compiled, and it names a schema entry
+/// rather than the Rust function that produced it. `duet-derive` calls this to
+/// turn the same refusal into a compile error spanned on the `rename` literal —
+/// against the real predicate rather than a second copy of the grammar, which
+/// is the same arrangement the derive already has with `Path::parse` and
+/// `lower_camel`.
+#[must_use]
+pub fn is_legal_command_name(name: &str) -> bool {
     !name.is_empty() && name.split('.').all(is_legal_type_name)
 }
 

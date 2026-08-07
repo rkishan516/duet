@@ -1,0 +1,7 @@
+error: `font_size` and `fontSize` are different wire keys that both become the accessor `fontSize`.
+       A generated Dart or TypeScript client names members in `lowerCamelCase` while leaving the path spelled exactly as the schema does, so these two arguments would collide on one member while still addressing two different nodes.
+       Fix: rename one of them with `#[duet(rename = "...")]` so the two accessors differ.
+ --> tests/ui/command_camel_collision.rs:5:43
+  |
+5 | fn resize(font_size: i64, #[duet(rename = "fontSize")] legacy: i64) -> i64 {
+  |                                           ^^^^^^^^^^

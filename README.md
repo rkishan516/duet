@@ -69,6 +69,7 @@ downstream reads:
 
 ```json
 {
+  "commands": [],
   "root": {"kind": "named", "name": "App"},
   "types": [
     {
@@ -87,9 +88,12 @@ downstream reads:
       "name": "Editor"
     }
   ],
-  "version": 1
+  "version": 2
 }
 ```
+
+`"commands"` is where `#[command]` functions are described; it is emitted even
+when empty, so a version-2 document always carries the key.
 
 ## 3. Generate the guest clients
 

@@ -39,7 +39,7 @@ derive = ["dep:duet-derive"]
 # graph, not merely the build. An application that shares state and never
 # invokes a host command should not link a JSON parser for it. Turning it on is
 # what an application that serves commands does.
-commands = ["dep:duet-command"]
+commands = ["dep:duet-command", "duet-derive?/commands"]
 
 # docs.rs builds with every feature on, so `duet::SharedState`'s derive is
 # documented there even though it is off by default. `--cfg docsrs` is what

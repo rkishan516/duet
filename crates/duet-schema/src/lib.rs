@@ -156,7 +156,7 @@ pub mod ty;
 pub mod typed;
 
 pub use bytes::Bytes;
-pub use command::CommandDef;
+pub use command::{CommandDef, is_legal_command_name};
 pub use decode::{DecodeError, DecodeReason};
 pub use error::{SchemaError, SchemaErrors};
 pub use registry::Registry;

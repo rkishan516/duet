@@ -1,0 +1,7 @@
+error: `a.b` is not a legal wire key: it has to be exactly one path segment.
+       A key is the name an argument arrives under and the name a generated client gives the parameter, so it may not be empty and may not contain `.`, `[` or `]` — neither Dart nor TypeScript has an identifier containing one.
+       Fix: choose a key made only of characters a path segment allows, with `#[duet(rename = "...")]`.
+ --> tests/ui/command_bad_argument_key.rs:6:25
+  |
+6 | fn bump(#[duet(rename = "a.b")] by: i64) -> i64 {
+  |                         ^^^^^

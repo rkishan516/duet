@@ -1,0 +1,7 @@
+error: two arguments share the wire key `by`.
+       An invocation's `args` is one `Value::Map`, so both would occupy one entry: one of the two could never be supplied, and nothing here can know which.
+       Fix: give one of them a different key with `#[duet(rename = "...")]`, or delete the one that is not an argument.
+ --> tests/ui/command_duplicate_key.rs:6:34
+  |
+6 | fn bump(by: i64, #[duet(rename = "by")] amount: i64) -> i64 {
+  |                                  ^^^^

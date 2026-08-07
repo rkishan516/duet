@@ -69,6 +69,25 @@ pub use duet_schema::{
 #[cfg(feature = "commands")]
 pub use duet_command as command;
 
+/// Describes a Rust function as a host command a Duet guest may invoke.
+///
+/// Available with the `derive` and `commands` features together:
+///
+/// ```toml
+/// duet = { version = "0.1", features = ["derive", "commands"] }
+/// ```
+///
+/// The module [`command`] and this attribute macro share a name and live in
+/// different namespaces, exactly as [`SharedState`] the trait and
+/// `SharedState` the derive do, so one `use duet::command;` brings the macro
+/// into scope without shadowing anything.
+///
+/// See [`duet_derive::command`] for what it generates, the two `#[command(...)]`
+/// attributes, and why a rejected argument type produces a trait error rather
+/// than a macro error.
+#[cfg(all(feature = "commands", feature = "derive"))]
+pub use duet_derive::command;
+
 #[cfg(feature = "commands")]
 pub use duet_command::{
     Args, Command, CommandContext, CommandEntry, CommandHost, CommandParam, CommandReturn,

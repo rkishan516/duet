@@ -1,0 +1,7 @@
+error: `2fast` is not a legal command name.
+       A name is one or more identifiers separated by `.`, each starting with an ASCII letter and continuing with letters, digits or inner underscores — `subtract` and `documents.rename` are names, `2fast` and `documents.` are not. It has to be a legal identifier in Dart and TypeScript too, because a generated client turns it into a method.
+       Fix: rename the function, or give it a legal name with `#[command(rename = "...")]`.
+ --> tests/ui/command_bad_rename.rs:5:20
+  |
+5 | #[command(rename = "2fast")]
+  |                    ^^^^^^^

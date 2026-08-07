@@ -111,7 +111,7 @@ pub fn unraw(ident: &syn::Ident) -> String {
 /// Built by hand rather than through `parse_quote!`, which panics on a parse
 /// failure — a proc macro must never panic, and "it cannot fail here" is an
 /// argument, not a guarantee.
-fn duet_path() -> syn::Path {
+pub fn duet_path() -> syn::Path {
     let mut segments = Punctuated::new();
     segments.push(syn::PathSegment {
         ident: syn::Ident::new("duet", Span::call_site()),

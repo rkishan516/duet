@@ -1,0 +1,6 @@
+error: `#[command]` cannot describe a method: a command is reached by name from a guest, with no receiver for it to be called on and nothing for the host to resolve one from.
+       Fix: make it a free function that takes what it needs as arguments, and have it call the method.
+ --> tests/ui/command_self_receiver.rs:9:13
+  |
+9 |     fn zoom(&self, by: i64) -> i64 {
+  |             ^^^^^
