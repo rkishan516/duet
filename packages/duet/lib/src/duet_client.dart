@@ -29,6 +29,78 @@ class DuetSubscription {
   String toString() => 'Subscription($id, snapshot: $snapshot)';
 }
 
+/// What [DuetClient.invoke] hands back: the two ways a command that **ran** can
+/// end.
+///
+/// # Why this is a result and not two exceptions
+///
+/// The protocol draws its line between *the command ran* and *the host would not
+/// run it*, and this type draws the same one. `returned` and `raised` are both
+/// answers from a body that executed, so they are **data**; `failed` — no such
+/// command, arguments that did not decode, a body that panicked — means the call
+/// never happened, so it stays a thrown [DuetFailure] alongside every other host
+/// refusal this client throws.
+///
+/// This is the [DuetReading] argument applied to a narrower question. `DuetReading`
+/// has four arms because the host has four states a path can be in and the wire
+/// spends a distinct spelling on each; collapsing any two would delete a
+/// distinction the protocol pays for. An `invoke` that ran has exactly two, and
+/// the wire spends `returned` and `raised` on them. Where the two types differ is
+/// in what they do with *failure*: a `DuetReading` is also produced by a push,
+/// which has no call stack to throw into, so `get` may not throw either. An
+/// `invoke` is only ever a reply to a call this guest made, so there is a stack,
+/// and a refusal is free to use it.
+///
+/// # What a caller must do with it
+///
+/// `switch` over it. The hierarchy is `sealed`, so a caller that handles only
+/// [DuetReturned] fails to compile rather than silently treating a command's
+/// error as a success — which is the failure this type exists to make
+/// impossible, and which an `invoke` returning a bare [DuetValue] would invite.
+sealed class DuetInvocation {
+  const DuetInvocation();
+}
+
+/// The command ran and returned `Ok`.
+final class DuetReturned extends DuetInvocation {
+  /// Wraps what the command returned.
+  const DuetReturned(this.value);
+
+  /// What the command returned. A command with no result answers [DuetNull].
+  final DuetValue value;
+
+  @override
+  bool operator ==(Object other) => other is DuetReturned && other.value == value;
+
+  @override
+  int get hashCode => Object.hash('returned', value);
+
+  @override
+  String toString() => 'Returned($value)';
+}
+
+/// The command ran and returned `Err` — a **domain** outcome.
+///
+/// Carries the error as a value, not as prose, so an application can decode it
+/// back into its own error type. That is the entire reason this is not a
+/// [DuetFailure]: flattening a typed error into a sentence is not reversible.
+final class DuetRaised extends DuetInvocation {
+  /// Wraps the error the command returned.
+  const DuetRaised(this.error);
+
+  /// The error the command returned, tagged like any other value.
+  final DuetValue error;
+
+  @override
+  bool operator ==(Object other) => other is DuetRaised && other.error == error;
+
+  @override
+  int get hashCode => Object.hash('raised', error);
+
+  @override
+  String toString() => 'Raised($error)';
+}
+
 /// A guest's handle on the host's shared state.
 ///
 /// Mirrors the JavaScript guest's `window.__duet`
@@ -112,6 +184,43 @@ class DuetClient {
       DuetUnsubscribeRequest(id: _nextId++, subscription: subscription),
     );
     _expect<DuetDoneResponse>(reply, 'done');
+  }
+
+  /// Runs the host command named [command] with [args].
+  ///
+  /// Returns a [DuetInvocation] — [DuetReturned] or [DuetRaised] — for a
+  /// command that **ran**. Throws [DuetFailure] if the host **refused** to run
+  /// it: there is no command by that name for this surface, the arguments did
+  /// not decode, or the body panicked. See [DuetInvocation] for why that split
+  /// falls where it does.
+  ///
+  /// [args] is a plain map because a command's parameter list is a struct's
+  /// field list; it is encoded as a tagged map with its keys sorted, so the
+  /// request bytes are canonical whatever order the caller built it in. A
+  /// command that takes nothing is called with no second argument.
+  ///
+  /// Throws [DuetTransportException] if the exchange never reached the protocol,
+  /// or if the host answered something that is neither a `returned` nor a
+  /// `raised`.
+  Future<DuetInvocation> invoke(
+    String command, [
+    Map<String, DuetValue> args = const <String, DuetValue>{},
+  ]) async {
+    final DuetResponse reply = await _call(
+      DuetInvokeRequest(id: _nextId++, command: command, args: args),
+    );
+    return switch (reply) {
+      DuetReturnedResponse(:final DuetValue value) => DuetReturned(value),
+      DuetRaisedResponse(:final DuetValue error) => DuetRaised(error),
+      // A `failed` never reaches here — `_call` has already thrown it — so
+      // this arm is a host that answered an `invoke` with a `done` or a
+      // `value`. That is a protocol violation rather than an outcome, and it
+      // gets the same treatment `_expect` gives every other mismatched reply.
+      _ => throw DuetTransportException(
+          'expected a "returned" or "raised" response to invoke '
+          '"${echoBounded(command)}", got $reply',
+        ),
+    };
   }
 
   /// Sends one request and returns the response that answers it.

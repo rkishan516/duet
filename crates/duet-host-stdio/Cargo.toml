@@ -17,6 +17,10 @@ publish = false
 # could disagree with the one the goldens are generated through.
 [dependencies]
 duet-codegen = { path = "../duet-codegen" }
+# The registry an embedder actually writes. `duet-protocol` defines the
+# `CommandHost` seam; this is the other half, and a conformance harness that
+# hand-rolled its own `CommandHost` would be testing a shape no embedder uses.
+duet-command = { path = "../duet-command" }
 duet-core = { path = "../duet-core" }
 duet-protocol = { path = "../duet-protocol" }
 duet-runtime = { path = "../duet-runtime" }

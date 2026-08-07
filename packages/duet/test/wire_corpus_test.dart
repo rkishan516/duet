@@ -52,8 +52,8 @@ const int _matcherRecursionLimit = 4 * maxJsonDepth;
 /// whatever it is given is worthless: a file truncated to one case would pass
 /// every assertion below and prove nothing. If these numbers need changing,
 /// that is a deliberate review step.
-const int _acceptCaseCount = 51;
-const int _rejectCaseCount = 26;
+const int _acceptCaseCount = 63;
+const int _rejectCaseCount = 37;
 
 void main() {
   final Map<String, Object?> corpus = _loadCorpus();
@@ -339,6 +339,28 @@ Object? _requestWitness(DuetRequest r) => switch (r) {
           'id': r.id.toString(),
           'subscription': subscription.toString(),
         },
+      // `command` gets the UTF-8-bytes treatment, like every other free-form
+      // string here: it is not a path, so nothing proves a parse/format round
+      // trip for it, and arbitrary text is exactly where escaping diverges.
+      //
+      // `args` is an ORDERED array, sorted with [compareDuetMapKeys] rather
+      // than `String.compareTo`, for the same reason a map's witness is: the
+      // wire's key order is UTF-8 byte order, which UTF-16 code-unit comparison
+      // gets wrong for non-BMP keys.
+      DuetInvokeRequest(
+        :final String command,
+        :final Map<String, DuetValue> args,
+      ) =>
+        <String, Object?>{
+          'k': 'invoke',
+          'id': r.id.toString(),
+          'command': _valueWitness(DuetStr(command)),
+          'args': <Object?>[
+            for (final String key
+                in args.keys.toList(growable: false)..sort(compareDuetMapKeys))
+              <Object?>[key, _valueWitness(args[key]!)],
+          ],
+        },
     };
 
 /// The witness for a decoded [DuetResponse].
@@ -368,6 +390,19 @@ Object? _responseWitness(DuetResponse r) => switch (r) {
           'k': 'failed',
           'id': r.id.toString(),
           'message': _valueWitness(DuetStr(message)),
+        },
+      // `_valueWitness`, never `_optionalWitness`: neither field has an absent
+      // case, and treating one as optional would witness a bare JSON `null` and
+      // a `{"t":"n"}` identically — the very collapse the wire refuses.
+      DuetReturnedResponse(:final DuetValue value) => <String, Object?>{
+          'k': 'returned',
+          'id': r.id.toString(),
+          'value': _valueWitness(value),
+        },
+      DuetRaisedResponse(:final DuetValue error) => <String, Object?>{
+          'k': 'raised',
+          'id': r.id.toString(),
+          'error': _valueWitness(error),
         },
     };
 

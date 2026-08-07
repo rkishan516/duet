@@ -110,6 +110,7 @@ final class FakeHost implements DuetTransport {
       DuetSetRequest() => _handleSet(req),
       DuetSubscribeRequest() => _handleSubscribe(req),
       DuetUnsubscribeRequest() => _handleUnsubscribe(req),
+      DuetInvokeRequest() => _handleInvoke(req),
     };
   }
 
@@ -199,6 +200,20 @@ final class FakeHost implements DuetTransport {
     subscriptions.remove(req.subscription);
     return DuetDoneResponse(id: req.id).toWireText();
   }
+
+  /// Refuses every command by name, transcribed from
+  /// `duet_protocol::NoCommands` (crates/duet-protocol/src/command.rs).
+  ///
+  /// This fake stands in for `dispatch`, which registers **no** commands, so
+  /// that is what it must do here. Deliberately a `failed` naming the command
+  /// rather than an unknown-kind error: the guest's message was perfectly
+  /// well-formed and simply unserved, and saying otherwise would send a
+  /// developer to debug an encoder that is working.
+  String _handleInvoke(DuetInvokeRequest req) => DuetFailedResponse(
+        id: req.id,
+        message: 'this host registers no commands, so there is nothing named '
+            '"${req.command}" to run',
+      ).toWireText();
 
   /// An unused request id, for tests that hand-build a push.
   int nextRequestId() => _nextRequestId++;

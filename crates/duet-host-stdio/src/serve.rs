@@ -3,6 +3,7 @@
 use std::io::{self, BufRead, Write};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
+use duet_command::Commands;
 use duet_core::{Notification, Path, SubscriberId, Value};
 use duet_protocol::{Push, RequestId, Response};
 use duet_runtime::{Runtime, Sink, SinkError, StoreHandle};
@@ -32,7 +33,7 @@ const FENCE_KEY: &str = "__duet_host_stdio_fence__";
 /// different transcript on different runs.
 ///
 /// [`Session::serve_line`] closes that with one extra round trip to the core
-/// thread after [`duet_protocol::handle_text`] returns. The core thread
+/// thread after [`duet_protocol::handle_text_with`] returns. The core thread
 /// delivers a write's notifications **before** it accepts the next command — see
 /// [`Sink::deliver`] — so a reply to that round trip proves delivery already
 /// happened, and every push for the request is in the queue by the time the
@@ -55,6 +56,12 @@ pub struct Session {
     notifications: Receiver<Vec<Notification>>,
     /// The path the fence reads at, parsed once.
     fence: Path,
+    /// The commands this session's guest may reach.
+    ///
+    /// Built once per session rather than once per line: a registry is the
+    /// authorization boundary, and rebuilding it per request would make "which
+    /// commands does this surface have" a question with a per-request answer.
+    commands: Commands,
 }
 
 impl Session {
@@ -82,6 +89,7 @@ impl Session {
             // reads the whole tree, which is slower and just as correct as a
             // fence.
             fence: Path::parse(FENCE_KEY).unwrap_or_else(|_| Path::root()),
+            commands: crate::commands::commands(),
         })
     }
 
@@ -98,15 +106,26 @@ impl Session {
         self.handle.clone()
     }
 
+    /// The commands this session serves, for a test that wants to state what a
+    /// guest may reach without going through the wire.
+    #[must_use]
+    pub fn commands(&self) -> &Commands {
+        &self.commands
+    }
+
     /// Serves one line, writing every push it caused and then its reply.
     ///
     /// # Errors
     ///
     /// Whatever `output` returned. Nothing else can fail: the reply itself is
-    /// produced by [`duet_protocol::handle_text`], which is total.
+    /// produced by [`duet_protocol::handle_text_with`], which is total — including
+    /// against a command body, whose two ways of breaking a host (panicking, and
+    /// returning a value too deep to encode) are caught before they reach here.
     pub fn serve_line<W: Write>(&self, line: &[u8], output: &mut W) -> io::Result<()> {
         let reply = match std::str::from_utf8(line) {
-            Ok(text) => duet_protocol::handle_text(&self.handle, self.subscriber, text),
+            Ok(text) => {
+                duet_protocol::handle_text_with(&self.handle, self.subscriber, &self.commands, text)
+            }
             Err(e) => refusal(&format!(
                 "the request is not UTF-8: invalid byte at offset {}",
                 e.valid_up_to()

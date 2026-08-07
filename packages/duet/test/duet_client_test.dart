@@ -51,7 +51,53 @@ Future<String?> _echoHost(String request) async {
       '{"kind":"subscribed","id":"${req.id}","subscription":"7",'
           '"snapshot":{"t":"i","v":"42"}}',
     DuetUnsubscribeRequest() => '{"kind":"done","id":"${req.id}"}',
+    DuetInvokeRequest() => _echoInvoke(req),
   };
+}
+
+/// Answers an `invoke` all three ways the protocol allows, chosen by name.
+///
+/// `subtract` computes `a - b` from the **decoded arguments** rather than
+/// answering a constant, and subtraction is not commutative — so a client that
+/// encoded its arguments under swapped names changes the answer here. A fake
+/// that returned `5` whatever it was handed would pass against a completely
+/// broken argument encoder.
+String _echoInvoke(DuetInvokeRequest req) {
+  switch (req.command) {
+    case 'subtract':
+      final DuetValue? a = req.args['a'];
+      final DuetValue? b = req.args['b'];
+      if (a is! DuetInt || b is! DuetInt) {
+        return DuetFailedResponse(
+          id: req.id,
+          message: 'subtract expects int arguments "a" and "b"',
+        ).toWireText();
+      }
+      return DuetReturnedResponse(
+        id: req.id,
+        value: DuetInt(a.value - b.value),
+      ).toWireText();
+    case 'nothing':
+      return DuetReturnedResponse(id: req.id, value: const DuetNull())
+          .toWireText();
+    case 'raise':
+      return DuetRaisedResponse(
+        id: req.id,
+        error: const DuetMap(<String, DuetValue>{
+          'code': DuetStr('insufficient_funds'),
+          'short_by': DuetInt(250),
+        }),
+      ).toWireText();
+    case 'confused':
+      // A host answering an `invoke` with a reply that answers no `invoke`.
+      return DuetDoneResponse(id: req.id).toWireText();
+    default:
+      return DuetFailedResponse(
+        id: req.id,
+        message:
+            'no command named "${req.command}" is registered for this surface',
+      ).toWireText();
+  }
 }
 
 void main() {
@@ -539,6 +585,153 @@ void main() {
           '"subscription":"7","patch":{"path":"a","value":{"t":"n"}}}}',
         ),
         throwsA(isA<StateError>()),
+      );
+    });
+  });
+
+  group('invoke', () {
+    test('sends canonical bytes and returns the exact value', () async {
+      final FakeTransport transport = FakeTransport(_echoHost);
+      final DuetClient duet = DuetClient(transport);
+
+      // Arguments built in an order that is NOT their canonical one, so the
+      // encoder's sort is what produces the bytes below rather than the
+      // caller's insertion order.
+      final DuetInvocation outcome = await duet.invoke(
+        'subtract',
+        const <String, DuetValue>{'b': DuetInt(3), 'a': DuetInt(10)},
+      );
+
+      expect(outcome, const DuetReturned(DuetInt(7)),
+          reason: '10 - 3; a client that swapped the two argument names would '
+              'answer -7 here');
+      expect(transport.sent, <String>[
+        '{"args":{"t":"m","v":{"a":{"t":"i","v":"10"},"b":{"t":"i","v":"3"}}},'
+            '"command":"subtract","id":"1","kind":"invoke"}',
+      ]);
+    });
+
+    test('a command taking nothing sends an empty tagged map', () async {
+      // Empty, not absent: `args` is a required field, and a host decoding
+      // this message refuses it outright if it is missing — see
+      // `envelope/request/invoke_without_args` in the wire corpus.
+      final FakeTransport transport = FakeTransport(_echoHost);
+      final DuetClient duet = DuetClient(transport);
+
+      expect(await duet.invoke('nothing'),
+          const DuetReturned(DuetNull()));
+      expect(transport.sent, <String>[
+        '{"args":{"t":"m","v":{}},"command":"nothing","id":"1","kind":"invoke"}',
+      ]);
+    });
+
+    test('a raised error arrives typed, not as prose', () async {
+      // THE distinction this whole result type exists for. The error is a
+      // structured value a caller can match on — a `failed` would have handed
+      // over a sentence, and a sentence does not decode.
+      final FakeTransport transport = FakeTransport(_echoHost);
+      final DuetInvocation outcome =
+          await DuetClient(transport).invoke('raise');
+
+      expect(
+        outcome,
+        const DuetRaised(
+          DuetMap(<String, DuetValue>{
+            'code': DuetStr('insufficient_funds'),
+            'short_by': DuetInt(250),
+          }),
+        ),
+      );
+      // ...and the structure really is reachable, not merely equal to a
+      // literal written the same way.
+      final DuetValue error = (outcome as DuetRaised).error;
+      expect((error as DuetMap).entries['short_by'], const DuetInt(250));
+    });
+
+    test('a refusal throws, so it can never be mistaken for a raise', () async {
+      // `raised` means the command ran and failed; `failed` means it never
+      // ran. A client that surfaced both the same way would leave a caller
+      // unable to decide whether retrying is safe.
+      final FakeTransport transport = FakeTransport(_echoHost);
+      await expectLater(
+        DuetClient(transport).invoke('nope'),
+        throwsA(
+          isA<DuetFailure>().having(
+            (DuetFailure e) => e.message,
+            'message',
+            'no command named "nope" is registered for this surface',
+          ),
+        ),
+      );
+    });
+
+    test('a reply that answers no invoke is a transport failure', () async {
+      // Not a `DuetFailure`: the host did not refuse anything, it answered
+      // with a kind that cannot be an answer to an `invoke` at all.
+      final FakeTransport transport = FakeTransport(_echoHost);
+      await expectLater(
+        DuetClient(transport).invoke('confused'),
+        throwsA(isA<DuetTransportException>()),
+      );
+    });
+
+    test('an invocation is matched exhaustively', () {
+      // The compile-time half of the claim. `DuetInvocation` is sealed, so
+      // this switch expression stops compiling the moment an arm is added —
+      // which is the point: a caller cannot silently treat a command's error
+      // as a success. There is deliberately no wildcard arm here.
+      String describe(DuetInvocation outcome) => switch (outcome) {
+            DuetReturned(:final DuetValue value) => 'returned $value',
+            DuetRaised(:final DuetValue error) => 'raised $error',
+          };
+      expect(describe(const DuetReturned(DuetInt(1))), 'returned Int(1)');
+      expect(describe(const DuetRaised(DuetNull())), 'raised Null');
+    });
+
+    test('every request and response kind is matched exhaustively', () {
+      // The same claim for the two envelope hierarchies, which `invoke`,
+      // `returned` and `raised` have just widened. Both are sealed, so a new
+      // variant added without a case here is a compile error rather than a
+      // silently unhandled message.
+      String requestKind(DuetRequest r) => switch (r) {
+            DuetGetRequest() => 'get',
+            DuetSetRequest() => 'set',
+            DuetSubscribeRequest() => 'subscribe',
+            DuetUnsubscribeRequest() => 'unsubscribe',
+            DuetInvokeRequest() => 'invoke',
+          };
+      String responseKind(DuetResponse r) => switch (r) {
+            DuetValueResponse() => 'value',
+            DuetDoneResponse() => 'done',
+            DuetSubscribedResponse() => 'subscribed',
+            DuetFailedResponse() => 'failed',
+            DuetReturnedResponse() => 'returned',
+            DuetRaisedResponse() => 'raised',
+          };
+
+      expect(
+        <String>[
+          requestKind(const DuetGetRequest(id: 1, path: DuetPath.root)),
+          requestKind(const DuetSetRequest(
+              id: 2, path: DuetPath.root, value: DuetNull())),
+          requestKind(const DuetSubscribeRequest(id: 3, path: DuetPath.root)),
+          requestKind(const DuetUnsubscribeRequest(id: 4, subscription: 1)),
+          requestKind(const DuetInvokeRequest(
+              id: 5, command: 'c', args: <String, DuetValue>{})),
+        ],
+        <String>['get', 'set', 'subscribe', 'unsubscribe', 'invoke'],
+      );
+      expect(
+        <String>[
+          responseKind(const DuetValueResponse(id: 1, value: null)),
+          responseKind(const DuetDoneResponse(id: 2)),
+          responseKind(const DuetSubscribedResponse(
+              id: 3, subscription: 1, snapshot: null)),
+          responseKind(const DuetFailedResponse(id: 4, message: 'no')),
+          responseKind(const DuetReturnedResponse(id: 5, value: DuetNull())),
+          responseKind(const DuetRaisedResponse(id: 6, error: DuetNull())),
+        ],
+        <String>['value', 'done', 'subscribed', 'failed', 'returned', 'raised'],
       );
     });
   });

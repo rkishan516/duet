@@ -15,11 +15,19 @@ import {
   DuetFailure,
   DuetTransportError,
   DUET_CHANNEL_NAME,
+  DUET_ROOT_PATH,
   duetInt,
+  duetMap,
+  duetNull,
   duetStr,
   duetValueEquals,
+  encodeResponseText,
   formatDuetPath,
+  type DuetInvocation,
+  type DuetInvokeRequest,
   type DuetNotification,
+  type DuetRequest,
+  type DuetResponse,
   type DuetTransport,
   type DuetValue,
 } from '../src/index.ts';
@@ -79,6 +87,58 @@ function echoHost(request: string): Promise<string | null> {
       return Promise.resolve(
         `{"kind":"subscribed","id":"${id}","subscription":"7","snapshot":{"t":"i","v":"42"}}`,
       );
+    case 'invoke':
+      return Promise.resolve(echoInvoke(req));
+  }
+}
+
+/**
+ * Answers an `invoke` all three ways the protocol allows, chosen by name.
+ *
+ * `subtract` computes `a - b` from the **decoded arguments** rather than
+ * answering a constant, and subtraction is not commutative — so a client that
+ * encoded its arguments under swapped names changes the answer here. A fake that
+ * returned `5` whatever it was handed would pass against a completely broken
+ * argument encoder.
+ */
+function echoInvoke(req: DuetInvokeRequest): string {
+  switch (req.command) {
+    case 'subtract': {
+      const a = req.args.get('a');
+      const b = req.args.get('b');
+      if (a?.kind !== 'int' || b?.kind !== 'int') {
+        return encodeResponseText({
+          kind: 'failed',
+          id: req.id,
+          message: 'subtract expects int arguments "a" and "b"',
+        });
+      }
+      return encodeResponseText({
+        kind: 'returned',
+        id: req.id,
+        value: duetInt(a.value - b.value),
+      });
+    }
+    case 'nothing':
+      return encodeResponseText({ kind: 'returned', id: req.id, value: duetNull() });
+    case 'raise':
+      return encodeResponseText({
+        kind: 'raised',
+        id: req.id,
+        error: duetMap([
+          ['code', duetStr('insufficient_funds')],
+          ['short_by', duetInt(250n)],
+        ]),
+      });
+    // A host answering an `invoke` with a reply that answers no `invoke`.
+    case 'confused':
+      return encodeResponseText({ kind: 'done', id: req.id });
+    default:
+      return encodeResponseText({
+        kind: 'failed',
+        id: req.id,
+        message: `no command named "${req.command}" is registered for this surface`,
+      });
   }
 }
 
@@ -325,6 +385,173 @@ describe('pushes', () => {
     };
     duet.start();
     assert.throws(() => transport.deliverPush(NOTIFICATION), /application bug/);
+  });
+});
+
+describe('invoke', () => {
+  test('sends canonical bytes and returns the exact value', async () => {
+    const transport = new FakeTransport(echoHost);
+    const duet = new DuetClient(transport);
+
+    // Arguments built in an order that is NOT their canonical one, so the
+    // encoder's sort is what produces the bytes below rather than the caller's
+    // insertion order.
+    const outcome = await duet.invoke(
+      'subtract',
+      new Map<string, DuetValue>([
+        ['b', duetInt(3n)],
+        ['a', duetInt(10n)],
+      ]),
+    );
+
+    assert.deepStrictEqual(
+      outcome,
+      { kind: 'returned', value: duetInt(7n) },
+      '10 - 3; a client that swapped the two argument names would answer -7 here',
+    );
+    assert.deepStrictEqual(transport.sent, [
+      '{"args":{"t":"m","v":{"a":{"t":"i","v":"10"},"b":{"t":"i","v":"3"}}},' +
+        '"command":"subtract","id":"1","kind":"invoke"}',
+    ]);
+  });
+
+  test('a command taking nothing sends an empty tagged map', async () => {
+    // Empty, not absent: `args` is a required field, and a host decoding this
+    // message refuses it outright if it is missing — see
+    // `envelope/request/invoke_without_args` in the wire corpus.
+    const transport = new FakeTransport(echoHost);
+    const outcome = await new DuetClient(transport).invoke('nothing');
+
+    assert.deepStrictEqual(outcome, { kind: 'returned', value: duetNull() });
+    assert.deepStrictEqual(transport.sent, [
+      '{"args":{"t":"m","v":{}},"command":"nothing","id":"1","kind":"invoke"}',
+    ]);
+  });
+
+  test('a raised error arrives typed, not as prose', async () => {
+    // THE distinction this whole result type exists for. The error is a
+    // structured value a caller can match on — a `failed` would have handed over
+    // a sentence, and a sentence does not decode.
+    const transport = new FakeTransport(echoHost);
+    const outcome = await new DuetClient(transport).invoke('raise');
+
+    assert.equal(outcome.kind, 'raised');
+    if (outcome.kind !== 'raised') return;
+    assert.ok(
+      duetValueEquals(
+        outcome.error,
+        duetMap([
+          ['code', duetStr('insufficient_funds')],
+          ['short_by', duetInt(250n)],
+        ]),
+      ),
+    );
+    // ...and the structure really is reachable, not merely equal to a literal
+    // written the same way.
+    assert.equal(outcome.error.kind, 'map');
+    if (outcome.error.kind !== 'map') return;
+    assert.deepStrictEqual(outcome.error.entries.get('short_by'), duetInt(250n));
+  });
+
+  test('a refusal throws, so it can never be mistaken for a raise', async () => {
+    // `raised` means the command ran and failed; `failed` means it never ran. A
+    // client that surfaced both the same way would leave a caller unable to
+    // decide whether retrying is safe.
+    const transport = new FakeTransport(echoHost);
+    await assert.rejects(
+      () => new DuetClient(transport).invoke('nope'),
+      (error: Error) =>
+        error instanceof DuetFailure &&
+        error.message === 'no command named "nope" is registered for this surface',
+    );
+  });
+
+  test('a reply that answers no invoke is a transport failure', async () => {
+    // Not a `DuetFailure`: the host did not refuse anything, it answered with a
+    // kind that cannot be an answer to an `invoke` at all.
+    const transport = new FakeTransport(echoHost);
+    await assert.rejects(
+      () => new DuetClient(transport).invoke('confused'),
+      (error: Error) => error instanceof DuetTransportError,
+    );
+  });
+
+  test('an invocation is matched exhaustively', () => {
+    // The compile-time half of the claim. The `never` binding in the default arm
+    // is what makes it one: an arm added to `DuetInvocation` and not handled here
+    // makes `rest` a non-`never` type and fails `npm run typecheck`. A caller
+    // cannot silently treat a command's error as a success.
+    const describe = (outcome: DuetInvocation): string => {
+      switch (outcome.kind) {
+        case 'returned':
+          return `returned ${outcome.value.kind}`;
+        case 'raised':
+          return `raised ${outcome.error.kind}`;
+        default: {
+          const rest: never = outcome;
+          return rest;
+        }
+      }
+    };
+    assert.equal(describe({ kind: 'returned', value: duetInt(1n) }), 'returned int');
+    assert.equal(describe({ kind: 'raised', error: duetNull() }), 'raised null');
+  });
+
+  test('every request and response kind is matched exhaustively', () => {
+    // The same claim for the two envelope unions, which `invoke`, `returned` and
+    // `raised` have just widened. Same `never` mechanism, so a variant added
+    // without a case here fails the typecheck rather than going unhandled.
+    const requestKind = (r: DuetRequest): string => {
+      switch (r.kind) {
+        case 'get':
+        case 'set':
+        case 'subscribe':
+        case 'unsubscribe':
+        case 'invoke':
+          return r.kind;
+        default: {
+          const rest: never = r;
+          return rest;
+        }
+      }
+    };
+    const responseKind = (r: DuetResponse): string => {
+      switch (r.kind) {
+        case 'value':
+        case 'done':
+        case 'subscribed':
+        case 'failed':
+        case 'returned':
+        case 'raised':
+          return r.kind;
+        default: {
+          const rest: never = r;
+          return rest;
+        }
+      }
+    };
+
+    assert.deepStrictEqual(
+      [
+        requestKind({ kind: 'get', id: 1n, path: DUET_ROOT_PATH }),
+        requestKind({ kind: 'set', id: 2n, path: DUET_ROOT_PATH, value: duetNull() }),
+        requestKind({ kind: 'subscribe', id: 3n, path: DUET_ROOT_PATH }),
+        requestKind({ kind: 'unsubscribe', id: 4n, subscription: 1n }),
+        requestKind({ kind: 'invoke', id: 5n, command: 'c', args: new Map() }),
+      ],
+      ['get', 'set', 'subscribe', 'unsubscribe', 'invoke'],
+    );
+    assert.deepStrictEqual(
+      [
+        responseKind({ kind: 'value', id: 1n, value: null }),
+        responseKind({ kind: 'done', id: 2n }),
+        responseKind({ kind: 'subscribed', id: 3n, subscription: 1n, snapshot: null }),
+        responseKind({ kind: 'failed', id: 4n, message: 'no' }),
+        responseKind({ kind: 'returned', id: 5n, value: duetNull() }),
+        responseKind({ kind: 'raised', id: 6n, error: duetNull() }),
+      ],
+      ['value', 'done', 'subscribed', 'failed', 'returned', 'raised'],
+    );
   });
 });
 

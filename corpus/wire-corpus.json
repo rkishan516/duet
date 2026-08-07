@@ -1042,6 +1042,687 @@
           "k": "float"
         }
       }
+    },
+    {
+      "layer": "request",
+      "name": "envelope/request/invoke_no_args",
+      "reencode_byte_exact": true,
+      "reencodes_to": null,
+      "wire": "{\"args\":{\"t\":\"m\",\"v\":{}},\"command\":\"documents.reset\",\"id\":\"50\",\"kind\":\"invoke\"}",
+      "witness": {
+        "args": [],
+        "command": {
+          "k": "str",
+          "utf8": [
+            100,
+            111,
+            99,
+            117,
+            109,
+            101,
+            110,
+            116,
+            115,
+            46,
+            114,
+            101,
+            115,
+            101,
+            116
+          ]
+        },
+        "id": "50",
+        "k": "invoke"
+      }
+    },
+    {
+      "layer": "request",
+      "name": "envelope/request/invoke_with_args",
+      "reencode_byte_exact": true,
+      "reencodes_to": null,
+      "wire": "{\"args\":{\"t\":\"m\",\"v\":{\"absent\":{\"t\":\"n\"},\"blob\":{\"t\":\"b\",\"v\":\"AH//\"},\"force\":{\"t\":\"bool\",\"v\":true},\"id\":{\"t\":\"i\",\"v\":\"9007199254740993\"},\"options\":{\"t\":\"m\",\"v\":{\"dry_run\":{\"t\":\"bool\",\"v\":false}}},\"tags\":{\"t\":\"l\",\"v\":[{\"t\":\"s\",\"v\":\"a\"}]},\"title\":{\"t\":\"s\",\"v\":\"café ✓\"}}},\"command\":\"documents.rename\",\"id\":\"51\",\"kind\":\"invoke\"}",
+      "witness": {
+        "args": [
+          [
+            "absent",
+            {
+              "k": "null"
+            }
+          ],
+          [
+            "blob",
+            {
+              "hex": "007fff",
+              "k": "bytes"
+            }
+          ],
+          [
+            "force",
+            {
+              "k": "bool",
+              "v": true
+            }
+          ],
+          [
+            "id",
+            {
+              "k": "int",
+              "v": "9007199254740993"
+            }
+          ],
+          [
+            "options",
+            {
+              "entries": [
+                [
+                  "dry_run",
+                  {
+                    "k": "bool",
+                    "v": false
+                  }
+                ]
+              ],
+              "k": "map"
+            }
+          ],
+          [
+            "tags",
+            {
+              "items": [
+                {
+                  "k": "str",
+                  "utf8": [
+                    97
+                  ]
+                }
+              ],
+              "k": "list"
+            }
+          ],
+          [
+            "title",
+            {
+              "k": "str",
+              "utf8": [
+                99,
+                97,
+                102,
+                195,
+                169,
+                32,
+                226,
+                156,
+                147
+              ]
+            }
+          ]
+        ],
+        "command": {
+          "k": "str",
+          "utf8": [
+            100,
+            111,
+            99,
+            117,
+            109,
+            101,
+            110,
+            116,
+            115,
+            46,
+            114,
+            101,
+            110,
+            97,
+            109,
+            101
+          ]
+        },
+        "id": "51",
+        "k": "invoke"
+      }
+    },
+    {
+      "layer": "request",
+      "name": "envelope/request/invoke_argument_at_value_depth_limit",
+      "reencode_byte_exact": true,
+      "reencodes_to": null,
+      "wire": "{\"args\":{\"t\":\"m\",\"v\":{\"shape\":{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"i\",\"v\":\"1\"}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}}},\"command\":\"measure\",\"id\":\"52\",\"kind\":\"invoke\"}",
+      "witness": {
+        "args": [
+          [
+            "shape",
+            {
+              "items": [
+                {
+                  "items": [
+                    {
+                      "items": [
+                        {
+                          "items": [
+                            {
+                              "items": [
+                                {
+                                  "items": [
+                                    {
+                                      "items": [
+                                        {
+                                          "items": [
+                                            {
+                                              "items": [
+                                                {
+                                                  "items": [
+                                                    {
+                                                      "items": [
+                                                        {
+                                                          "items": [
+                                                            {
+                                                              "items": [
+                                                                {
+                                                                  "items": [
+                                                                    {
+                                                                      "items": [
+                                                                        {
+                                                                          "items": [
+                                                                            {
+                                                                              "items": [
+                                                                                {
+                                                                                  "items": [
+                                                                                    {
+                                                                                      "items": [
+                                                                                        {
+                                                                                          "items": [
+                                                                                            {
+                                                                                              "items": [
+                                                                                                {
+                                                                                                  "items": [
+                                                                                                    {
+                                                                                                      "items": [
+                                                                                                        {
+                                                                                                          "items": [
+                                                                                                            {
+                                                                                                              "items": [
+                                                                                                                {
+                                                                                                                  "items": [
+                                                                                                                    {
+                                                                                                                      "items": [
+                                                                                                                        {
+                                                                                                                          "items": [
+                                                                                                                            {
+                                                                                                                              "items": [
+                                                                                                                                {
+                                                                                                                                  "items": [
+                                                                                                                                    {
+                                                                                                                                      "items": [
+                                                                                                                                        {
+                                                                                                                                          "items": [
+                                                                                                                                            {
+                                                                                                                                              "items": [
+                                                                                                                                                {
+                                                                                                                                                  "items": [
+                                                                                                                                                    {
+                                                                                                                                                      "items": [
+                                                                                                                                                        {
+                                                                                                                                                          "items": [
+                                                                                                                                                            {
+                                                                                                                                                              "items": [
+                                                                                                                                                                {
+                                                                                                                                                                  "items": [
+                                                                                                                                                                    {
+                                                                                                                                                                      "items": [
+                                                                                                                                                                        {
+                                                                                                                                                                          "items": [
+                                                                                                                                                                            {
+                                                                                                                                                                              "items": [
+                                                                                                                                                                                {
+                                                                                                                                                                                  "items": [
+                                                                                                                                                                                    {
+                                                                                                                                                                                      "items": [
+                                                                                                                                                                                        {
+                                                                                                                                                                                          "items": [
+                                                                                                                                                                                            {
+                                                                                                                                                                                              "items": [
+                                                                                                                                                                                                {
+                                                                                                                                                                                                  "items": [
+                                                                                                                                                                                                    {
+                                                                                                                                                                                                      "items": [
+                                                                                                                                                                                                        {
+                                                                                                                                                                                                          "items": [
+                                                                                                                                                                                                            {
+                                                                                                                                                                                                              "items": [
+                                                                                                                                                                                                                {
+                                                                                                                                                                                                                  "items": [
+                                                                                                                                                                                                                    {
+                                                                                                                                                                                                                      "items": [
+                                                                                                                                                                                                                        {
+                                                                                                                                                                                                                          "items": [
+                                                                                                                                                                                                                            {
+                                                                                                                                                                                                                              "items": [
+                                                                                                                                                                                                                                {
+                                                                                                                                                                                                                                  "items": [
+                                                                                                                                                                                                                                    {
+                                                                                                                                                                                                                                      "items": [
+                                                                                                                                                                                                                                        {
+                                                                                                                                                                                                                                          "items": [
+                                                                                                                                                                                                                                            {
+                                                                                                                                                                                                                                              "items": [
+                                                                                                                                                                                                                                                {
+                                                                                                                                                                                                                                                  "items": [
+                                                                                                                                                                                                                                                    {
+                                                                                                                                                                                                                                                      "items": [
+                                                                                                                                                                                                                                                        {
+                                                                                                                                                                                                                                                          "items": [
+                                                                                                                                                                                                                                                            {
+                                                                                                                                                                                                                                                              "items": [
+                                                                                                                                                                                                                                                                {
+                                                                                                                                                                                                                                                                  "k": "int",
+                                                                                                                                                                                                                                                                  "v": "1"
+                                                                                                                                                                                                                                                                }
+                                                                                                                                                                                                                                                              ],
+                                                                                                                                                                                                                                                              "k": "list"
+                                                                                                                                                                                                                                                            }
+                                                                                                                                                                                                                                                          ],
+                                                                                                                                                                                                                                                          "k": "list"
+                                                                                                                                                                                                                                                        }
+                                                                                                                                                                                                                                                      ],
+                                                                                                                                                                                                                                                      "k": "list"
+                                                                                                                                                                                                                                                    }
+                                                                                                                                                                                                                                                  ],
+                                                                                                                                                                                                                                                  "k": "list"
+                                                                                                                                                                                                                                                }
+                                                                                                                                                                                                                                              ],
+                                                                                                                                                                                                                                              "k": "list"
+                                                                                                                                                                                                                                            }
+                                                                                                                                                                                                                                          ],
+                                                                                                                                                                                                                                          "k": "list"
+                                                                                                                                                                                                                                        }
+                                                                                                                                                                                                                                      ],
+                                                                                                                                                                                                                                      "k": "list"
+                                                                                                                                                                                                                                    }
+                                                                                                                                                                                                                                  ],
+                                                                                                                                                                                                                                  "k": "list"
+                                                                                                                                                                                                                                }
+                                                                                                                                                                                                                              ],
+                                                                                                                                                                                                                              "k": "list"
+                                                                                                                                                                                                                            }
+                                                                                                                                                                                                                          ],
+                                                                                                                                                                                                                          "k": "list"
+                                                                                                                                                                                                                        }
+                                                                                                                                                                                                                      ],
+                                                                                                                                                                                                                      "k": "list"
+                                                                                                                                                                                                                    }
+                                                                                                                                                                                                                  ],
+                                                                                                                                                                                                                  "k": "list"
+                                                                                                                                                                                                                }
+                                                                                                                                                                                                              ],
+                                                                                                                                                                                                              "k": "list"
+                                                                                                                                                                                                            }
+                                                                                                                                                                                                          ],
+                                                                                                                                                                                                          "k": "list"
+                                                                                                                                                                                                        }
+                                                                                                                                                                                                      ],
+                                                                                                                                                                                                      "k": "list"
+                                                                                                                                                                                                    }
+                                                                                                                                                                                                  ],
+                                                                                                                                                                                                  "k": "list"
+                                                                                                                                                                                                }
+                                                                                                                                                                                              ],
+                                                                                                                                                                                              "k": "list"
+                                                                                                                                                                                            }
+                                                                                                                                                                                          ],
+                                                                                                                                                                                          "k": "list"
+                                                                                                                                                                                        }
+                                                                                                                                                                                      ],
+                                                                                                                                                                                      "k": "list"
+                                                                                                                                                                                    }
+                                                                                                                                                                                  ],
+                                                                                                                                                                                  "k": "list"
+                                                                                                                                                                                }
+                                                                                                                                                                              ],
+                                                                                                                                                                              "k": "list"
+                                                                                                                                                                            }
+                                                                                                                                                                          ],
+                                                                                                                                                                          "k": "list"
+                                                                                                                                                                        }
+                                                                                                                                                                      ],
+                                                                                                                                                                      "k": "list"
+                                                                                                                                                                    }
+                                                                                                                                                                  ],
+                                                                                                                                                                  "k": "list"
+                                                                                                                                                                }
+                                                                                                                                                              ],
+                                                                                                                                                              "k": "list"
+                                                                                                                                                            }
+                                                                                                                                                          ],
+                                                                                                                                                          "k": "list"
+                                                                                                                                                        }
+                                                                                                                                                      ],
+                                                                                                                                                      "k": "list"
+                                                                                                                                                    }
+                                                                                                                                                  ],
+                                                                                                                                                  "k": "list"
+                                                                                                                                                }
+                                                                                                                                              ],
+                                                                                                                                              "k": "list"
+                                                                                                                                            }
+                                                                                                                                          ],
+                                                                                                                                          "k": "list"
+                                                                                                                                        }
+                                                                                                                                      ],
+                                                                                                                                      "k": "list"
+                                                                                                                                    }
+                                                                                                                                  ],
+                                                                                                                                  "k": "list"
+                                                                                                                                }
+                                                                                                                              ],
+                                                                                                                              "k": "list"
+                                                                                                                            }
+                                                                                                                          ],
+                                                                                                                          "k": "list"
+                                                                                                                        }
+                                                                                                                      ],
+                                                                                                                      "k": "list"
+                                                                                                                    }
+                                                                                                                  ],
+                                                                                                                  "k": "list"
+                                                                                                                }
+                                                                                                              ],
+                                                                                                              "k": "list"
+                                                                                                            }
+                                                                                                          ],
+                                                                                                          "k": "list"
+                                                                                                        }
+                                                                                                      ],
+                                                                                                      "k": "list"
+                                                                                                    }
+                                                                                                  ],
+                                                                                                  "k": "list"
+                                                                                                }
+                                                                                              ],
+                                                                                              "k": "list"
+                                                                                            }
+                                                                                          ],
+                                                                                          "k": "list"
+                                                                                        }
+                                                                                      ],
+                                                                                      "k": "list"
+                                                                                    }
+                                                                                  ],
+                                                                                  "k": "list"
+                                                                                }
+                                                                              ],
+                                                                              "k": "list"
+                                                                            }
+                                                                          ],
+                                                                          "k": "list"
+                                                                        }
+                                                                      ],
+                                                                      "k": "list"
+                                                                    }
+                                                                  ],
+                                                                  "k": "list"
+                                                                }
+                                                              ],
+                                                              "k": "list"
+                                                            }
+                                                          ],
+                                                          "k": "list"
+                                                        }
+                                                      ],
+                                                      "k": "list"
+                                                    }
+                                                  ],
+                                                  "k": "list"
+                                                }
+                                              ],
+                                              "k": "list"
+                                            }
+                                          ],
+                                          "k": "list"
+                                        }
+                                      ],
+                                      "k": "list"
+                                    }
+                                  ],
+                                  "k": "list"
+                                }
+                              ],
+                              "k": "list"
+                            }
+                          ],
+                          "k": "list"
+                        }
+                      ],
+                      "k": "list"
+                    }
+                  ],
+                  "k": "list"
+                }
+              ],
+              "k": "list"
+            }
+          ]
+        ],
+        "command": {
+          "k": "str",
+          "utf8": [
+            109,
+            101,
+            97,
+            115,
+            117,
+            114,
+            101
+          ]
+        },
+        "id": "52",
+        "k": "invoke"
+      }
+    },
+    {
+      "layer": "response",
+      "name": "envelope/response/returned_unit",
+      "reencode_byte_exact": true,
+      "reencodes_to": null,
+      "wire": "{\"id\":\"53\",\"kind\":\"returned\",\"value\":{\"t\":\"n\"}}",
+      "witness": {
+        "id": "53",
+        "k": "returned",
+        "value": {
+          "k": "null"
+        }
+      }
+    },
+    {
+      "layer": "response",
+      "name": "envelope/response/returned_int",
+      "reencode_byte_exact": true,
+      "reencodes_to": null,
+      "wire": "{\"id\":\"54\",\"kind\":\"returned\",\"value\":{\"t\":\"i\",\"v\":\"-9223372036854775808\"}}",
+      "witness": {
+        "id": "54",
+        "k": "returned",
+        "value": {
+          "k": "int",
+          "v": "-9223372036854775808"
+        }
+      }
+    },
+    {
+      "layer": "response",
+      "name": "envelope/response/returned_float",
+      "reencode_byte_exact": false,
+      "reencodes_to": null,
+      "wire": "{\"id\":\"55\",\"kind\":\"returned\",\"value\":{\"t\":\"f\",\"v\":0.1}}",
+      "witness": {
+        "id": "55",
+        "k": "returned",
+        "value": {
+          "bits": "3fb999999999999a",
+          "k": "float"
+        }
+      }
+    },
+    {
+      "layer": "response",
+      "name": "envelope/response/returned_str",
+      "reencode_byte_exact": true,
+      "reencodes_to": null,
+      "wire": "{\"id\":\"56\",\"kind\":\"returned\",\"value\":{\"t\":\"s\",\"v\":\"café ✓ 😀\"}}",
+      "witness": {
+        "id": "56",
+        "k": "returned",
+        "value": {
+          "k": "str",
+          "utf8": [
+            99,
+            97,
+            102,
+            195,
+            169,
+            32,
+            226,
+            156,
+            147,
+            32,
+            240,
+            159,
+            152,
+            128
+          ]
+        }
+      }
+    },
+    {
+      "layer": "response",
+      "name": "envelope/response/returned_bytes",
+      "reencode_byte_exact": true,
+      "reencodes_to": null,
+      "wire": "{\"id\":\"57\",\"kind\":\"returned\",\"value\":{\"t\":\"b\",\"v\":\"3q2+7w==\"}}",
+      "witness": {
+        "id": "57",
+        "k": "returned",
+        "value": {
+          "hex": "deadbeef",
+          "k": "bytes"
+        }
+      }
+    },
+    {
+      "layer": "response",
+      "name": "envelope/response/returned_list",
+      "reencode_byte_exact": true,
+      "reencodes_to": null,
+      "wire": "{\"id\":\"58\",\"kind\":\"returned\",\"value\":{\"t\":\"l\",\"v\":[{\"t\":\"i\",\"v\":\"1\"},{\"t\":\"n\"}]}}",
+      "witness": {
+        "id": "58",
+        "k": "returned",
+        "value": {
+          "items": [
+            {
+              "k": "int",
+              "v": "1"
+            },
+            {
+              "k": "null"
+            }
+          ],
+          "k": "list"
+        }
+      }
+    },
+    {
+      "layer": "response",
+      "name": "envelope/response/returned_map",
+      "reencode_byte_exact": true,
+      "reencodes_to": null,
+      "wire": "{\"id\":\"59\",\"kind\":\"returned\",\"value\":{\"t\":\"m\",\"v\":{\"count\":{\"t\":\"i\",\"v\":\"2\"},\"ok\":{\"t\":\"bool\",\"v\":true}}}}",
+      "witness": {
+        "id": "59",
+        "k": "returned",
+        "value": {
+          "entries": [
+            [
+              "count",
+              {
+                "k": "int",
+                "v": "2"
+              }
+            ],
+            [
+              "ok",
+              {
+                "k": "bool",
+                "v": true
+              }
+            ]
+          ],
+          "k": "map"
+        }
+      }
+    },
+    {
+      "layer": "response",
+      "name": "envelope/response/raised_map",
+      "reencode_byte_exact": true,
+      "reencodes_to": null,
+      "wire": "{\"error\":{\"t\":\"m\",\"v\":{\"code\":{\"t\":\"s\",\"v\":\"insufficient_funds\"},\"short_by\":{\"t\":\"i\",\"v\":\"250\"}}},\"id\":\"60\",\"kind\":\"raised\"}",
+      "witness": {
+        "error": {
+          "entries": [
+            [
+              "code",
+              {
+                "k": "str",
+                "utf8": [
+                  105,
+                  110,
+                  115,
+                  117,
+                  102,
+                  102,
+                  105,
+                  99,
+                  105,
+                  101,
+                  110,
+                  116,
+                  95,
+                  102,
+                  117,
+                  110,
+                  100,
+                  115
+                ]
+              }
+            ],
+            [
+              "short_by",
+              {
+                "k": "int",
+                "v": "250"
+              }
+            ]
+          ],
+          "k": "map"
+        },
+        "id": "60",
+        "k": "raised"
+      }
+    },
+    {
+      "layer": "response",
+      "name": "envelope/response/raised_unit",
+      "reencode_byte_exact": true,
+      "reencodes_to": null,
+      "wire": "{\"error\":{\"t\":\"n\"},\"id\":\"61\",\"kind\":\"raised\"}",
+      "witness": {
+        "error": {
+          "k": "null"
+        },
+        "id": "61",
+        "k": "raised"
+      }
     }
   ],
   "generator": "cargo test -p duet-protocol --test wire_corpus -- --ignored regenerate_corpus",
@@ -1183,6 +1864,72 @@
       "name": "envelope/push/unknown_kind",
       "reason": "unknown_tag",
       "wire": "{\"kind\":\"nope\"}"
+    },
+    {
+      "layer": "request",
+      "name": "envelope/request/invoke_without_args",
+      "reason": "bad_shape",
+      "wire": "{\"kind\":\"invoke\",\"id\":\"1\",\"command\":\"add\"}"
+    },
+    {
+      "layer": "request",
+      "name": "envelope/request/invoke_args_tagged_int",
+      "reason": "bad_shape",
+      "wire": "{\"kind\":\"invoke\",\"id\":\"1\",\"command\":\"add\",\"args\":{\"t\":\"i\",\"v\":\"1\"}}"
+    },
+    {
+      "layer": "request",
+      "name": "envelope/request/invoke_args_bare_json_object",
+      "reason": "bad_shape",
+      "wire": "{\"kind\":\"invoke\",\"id\":\"1\",\"command\":\"add\",\"args\":{\"a\":{\"t\":\"i\",\"v\":\"1\"}}}"
+    },
+    {
+      "layer": "request",
+      "name": "envelope/request/invoke_without_command",
+      "reason": "bad_shape",
+      "wire": "{\"kind\":\"invoke\",\"id\":\"1\",\"args\":{\"t\":\"m\",\"v\":{}}}"
+    },
+    {
+      "layer": "request",
+      "name": "envelope/request/invoke_command_not_a_string",
+      "reason": "bad_shape",
+      "wire": "{\"kind\":\"invoke\",\"id\":\"1\",\"command\":7,\"args\":{\"t\":\"m\",\"v\":{}}}"
+    },
+    {
+      "layer": "request",
+      "name": "envelope/request/invoke_id_non_canonical",
+      "reason": "bad_int",
+      "wire": "{\"kind\":\"invoke\",\"id\":\"007\",\"command\":\"add\",\"args\":{\"t\":\"m\",\"v\":{}}}"
+    },
+    {
+      "layer": "response",
+      "name": "envelope/response/returned_bare_null",
+      "reason": "bad_shape",
+      "wire": "{\"kind\":\"returned\",\"id\":\"1\",\"value\":null}"
+    },
+    {
+      "layer": "response",
+      "name": "envelope/response/returned_without_value",
+      "reason": "bad_shape",
+      "wire": "{\"kind\":\"returned\",\"id\":\"1\"}"
+    },
+    {
+      "layer": "response",
+      "name": "envelope/response/raised_bare_null",
+      "reason": "bad_shape",
+      "wire": "{\"kind\":\"raised\",\"id\":\"1\",\"error\":null}"
+    },
+    {
+      "layer": "response",
+      "name": "envelope/response/raised_without_error",
+      "reason": "bad_shape",
+      "wire": "{\"kind\":\"raised\",\"id\":\"1\"}"
+    },
+    {
+      "layer": "request",
+      "name": "envelope/request/invoke_argument_past_value_depth_limit",
+      "reason": "bad_json",
+      "wire": "{\"args\":{\"t\":\"m\",\"v\":{\"shape\":{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"l\",\"v\":[{\"t\":\"i\",\"v\":\"1\"}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}}},\"command\":\"measure\",\"id\":\"1\",\"kind\":\"invoke\"}"
     },
     {
       "layer": "request",

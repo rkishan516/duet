@@ -315,6 +315,92 @@ fn the_handle_sees_what_the_wire_wrote() {
 }
 
 #[test]
+fn a_session_serves_the_commands_it_registers_and_the_store_they_touch() {
+    // The wiring test, and the one a mutation would take out on its own: if
+    // `serve_line` called `handle_text` instead of `handle_text_with`, every
+    // assertion in `commands_tests.rs` would still pass — they drive
+    // `handle_text_with` directly — and every `invoke` a guest sent would be
+    // refused. So this drives the whole loop, byte in and byte out, and then
+    // reads the mutated path back through an ordinary `get`.
+    let lines = transcript(
+        "app",
+        &[
+            r#"{"kind":"invoke","id":"1","command":"subtract","args":{"t":"m","v":{"a":{"t":"i","v":"10"},"b":{"t":"i","v":"3"}}}}"#,
+            r#"{"kind":"invoke","id":"2","command":"raise","args":{"t":"m","v":{}}}"#,
+            r#"{"kind":"invoke","id":"3","command":"nope","args":{"t":"m","v":{}}}"#,
+            r#"{"kind":"invoke","id":"4","command":"bump","args":{"t":"m","v":{"by":{"t":"i","v":"5"},"path":{"t":"s","v":"counter"}}}}"#,
+            r#"{"kind":"get","id":"5","path":"counter"}"#,
+        ],
+    );
+    assert_eq!(lines.len(), 5, "one reply per request: {lines:?}");
+    assert_eq!(
+        lines[0],
+        r#"{"id":"1","kind":"returned","value":{"t":"i","v":"7"}}"#
+    );
+    assert_eq!(
+        lines[1],
+        r#"{"error":{"t":"m","v":{"code":{"t":"s","v":"unlucky"},"short_by":{"t":"i","v":"42"}}},"id":"2","kind":"raised"}"#
+    );
+    assert_eq!(
+        json(&lines[2])["kind"],
+        "failed",
+        "an unregistered name is a refusal, never a raise: {}",
+        lines[2]
+    );
+    assert_eq!(
+        lines[3],
+        r#"{"id":"4","kind":"returned","value":{"t":"i","v":"5"}}"#
+    );
+    // The proof: what the command wrote is what an ordinary read sees. Seeded
+    // at 0, bumped by 5.
+    assert_eq!(
+        lines[4],
+        r#"{"id":"5","kind":"value","value":{"t":"i","v":"5"}}"#
+    );
+}
+
+#[test]
+fn a_commands_write_notifies_a_subscription_like_any_other_write() {
+    // Commands and subscriptions share one store, so a command's write must
+    // reach a watcher exactly as a guest's `set` does. A host that served
+    // commands against some second store would pass every other assertion here
+    // and deliver nothing.
+    let lines = transcript(
+        "app",
+        &[
+            r#"{"kind":"subscribe","id":"1","path":"counter"}"#,
+            r#"{"kind":"invoke","id":"2","command":"bump","args":{"t":"m","v":{"by":{"t":"i","v":"3"},"path":{"t":"s","v":"counter"}}}}"#,
+        ],
+    );
+    assert_eq!(
+        lines.len(),
+        3,
+        "subscribed, notification, returned: {lines:?}"
+    );
+    assert_eq!(json(&lines[0])["kind"], "subscribed");
+    assert_eq!(json(&lines[1])["kind"], "notification");
+    assert_eq!(
+        json(&lines[1])["notification"]["patch"]["value"],
+        serde_json::json!({"t": "i", "v": "3"})
+    );
+    assert_eq!(
+        lines[2],
+        r#"{"id":"2","kind":"returned","value":{"t":"i","v":"3"}}"#
+    );
+}
+
+#[test]
+fn the_session_exposes_the_registry_it_serves() {
+    let session = Session::open("app").expect("the fixture should open");
+    assert_eq!(
+        session.commands().names(),
+        crate::commands().names(),
+        "a session must serve the registry this crate documents"
+    );
+    session.shutdown().expect("the store should stop");
+}
+
+#[test]
 fn seed_of_matches_what_a_session_actually_starts_with() {
     // Two producers of one fact — the value this host seeds, and the value the
     // corpus states it seeds — must not be able to drift.

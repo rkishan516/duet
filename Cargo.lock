@@ -523,6 +523,7 @@ version = "0.1.0"
 dependencies = [
  "duet-codec",
  "duet-codegen",
+ "duet-command",
  "duet-core",
  "duet-protocol",
  "duet-runtime",

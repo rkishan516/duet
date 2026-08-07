@@ -1,7 +1,7 @@
 //! A Duet host that speaks the protocol over stdin and stdout.
 //!
-//! [`duet_protocol::handle_text`] is the complete host conversation and needs
-//! no window, no Flutter engine and no webview. This crate wraps it in a
+//! [`duet_protocol::handle_text_with`] is the complete host conversation and
+//! needs no window, no Flutter engine and no webview. This crate wraps it in a
 //! process so that a **Dart or JavaScript guest can be driven against the real
 //! host** across a real process boundary, on any platform CI can run.
 //!
@@ -9,6 +9,14 @@
 //! against fake hosts transcribed by hand from `duet-core`'s write rules. A
 //! transcription can be faithfully wrong; this is what makes the difference
 //! observable.
+//!
+//! # Commands
+//!
+//! Every session registers the three commands in [`commands()`], so a guest's
+//! `invoke` has something real to reach. They are hand-written — there is no
+//! codegen for commands — and one of them (`bump`) reads and writes the **same
+//! store** a guest reads through `get`, which is the property command RPC exists
+//! to have and the one a fake host cannot honestly demonstrate.
 //!
 //! # The framing, exactly
 //!
@@ -70,10 +78,13 @@
 //!   stream is therefore [`MAX_REQUEST_BYTES`], not the size of the stream.
 //! - Bytes that are not UTF-8 are answered with a `failed` response. They never
 //!   reach [`duet_protocol::handle_text`], which takes a `&str`.
-//! - Everything that *is* UTF-8 goes to [`duet_protocol::handle_text`], which is
-//!   already total by construction — deep nesting, hostile paths, megabyte
-//!   value tags and lone surrogates all become `failed` responses there, and
-//!   `crates/duet-protocol/src/text.rs` measures each one.
+//! - Everything that *is* UTF-8 goes to [`duet_protocol::handle_text_with`],
+//!   which is already total by construction — deep nesting, hostile paths,
+//!   megabyte value tags and lone surrogates all become `failed` responses
+//!   there, and `crates/duet-protocol/src/text.rs` measures each one. A command
+//!   body is the one thing on that path this crate wrote, and its two ways of
+//!   breaking a host — panicking, and returning a value too deep to encode —
+//!   are caught at `duet_protocol::dispatch_with` rather than here.
 //! - A refusal never ends the session. The next line is served normally, so a
 //!   guest that sends one bad message does not lose its connection.
 //! - Nothing in the non-test source calls `unwrap`, `expect` or `panic!`.
@@ -119,11 +130,13 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod commands;
 pub mod error;
 pub mod fixture;
 pub mod frame;
 pub mod serve;
 
+pub use commands::{BUMP, RAISE, SUBTRACT, commands};
 pub use error::SessionError;
 pub use fixture::{FIXTURES, Fixture, names};
 pub use frame::{Frame, MAX_REQUEST_BYTES, read_frame};

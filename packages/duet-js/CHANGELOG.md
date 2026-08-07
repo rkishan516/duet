@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+Command RPC: a guest can now ask the host to *run* something, not only to read
+and write state. Additive — every existing type and function is unchanged.
+
+- `DuetInvokeRequest`, `DuetReturnedResponse` and `DuetRaisedResponse` — the
+  three new envelope kinds, mirroring `duet_protocol::{Request::Invoke,
+  Response::Returned, Response::Raised}`. `args` is a `ReadonlyMap<string,
+  DuetValue>` and not a `DuetValue`, so a non-map argument list is a state the
+  type does not admit; on the wire it is still a tagged map, decoded by the
+  value codec that is already total against hostile input.
+- `DuetClient.invoke` — returns a `DuetInvocation`, which is `DuetReturned` or
+  `DuetRaised`. A host **refusal** (no such command, arguments that did not
+  decode, a body that panicked) still throws `DuetFailure`, because the call
+  never happened; a command that ran and returned `Err` is data, and arrives as
+  a value an application can decode into its own error type.
+- The corpus grew to 63 accept and 37 reject cases, including an argument at
+  exactly the deepest nesting an `invoke` envelope admits and one level past it.
+
 ## 0.2.0
 
 The typed runtime, behind a new `duet-protocol/typed` entry point. Additive:

@@ -69,8 +69,8 @@ const GENERATOR = 'cargo test -p duet-protocol --test wire_corpus -- --ignored r
  * assertion below and prove nothing. If these numbers need changing, that is a
  * deliberate review step.
  */
-const ACCEPT_CASE_COUNT = 51;
-const REJECT_CASE_COUNT = 26;
+const ACCEPT_CASE_COUNT = 63;
+const REJECT_CASE_COUNT = 37;
 
 interface AcceptCase {
   readonly layer: string;
@@ -323,6 +323,22 @@ function requestWitness(r: DuetRequest): unknown {
       return { k: 'subscribe', id: r.id.toString(), path: formatDuetPath(r.path) };
     case 'unsubscribe':
       return { k: 'unsubscribe', id: r.id.toString(), subscription: r.subscription.toString() };
+    // `command` gets the UTF-8-bytes treatment, like every other free-form
+    // string here: it is not a path, so nothing proves a parse/format round trip
+    // for it, and arbitrary text is exactly where escaping diverges.
+    //
+    // `args` is an ORDERED array sorted with `compareDuetMapKeys`, for the same
+    // reason a map's witness is: the wire's key order is UTF-8 byte order, which
+    // a default JavaScript sort gets wrong for non-BMP keys.
+    case 'invoke':
+      return {
+        k: 'invoke',
+        id: r.id.toString(),
+        command: valueWitness({ kind: 'str', value: r.command }),
+        args: [...r.args.keys()]
+          .sort(compareDuetMapKeys)
+          .map((key) => [key, valueWitness(r.args.get(key) as DuetValue)]),
+      };
   }
 }
 
@@ -347,6 +363,13 @@ function responseWitness(r: DuetResponse): unknown {
         id: r.id.toString(),
         message: valueWitness({ kind: 'str', value: r.message }),
       };
+    // `valueWitness`, never `optionalWitness`: neither field has an absent case,
+    // and treating one as optional would witness a bare JSON `null` and a
+    // `{"t":"n"}` identically — the very collapse the wire refuses.
+    case 'returned':
+      return { k: 'returned', id: r.id.toString(), value: valueWitness(r.value) };
+    case 'raised':
+      return { k: 'raised', id: r.id.toString(), error: valueWitness(r.error) };
   }
 }
 
