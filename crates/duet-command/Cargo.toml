@@ -15,6 +15,11 @@ repository.workspace = true
 duet-core = { path = "../duet-core" }
 duet-protocol = { path = "../duet-protocol" }
 duet-runtime = { path = "../duet-runtime" }
+# `CommandDef` and `SharedState`: the declarative half of this crate describes a
+# command to the schema with the same trait the state half is described with, so
+# a parameter type Duet refuses is refused by the absence of an impl rather than
+# by anything here inspecting it.
+duet-schema = { path = "../duet-schema" }
 
 # Only the tests need to look at encoded replies; the library itself never
 # touches JSON — `duet-protocol` owns every byte this crate's output becomes.

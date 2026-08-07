@@ -3,6 +3,7 @@
 //! fixture would be an awkward way to express.
 
 use super::*;
+use duet_schema::SCHEMA_VERSION;
 
 /// A document with one field of the given type.
 fn with_field(ty: &str) -> String {
@@ -52,14 +53,107 @@ fn the_error_names_where_in_the_document_it_looked() {
     assert!(message.contains("nope"), "no kind in: {message}");
 }
 
+/// A document at `version` with `extra` spliced in before it.
+///
+/// `extra` is written as complete `"key": value,` text so a test can add a key
+/// the reader may not know, which is the whole point of the version tolerance.
+fn document(extra: &str, version: u32) -> String {
+    format!(
+        "{{{extra}\"root\": {{\"kind\": \"named\", \"name\": \"App\"}}, \"types\": \
+         [{{\"fields\": [], \"name\": \"App\"}}], \"version\": {version}}}"
+    )
+}
+
 #[test]
-fn the_reader_and_the_writer_agree_on_the_version_they_speak() {
-    // The reader accepts exactly what the writer emits. Pinned because a bumped
-    // `SCHEMA_VERSION` with an unbumped reader would refuse every schema the
-    // workspace produces, and the failure would be at the far end of a pipeline.
-    let text = with_field("{\"kind\": \"int\"}");
-    assert!(read_schema(&text).is_ok());
-    assert!(text.contains(&format!("\"version\": {SCHEMA_VERSION}")));
+fn the_reader_accepts_the_version_the_writer_emits() {
+    // The reader must accept at least what the writer produces. Pinned because
+    // a bumped `SCHEMA_VERSION` with an unbumped reader would refuse every
+    // schema the workspace produces, and the failure would surface at the far
+    // end of a pipeline rather than here.
+    let rendered = read_schema(&with_field("{\"kind\": \"int\"}"))
+        .expect("a legal schema")
+        .render();
+    assert!(
+        rendered.contains(&format!("\"version\": {SCHEMA_VERSION}")),
+        "{rendered}"
+    );
+    assert!(
+        read_schema(&rendered).is_ok(),
+        "the reader refuses what the writer just wrote:\n{rendered}"
+    );
+    assert!(
+        SUPPORTED_VERSIONS.contains(&SCHEMA_VERSION),
+        "the writer emits {SCHEMA_VERSION}, which the reader does not accept"
+    );
+}
+
+#[test]
+fn every_supported_version_is_accepted() {
+    // The tolerance itself, both directions at once: a newer reader meeting an
+    // older file, and an older reader meeting a newer one.
+    for version in SUPPORTED_VERSIONS {
+        assert!(
+            read_schema(&document("", *version)).is_ok(),
+            "version {version} is listed as supported but is refused"
+        );
+    }
+}
+
+#[test]
+fn a_version_outside_the_supported_set_is_refused_and_the_message_names_the_set() {
+    // The bound on either side, so a set that quietly grew a member is visible.
+    for version in [0, 3, 99] {
+        let error = read_schema(&document("", version)).expect_err("unsupported");
+        assert!(
+            matches!(error, ReadError::UnsupportedVersion { .. }),
+            "version {version}: {error}"
+        );
+        let message = error.to_string();
+        assert!(message.contains("1 and 2"), "version {version}: {message}");
+    }
+}
+
+#[test]
+fn a_version_2_document_carries_its_commands_alongside_its_state() {
+    // The two halves of a version-2 document are independent: reading the
+    // commands must not disturb the root or the types, and vice versa.
+    let commands = "\"commands\": [{\"name\": \"add\", \"params\": \
+                    [{\"key\": \"a\", \"type\": {\"kind\": \"int\"}}], \
+                    \"returns\": {\"kind\": \"int\"}}], ";
+    let schema = read_schema(&document(commands, 2)).expect("a version-2 document is readable");
+    assert_eq!(schema.root(), &Ty::Named("App".to_string()));
+    assert_eq!(schema.types().len(), 1);
+    assert_eq!(schema.commands().len(), 1);
+    assert_eq!(schema.commands()[0].name, "add");
+}
+
+#[test]
+fn a_version_2_document_without_commands_is_readable() {
+    // `commands` is optional at version 2, so a schema that declares none is
+    // not a special case the reader has to be told about.
+    assert!(read_schema(&document("", 2)).is_ok());
+}
+
+#[test]
+fn commands_in_a_version_1_document_are_refused() {
+    // The key set is a function of the version. A version-1 document carrying
+    // `commands` is a file that means one thing to a reader that knows the key
+    // and another to one that does not, which is worse than a file nobody
+    // accepts.
+    let error = read_schema(&document("\"commands\": [], ", 1)).expect_err("not a version-1 key");
+    assert!(
+        matches!(&error, ReadError::UnexpectedKey { key, .. } if key == "commands"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_commands_key_that_is_not_an_array_is_refused() {
+    let error = read_schema(&document("\"commands\": 7, ", 2)).expect_err("not an array");
+    assert!(
+        matches!(&error, ReadError::WrongKind { at, .. } if at == "\"commands\""),
+        "{error}"
+    );
 }
 
 #[test]
@@ -141,4 +235,124 @@ fn field_order_is_the_document_order_not_the_alphabet() {
         .map(|f| f.key.as_str())
         .collect();
     assert_eq!(keys, ["zebra", "apple"]);
+}
+
+// --- Commands ---
+
+/// A version-2 document carrying `commands` verbatim.
+fn with_commands(commands: &str) -> String {
+    format!(
+        "{{\"commands\": {commands}, \"root\": {{\"kind\": \"int\"}}, \
+         \"types\": [], \"version\": 2}}"
+    )
+}
+
+#[test]
+fn a_command_reads_back_with_its_parameters_in_document_order() {
+    let schema = read_schema(&with_commands(
+        "[{\"name\": \"add\", \"params\": \
+         [{\"key\": \"b\", \"type\": {\"kind\": \"int\"}}, \
+         {\"key\": \"a\", \"type\": {\"kind\": \"string\"}}], \
+         \"returns\": {\"kind\": \"int\"}}]",
+    ))
+    .expect("a legal command");
+    let command = &schema.commands()[0];
+    assert_eq!(command.name, "add");
+    let keys: Vec<&str> = command.params.iter().map(|p| p.key.as_str()).collect();
+    assert_eq!(keys, ["b", "a"], "parameter order is the document's");
+    assert_eq!(command.params[1].ty, Ty::Str);
+    assert_eq!(command.returns, Some(Ty::Int));
+    assert_eq!(command.raises, None);
+}
+
+#[test]
+fn an_absent_returns_or_raises_reads_as_none_rather_than_as_a_default() {
+    // The four shapes `CommandDef` documents, each read back from the exact
+    // bytes the writer emits for it.
+    let cases: [(&str, Option<Ty>, Option<Ty>); 4] = [
+        (
+            "{\"name\": \"a\", \"params\": [], \"returns\": {\"kind\": \"int\"}}",
+            Some(Ty::Int),
+            None,
+        ),
+        ("{\"name\": \"a\", \"params\": []}", None, None),
+        (
+            "{\"name\": \"a\", \"params\": [], \"raises\": {\"kind\": \"string\"}, \
+             \"returns\": {\"kind\": \"int\"}}",
+            Some(Ty::Int),
+            Some(Ty::Str),
+        ),
+        (
+            "{\"name\": \"a\", \"params\": [], \"raises\": {\"kind\": \"string\"}}",
+            None,
+            Some(Ty::Str),
+        ),
+    ];
+    for (text, returns, raises) in cases {
+        let schema = read_schema(&with_commands(&format!("[{text}]")))
+            .unwrap_or_else(|e| panic!("{text}: {e}"));
+        assert_eq!(schema.commands()[0].returns, returns, "{text}");
+        assert_eq!(schema.commands()[0].raises, raises, "{text}");
+    }
+}
+
+#[test]
+fn a_command_missing_a_required_key_is_refused_by_name() {
+    for (text, missing) in [
+        ("{\"params\": []}", "name"),
+        ("{\"name\": \"a\"}", "params"),
+    ] {
+        let error = read_schema(&with_commands(&format!("[{text}]"))).expect_err(text);
+        let message = error.to_string();
+        assert!(message.contains("commands[0]"), "{text}: {message}");
+        assert!(message.contains(missing), "{text}: {message}");
+    }
+}
+
+#[test]
+fn a_key_the_command_format_does_not_define_is_refused() {
+    let error = read_schema(&with_commands(
+        "[{\"name\": \"a\", \"params\": [], \"doc\": \"hi\"}]",
+    ))
+    .expect_err("an undefined key");
+    assert!(
+        matches!(&error, ReadError::UnexpectedKey { key, .. } if key == "doc"),
+        "{error}"
+    );
+}
+
+#[test]
+fn the_error_names_where_in_a_command_it_looked() {
+    // A schema file is edited by hand, and a command nests three levels before
+    // it reaches a type. "something is wrong" is not a message anyone can act
+    // on.
+    let error = read_schema(&with_commands(
+        "[{\"name\": \"a\", \"params\": [{\"key\": \"x\", \"type\": {\"kind\": \"nope\"}}]}]",
+    ))
+    .expect_err("an unknown kind");
+    let message = error.to_string();
+    assert!(message.contains("commands[0].params[0].type"), "{message}");
+    assert!(message.contains("nope"), "{message}");
+}
+
+#[test]
+fn a_command_return_type_is_depth_bounded_like_every_other_type_node() {
+    // The reader's own walk limit, reached through a position that did not
+    // exist before commands did.
+    let text = with_commands(&format!(
+        "[{{\"name\": \"a\", \"params\": [], \"returns\": {}}}]",
+        nested("optional", MAX_TY_DEPTH + 1)
+    ));
+    let error = read_schema(&text).expect_err("past the limit");
+    assert!(matches!(error, ReadError::TooDeep { .. }), "{error}");
+    assert!(error.to_string().contains("commands[0].returns"));
+}
+
+#[test]
+fn commands_is_not_an_array_of_anything_but_objects() {
+    let error = read_schema(&with_commands("[7]")).expect_err("not an object");
+    assert!(
+        matches!(&error, ReadError::WrongKind { at, .. } if at == "commands[0]"),
+        "{error}"
+    );
 }

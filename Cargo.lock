@@ -420,6 +420,7 @@ dependencies = [
 name = "duet"
 version = "0.1.0"
 dependencies = [
+ "duet-command",
  "duet-core",
  "duet-derive",
  "duet-runtime",
@@ -480,6 +481,7 @@ dependencies = [
  "duet-core",
  "duet-protocol",
  "duet-runtime",
+ "duet-schema",
  "serde_json",
 ]
 
@@ -495,6 +497,9 @@ dependencies = [
  "duet-codegen",
  "duet-core",
  "duet-host-stdio",
+ "duet-protocol",
+ "duet-runtime",
+ "duet-schema",
  "proc-macro2",
  "quote",
  "syn 2.0.119",

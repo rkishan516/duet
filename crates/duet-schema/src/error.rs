@@ -61,6 +61,41 @@ pub enum SchemaError {
         /// The offending key.
         key: String,
     },
+    /// Two commands claimed the same name.
+    ///
+    /// A guest names a command and nothing else, so one `invoke` would mean
+    /// two things and a registry would silently keep whichever was inserted
+    /// last.
+    CommandCollision {
+        /// The contested name.
+        name: String,
+    },
+    /// A command name is not a dotted sequence of legal identifiers.
+    IllegalCommandName {
+        /// The offending name.
+        name: String,
+    },
+    /// A command parameter's key is not a legal wire key.
+    ///
+    /// The same rule a struct field's key follows: a parameter occupies a key
+    /// in the `args` map exactly as a field occupies one in a `Value::Map`, and
+    /// the schema has one notion of a wire key rather than two.
+    IllegalParam {
+        /// The command holding the parameter.
+        command: String,
+        /// The offending key.
+        key: String,
+    },
+    /// Two parameters of one command map onto the same key.
+    ///
+    /// They would occupy one entry of the `args` map: one of the two can never
+    /// be supplied, and which one is not something the developer chose.
+    DuplicateParam {
+        /// The command holding both parameters.
+        command: String,
+        /// The contested key.
+        key: String,
+    },
     /// A [`Ty::Named`](crate::Ty::Named) refers to a type nothing defined.
     UnknownType {
         /// The dangling name.
@@ -108,6 +143,31 @@ impl std::fmt::Display for SchemaError {
                  a key may not be empty or contain '.', '[' or ']'",
                 echo::truncate(key),
                 echo::truncate(type_name)
+            ),
+            SchemaError::CommandCollision { name } => write!(
+                f,
+                "two different commands are both named \"{}\"",
+                echo::truncate(name)
+            ),
+            SchemaError::IllegalCommandName { name } => write!(
+                f,
+                "\"{}\" is not a legal command name: expected identifiers \
+                 separated by '.', each an ASCII letter followed by letters, \
+                 digits or inner underscores",
+                echo::truncate(name)
+            ),
+            SchemaError::IllegalParam { command, key } => write!(
+                f,
+                "parameter \"{}\" of command \"{}\" is not a legal wire key: \
+                 a key may not be empty or contain '.', '[' or ']'",
+                echo::truncate(key),
+                echo::truncate(command)
+            ),
+            SchemaError::DuplicateParam { command, key } => write!(
+                f,
+                "command \"{}\" has two parameters on the key \"{}\"",
+                echo::truncate(command),
+                echo::truncate(key)
             ),
             SchemaError::UnknownType { name } => {
                 write!(f, "no type named \"{}\" is defined", echo::truncate(name))
@@ -171,7 +231,7 @@ mod tests {
 
     #[test]
     fn every_variant_renders_informatively() {
-        let cases: [(SchemaError, &str); 7] = [
+        let cases: [(SchemaError, &str); 11] = [
             (
                 SchemaError::Recursive {
                     chain: vec!["Node".into(), "Node".into()],
@@ -205,6 +265,35 @@ mod tests {
                 },
                 "key \"a.b\" on type \"Editor\" is not a legal path segment: \
                  a key may not be empty or contain '.', '[' or ']'",
+            ),
+            (
+                SchemaError::CommandCollision {
+                    name: "bump".into(),
+                },
+                "two different commands are both named \"bump\"",
+            ),
+            (
+                SchemaError::IllegalCommandName {
+                    name: "2fast".into(),
+                },
+                "\"2fast\" is not a legal command name: expected identifiers \
+                 separated by '.', each an ASCII letter followed by letters, \
+                 digits or inner underscores",
+            ),
+            (
+                SchemaError::IllegalParam {
+                    command: "bump".into(),
+                    key: "a.b".into(),
+                },
+                "parameter \"a.b\" of command \"bump\" is not a legal wire key: \
+                 a key may not be empty or contain '.', '[' or ']'",
+            ),
+            (
+                SchemaError::DuplicateParam {
+                    command: "bump".into(),
+                    key: "by".into(),
+                },
+                "command \"bump\" has two parameters on the key \"by\"",
             ),
             (
                 SchemaError::UnknownType {

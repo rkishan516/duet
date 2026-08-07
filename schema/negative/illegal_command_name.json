@@ -1,0 +1,19 @@
+{
+  "commands": [
+    {
+      "name": "2fast",
+      "params": []
+    }
+  ],
+  "root": {
+    "kind": "named",
+    "name": "App"
+  },
+  "types": [
+    {
+      "fields": [],
+      "name": "App"
+    }
+  ],
+  "version": 2
+}

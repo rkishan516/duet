@@ -1,4 +1,5 @@
 {
+  "commands": [],
   "root": {"kind": "named", "name": "Wide"},
   "types": [
     {
@@ -39,5 +40,5 @@
       "name": "Wide"
     }
   ],
-  "version": 1
+  "version": 2
 }

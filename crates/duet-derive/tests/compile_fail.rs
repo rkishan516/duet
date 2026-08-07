@@ -16,6 +16,24 @@
 //!   `Default`, an enum, a union, a tuple struct, a generic type, an
 //!   unrecognised attribute.
 //!
+//! # Both macros, one directory
+//!
+//! The `command_*` cases are `#[command]`'s, and they divide the same two ways.
+//! An argument or return type Duet refuses (`command_refused_argument`,
+//! `command_refused_return`, `command_aliased_argument`) is again the absence of
+//! an impl, answered by the compiler; so is a reference parameter that is not
+//! the context (`command_borrowed_argument`), through `FromContext`. The rest
+//! are the macro's own: `async`, `unsafe`, generics, a `self` receiver, a
+//! pattern where a name belongs, an illegal command name, an illegal or
+//! repeated argument key, two keys that camel-case alike, an unrecognised
+//! attribute, and `#[command]` on something that is not a function.
+//!
+//! `command_aliased_argument` is the one to keep. `type Sneaky = u64;` in
+//! argument position: the macro sees `Sneaky` and never `u64`, and the rejection
+//! still lands, because trait resolution runs after type resolution. A macro
+//! that inspected tokens would accept it — silently, and in the direction of
+//! admitting what should have been refused.
+//!
 //! # `.stderr` files are brittle across compilers, and how that is handled
 //!
 //! These files record **rustc's rendering**, not just Duet's text: a change to
@@ -90,6 +108,95 @@ const NAMES_THE_FIX: &[(&str, &[&str])] = &[
     (
         "unknown_attribute",
         &["is not a Duet attribute", "the three are"],
+    ),
+    // --- `#[command]` ---
+    //
+    // The first four are again the absence of an impl, in the two positions a
+    // command has: an argument type, and a return type. `command_aliased_argument`
+    // is the one that would defeat any token inspection — the macro sees
+    // `Sneaky`, never `u64` — and it is here to stay failing.
+    (
+        "command_refused_argument",
+        &["`SharedState` is not implemented for `u64`", "CommandParam"],
+    ),
+    (
+        "command_refused_return",
+        &[
+            "`SharedState` is not implemented for `u64`",
+            "CommandReturn",
+        ],
+    ),
+    (
+        "command_aliased_argument",
+        &["`SharedState` is not implemented for `u64`"],
+    ),
+    (
+        "command_borrowed_argument",
+        &[
+            "must be `&CommandContext`",
+            "take it by value",
+            "`&str` becomes `String`",
+        ],
+    ),
+    (
+        "command_async",
+        &[
+            "cannot describe an `async fn`",
+            "spawn a thread of your own",
+        ],
+    ),
+    (
+        "command_unsafe",
+        &[
+            "cannot describe an `unsafe fn`",
+            "wrap it in a safe function",
+        ],
+    ),
+    (
+        "command_generics",
+        &[
+            "cannot describe a generic function",
+            "one `#[command]` per concrete instantiation",
+        ],
+    ),
+    (
+        "command_self_receiver",
+        &["cannot describe a method", "make it a free function"],
+    ),
+    (
+        "command_pattern_parameter",
+        &["needs a plain name for every argument", "bind a name"],
+    ),
+    (
+        "command_bad_rename",
+        &["is not a legal command name", "Fix: rename the function"],
+    ),
+    (
+        "command_bad_argument_key",
+        &["not a legal wire key", "Fix: choose a key"],
+    ),
+    (
+        "command_duplicate_key",
+        &[
+            "two arguments share the wire key",
+            "Fix: give one of them a different key",
+        ],
+    ),
+    (
+        "command_camel_collision",
+        &["these two arguments would", "Fix: rename one of them"],
+    ),
+    (
+        "command_unknown_attribute",
+        &["is not a `#[command]` attribute", "the two are"],
+    ),
+    (
+        "command_skip",
+        &["no meaning on a command", "Fixes: delete"],
+    ),
+    (
+        "command_on_a_struct",
+        &["describes a function, and this is not one", "Fix: move"],
     ),
 ];
 

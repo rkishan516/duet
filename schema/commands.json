@@ -1,0 +1,47 @@
+{
+  "commands": [
+    {
+      "name": "bump",
+      "params": [
+        {"key": "path", "type": {"kind": "string"}},
+        {"key": "by", "type": {"kind": "int"}}
+      ],
+      "raises": {"kind": "named", "name": "BumpError"},
+      "returns": {"kind": "int"}
+    },
+    {
+      "name": "documents.close",
+      "params": []
+    },
+    {
+      "name": "raise",
+      "params": [],
+      "raises": {"kind": "named", "name": "BumpError"}
+    },
+    {
+      "name": "subtract",
+      "params": [
+        {"key": "a", "type": {"kind": "int"}},
+        {"key": "b", "type": {"kind": "int"}}
+      ],
+      "returns": {"kind": "int"}
+    }
+  ],
+  "root": {"kind": "named", "name": "Counter"},
+  "types": [
+    {
+      "fields": [
+        {"key": "code", "type": {"kind": "string"}},
+        {"key": "found", "type": {"kind": "optional", "of": {"kind": "string"}}}
+      ],
+      "name": "BumpError"
+    },
+    {
+      "fields": [
+        {"key": "count", "type": {"kind": "int"}}
+      ],
+      "name": "Counter"
+    }
+  ],
+  "version": 2
+}

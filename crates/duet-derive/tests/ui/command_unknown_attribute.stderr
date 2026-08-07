@@ -1,0 +1,5 @@
+error: `renmae` is not a `#[command]` attribute — the two are `rename = "..."` or `crate = ::path`
+ --> tests/ui/command_unknown_attribute.rs:5:11
+  |
+5 | #[command(renmae = "add")]
+  |           ^^^^^^

@@ -1,0 +1,14 @@
+error[E0277]: a `#[command]` parameter written as a reference must be `&CommandContext`
+ --> tests/ui/command_borrowed_argument.rs:7:17
+  |
+7 | fn label(title: &str) -> String {
+  |                 ^^^^ `&str` is not how a command receives its context
+  |
+  = help: the trait `FromContext<'_>` is not implemented for `&str`
+  = note: A command takes its arguments **by value** and its context **by reference**:
+            `#[command] fn add(a: i64, b: i64) -> i64`
+            `#[command] fn reset(ctx: &CommandContext) -> Result<(), MyError>`
+          The fixes:
+            to read or write the store, take `&CommandContext` and use `ctx.store()`
+            to take this as an argument, take it by value — `&str` becomes `String`, `&[T]` becomes `Vec<T>` (the store owns a `'static` tree, so a command cannot borrow from it)
+  = help: the trait `FromContext<'a>` is implemented for `&'a CommandContext`

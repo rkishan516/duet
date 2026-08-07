@@ -48,9 +48,51 @@ pub use duet_core::{
 };
 pub use duet_runtime::{Runtime, RuntimeError, Sink, StoreHandle};
 pub use duet_schema::{
-    Bytes, DecodeError, Field, FieldDef, FieldError, InstallError, NotNullable, OptionalField,
-    Reading, Registry, Schema, SchemaError, SchemaErrors, SharedState, SkippedDefault, Ty, TypeDef,
-    TypedStore, install,
+    Bytes, CommandDef, DecodeError, Field, FieldDef, FieldError, InstallError, NotNullable,
+    OptionalField, Reading, Registry, Schema, SchemaError, SchemaErrors, SharedState,
+    SkippedDefault, Ty, TypeDef, TypedStore, install,
+};
+
+/// Host commands a guest may invoke.
+///
+/// Available with the `commands` feature:
+///
+/// ```toml
+/// duet = { version = "0.1", features = ["commands"] }
+/// ```
+///
+/// See [`duet_command`] for the whole picture. The short version: write a Rust
+/// function, put `#[command]` on it, list it in `commands![…]`, and build a
+/// surface's [`Commands`] registry from the resulting `static` table. What the
+/// guest may reach is exactly what is in that table — authorization is by
+/// construction, not by a claim the guest makes.
+#[cfg(feature = "commands")]
+pub use duet_command as command;
+
+/// Describes a Rust function as a host command a Duet guest may invoke.
+///
+/// Available with the `derive` and `commands` features together:
+///
+/// ```toml
+/// duet = { version = "0.1", features = ["derive", "commands"] }
+/// ```
+///
+/// The module [`command`] and this attribute macro share a name and live in
+/// different namespaces, exactly as [`SharedState`] the trait and
+/// `SharedState` the derive do, so one `use duet::command;` brings the macro
+/// into scope without shadowing anything.
+///
+/// See [`duet_derive::command`] for what it generates, the two `#[command(...)]`
+/// attributes, and why a rejected argument type produces a trait error rather
+/// than a macro error.
+#[cfg(all(feature = "commands", feature = "derive"))]
+pub use duet_derive::command;
+
+#[cfg(feature = "commands")]
+pub use duet_command::{
+    Args, Command, CommandContext, CommandEntry, CommandHost, CommandParam, CommandReturn,
+    Commands, FromContext, Outcome, command_raises, command_returns, commands, describe,
+    into_outcome, marker,
 };
 
 /// Derives [`SharedState`] for a struct with named fields.

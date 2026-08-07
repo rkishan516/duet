@@ -1,0 +1,7 @@
+error: `#[command]` needs a plain name for every argument: the name is the key the argument occupies in the invocation's `args`, and it is what a generated Dart or TypeScript client calls the parameter.
+       A pattern, a `ref` binding or a `_` has no name to use.
+       Fixes: bind a name and destructure in the body, or take the whole thing as one argument of a `#[derive(SharedState)]` struct.
+ --> tests/ui/command_pattern_parameter.rs:5:9
+  |
+5 | fn span((from, to): (i64, i64)) -> i64 {
+  |         ^^^^^^^^^^

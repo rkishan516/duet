@@ -1,0 +1,20 @@
+{
+  "commands": [
+    {
+      "doc": "hi",
+      "name": "add",
+      "params": []
+    }
+  ],
+  "root": {
+    "kind": "named",
+    "name": "App"
+  },
+  "types": [
+    {
+      "fields": [],
+      "name": "App"
+    }
+  ],
+  "version": 2
+}

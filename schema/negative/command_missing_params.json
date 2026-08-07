@@ -1,0 +1,18 @@
+{
+  "commands": [
+    {
+      "name": "add"
+    }
+  ],
+  "root": {
+    "kind": "named",
+    "name": "App"
+  },
+  "types": [
+    {
+      "fields": [],
+      "name": "App"
+    }
+  ],
+  "version": 2
+}

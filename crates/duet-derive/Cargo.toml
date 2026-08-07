@@ -30,6 +30,11 @@ proc-macro = true
 [dependencies]
 duet-codegen = { path = "../duet-codegen" }
 duet-core = { path = "../duet-core" }
+# `duet_schema::is_legal_command_name` is the predicate `Schema` validates a
+# command name with. `#[command]` calls the real one so a `rename` the schema
+# would refuse at startup is a `cargo check` error instead — same argument as
+# the two above, and no new crate: `duet-codegen` already depends on this.
+duet-schema = { path = "../duet-schema" }
 proc-macro2 = "1.0.107"
 quote = "1.0.47"
 syn = { version = "2.0.119", default-features = false, features = [
@@ -40,6 +45,13 @@ syn = { version = "2.0.119", default-features = false, features = [
     "proc-macro",
 ] }
 
+# `#[command]` parses a whole function item, which needs `syn/full`; the derive
+# parses a `DeriveInput`, which does not. Keeping the two apart means a crate
+# that only derives does not build the larger parser — the same reasoning that
+# makes `derive` itself opt-in on the `duet` facade.
+[features]
+commands = ["syn/full"]
+
 # The facade, so the derive's own tests exercise it exactly as a user does:
 # through `duet` with the `derive` feature, never through the internal crates.
 #
@@ -49,6 +61,9 @@ syn = { version = "2.0.119", default-features = false, features = [
 # uses, and it is what lets the byte-identical schema proof live next to the
 # macro that has to satisfy it.
 [dev-dependencies]
-duet = { path = "../duet", features = ["derive"] }
+duet = { path = "../duet", features = ["commands", "derive"] }
 duet-host-stdio = { path = "../duet-host-stdio" }
+duet-core = { path = "../duet-core" }
+duet-protocol = { path = "../duet-protocol" }
+duet-runtime = { path = "../duet-runtime" }
 trybuild = "1.0.120"

@@ -84,4 +84,4 @@ mod ts;
 pub use emit::{Generated, Options, TsImports, generate};
 pub use error::{EmitError, ReadError};
 pub use plan::{MAX_CLASSES, Plan};
-pub use read::{KINDS, MAX_TY_DEPTH, read_schema};
+pub use read::{KINDS, MAX_TY_DEPTH, SUPPORTED_VERSIONS, read_schema};

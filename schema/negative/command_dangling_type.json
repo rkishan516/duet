@@ -1,0 +1,23 @@
+{
+  "commands": [
+    {
+      "name": "save",
+      "params": [],
+      "raises": {
+        "kind": "named",
+        "name": "Ghost"
+      }
+    }
+  ],
+  "root": {
+    "kind": "named",
+    "name": "App"
+  },
+  "types": [
+    {
+      "fields": [],
+      "name": "App"
+    }
+  ],
+  "version": 2
+}

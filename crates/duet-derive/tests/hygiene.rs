@@ -26,6 +26,15 @@ mod my_reexport {
     };
 }
 
+/// The same thing for `#[command(crate = ...)]`, whose contract is a different
+/// and larger set of names.
+mod my_command_reexport {
+    pub use duet::{
+        Args, Command, CommandContext, CommandDef, CommandParam, FieldDef, FromContext, Outcome,
+        Registry, command_raises, command_returns, into_outcome,
+    };
+}
+
 /// A module in which every prelude name the generated code could have used
 /// means something else, and `duet` is not the crate.
 mod hostile {
@@ -85,6 +94,38 @@ mod hostile {
         pub counter: i64,
         #[duet(skip)]
         pub cache: Cache,
+    }
+
+    // --- `#[command]`, in the same hostile scope ---
+    //
+    // The one thing a developer writes for a command. It does not put `duet`
+    // in scope either, and every name below still means something else.
+    use ::duet::command;
+
+    /// Every argument shape at once — a scalar, a renamed one, a struct, and an
+    /// option — plus the context, so every arm of `run` is compiled here.
+    #[command]
+    pub fn shadowed_subtract(
+        ctx: &::duet::CommandContext,
+        a: i64,
+        #[duet(rename = "renamed")] b: i64,
+        note: ::std::option::Option<::std::string::String>,
+    ) -> ::core::result::Result<i64, Shadowed> {
+        let _ = (ctx, note);
+        ::core::result::Result::Ok(a - b)
+    }
+
+    /// No arguments, no context, no return type: the three empty arms.
+    #[command]
+    pub fn shadowed_nothing() {}
+
+    /// Named through the re-export rather than through `::duet`, and taking the
+    /// context, so every one of the eleven paths the re-export promises is
+    /// reached through it.
+    #[command(crate = crate::my_command_reexport, rename = "through.a.facade")]
+    pub fn shadowed_through_a_facade(ctx: &::duet::CommandContext, a: i64) -> i64 {
+        let _ = ctx;
+        a
     }
 }
 
@@ -174,6 +215,57 @@ fn a_type_derived_in_a_hostile_module_installs_and_reads_back_through_the_store(
             .get(),
         Ok(Reading::Present(3))
     );
+    runtime.shutdown().expect("the runtime should stop cleanly");
+}
+
+#[test]
+fn the_generated_commands_work_where_every_prelude_name_is_shadowed() {
+    // The expansion compiles in the hostile module — which is most of the
+    // check, since a relative path in `generate.rs` would not get this far —
+    // and then answers correctly over a real registry.
+    use duet::{CommandEntry, Commands, Schema, commands, describe};
+    use duet_protocol::handle_text_with;
+
+    static COMMANDS: [CommandEntry; 3] = commands![
+        hostile::shadowed_subtract,
+        hostile::shadowed_nothing,
+        hostile::shadowed_through_a_facade
+    ];
+
+    let runtime = Runtime::spawn(Value::Null, NullSink);
+    let registry = Commands::from_entries(&COMMANDS);
+    assert_eq!(
+        handle_text_with(
+            &runtime.handle(),
+            duet::SubscriberId(1),
+            &registry,
+            r#"{"kind":"invoke","id":"1","command":"shadowed_subtract","args":{"t":"m","v":{"a":{"t":"i","v":"10"},"renamed":{"t":"i","v":"3"},"note":{"t":"n"}}}}"#,
+        ),
+        r#"{"id":"1","kind":"returned","value":{"t":"i","v":"7"}}"#
+    );
+    assert_eq!(
+        handle_text_with(
+            &runtime.handle(),
+            duet::SubscriberId(1),
+            &registry,
+            r#"{"kind":"invoke","id":"2","command":"shadowed_nothing","args":{"t":"m","v":{}}}"#,
+        ),
+        r#"{"id":"2","kind":"returned","value":{"t":"n"}}"#
+    );
+    assert_eq!(
+        handle_text_with(
+            &runtime.handle(),
+            duet::SubscriberId(1),
+            &registry,
+            r#"{"kind":"invoke","id":"3","command":"through.a.facade","args":{"t":"m","v":{"a":{"t":"i","v":"4"}}}}"#,
+        ),
+        r#"{"id":"3","kind":"returned","value":{"t":"i","v":"4"}}"#,
+        "the command named through the re-export must be the one that ran"
+    );
+
+    let schema = Schema::of_with_commands::<i64>(|r| describe(&COMMANDS, r))
+        .expect("the shadowed commands describe a valid schema");
+    assert_eq!(schema.commands().len(), 3);
     runtime.shutdown().expect("the runtime should stop cleanly");
 }
 

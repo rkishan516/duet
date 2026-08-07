@@ -1,0 +1,6 @@
+error: `skip` has no meaning on a command: a command's arguments are the whole of its input, so a skipped one would be an argument the guest cannot supply and the body still requires.
+       Fixes: delete the parameter, or give it a default by taking `Option<T>` and deciding in the body.
+ --> tests/ui/command_skip.rs:5:11
+  |
+5 | #[command(skip)]
+  |           ^^^^

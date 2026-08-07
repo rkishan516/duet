@@ -50,6 +50,62 @@ fn every_committed_schema_is_already_in_canonical_form() {
     }
 }
 
+/// The one hand-written schema that declares commands.
+///
+/// Deliberately **not** in [`support::FIXTURES`]: that list is what the Dart
+/// and TypeScript goldens are generated from and what `duet-host-stdio` embeds,
+/// and command codegen does not exist yet, so adding it there would commit two
+/// generated clients that say nothing about commands and a host fixture nothing
+/// drives. It is claimed here instead, by the two checks that are about the
+/// *format* rather than about what is emitted from it.
+const COMMANDS_FIXTURE: &str = "schema/commands.json";
+
+#[test]
+fn the_command_bearing_fixture_survives_the_round_trip_byte_for_byte() {
+    // The cross-check, on the half of the format the version bump added. The
+    // writer is `duet-schema`'s hand-rolled `render`; the reader is this crate's
+    // `serde_json` walk; neither knows the other exists. They agree only if
+    // every byte between them — the sorted key order inside a command, the
+    // omitted `returns`, the indent of a nested `params` — is what both
+    // independently spell.
+    let committed = support::read(COMMANDS_FIXTURE);
+    let parsed = support::schema(COMMANDS_FIXTURE);
+    assert!(
+        parsed.render() == committed,
+        "{COMMANDS_FIXTURE} is not in canonical form{}",
+        support::first_difference(&committed, &parsed.render())
+    );
+    let reparsed = duet_codegen::read_schema(&parsed.render())
+        .unwrap_or_else(|e| panic!("{COMMANDS_FIXTURE} should re-read: {e}"));
+    assert_eq!(parsed, reparsed);
+}
+
+#[test]
+fn the_command_bearing_fixture_reaches_every_shape_a_command_can_have() {
+    // A fixture nobody measures is a file that looks like a test and is not
+    // one. Between them the four commands must cover the whole `CommandDef`
+    // table: a plain return, nothing at all, a `Result`, and a `Result` with no
+    // ok type — plus a parameter list and an empty one.
+    let schema = support::schema(COMMANDS_FIXTURE);
+    let shapes: Vec<(bool, bool)> = schema
+        .commands()
+        .iter()
+        .map(|c| (c.returns.is_some(), c.raises.is_some()))
+        .collect();
+    for shape in [(true, false), (false, false), (true, true), (false, true)] {
+        assert!(
+            shapes.contains(&shape),
+            "no command is {shape:?}: {shapes:?}"
+        );
+    }
+    assert!(schema.commands().iter().any(|c| !c.params.is_empty()));
+    assert!(schema.commands().iter().any(|c| c.params.is_empty()));
+    assert!(
+        schema.commands().iter().any(|c| c.name.contains('.')),
+        "a dotted command name is legal and must be exercised"
+    );
+}
+
 #[test]
 fn a_rendered_schema_reads_back_as_the_same_schema() {
     for fixture in support::FIXTURES {

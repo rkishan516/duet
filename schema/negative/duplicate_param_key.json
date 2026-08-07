@@ -1,0 +1,32 @@
+{
+  "commands": [
+    {
+      "name": "add",
+      "params": [
+        {
+          "key": "by",
+          "type": {
+            "kind": "int"
+          }
+        },
+        {
+          "key": "by",
+          "type": {
+            "kind": "int"
+          }
+        }
+      ]
+    }
+  ],
+  "root": {
+    "kind": "named",
+    "name": "App"
+  },
+  "types": [
+    {
+      "fields": [],
+      "name": "App"
+    }
+  ],
+  "version": 2
+}

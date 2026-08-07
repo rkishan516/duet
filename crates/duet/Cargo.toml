@@ -12,6 +12,7 @@ repository.workspace = true
 # exists so `duet-core` can stay dependency-free, not a choice a user should
 # have to make.
 [dependencies]
+duet-command = { path = "../duet-command", version = "0.1.0", optional = true }
 duet-core = { path = "../duet-core" }
 duet-derive = { path = "../duet-derive", version = "0.1.0", optional = true }
 duet-runtime = { path = "../duet-runtime" }
@@ -29,6 +30,16 @@ duet-schema = { path = "../duet-schema" }
 # linked into the program, so `derive` changes no shipped binary.
 [features]
 derive = ["dep:duet-derive"]
+
+# `commands` brings the host-command half: the traits `#[command]` targets, the
+# `commands![…]` registration macro, and the registry a surface is built with.
+#
+# Off by default for the same reason `derive` is, but the cost is different and
+# larger: it pulls `duet-protocol` and therefore `serde_json` into the *runtime*
+# graph, not merely the build. An application that shares state and never
+# invokes a host command should not link a JSON parser for it. Turning it on is
+# what an application that serves commands does.
+commands = ["dep:duet-command", "duet-derive?/commands"]
 
 # docs.rs builds with every feature on, so `duet::SharedState`'s derive is
 # documented there even though it is off by default. `--cfg docsrs` is what

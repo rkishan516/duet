@@ -1,0 +1,6 @@
+error: `#[command]` cannot describe an `unsafe fn`: the generated body calls it, and a macro cannot assert a safety contract on a caller's behalf.
+       Fix: wrap it in a safe function that upholds the contract, and put `#[command]` on that.
+ --> tests/ui/command_unsafe.rs:6:1
+  |
+6 | unsafe fn poke(a: i64) -> i64 {
+  | ^^^^^^

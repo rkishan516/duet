@@ -1,0 +1,16 @@
+error[E0277]: the trait bound `u64: CommandParam` is not satisfied
+ --> tests/ui/command_aliased_argument.rs:9:11
+  |
+9 | fn add(a: Sneaky) -> i64 {
+  |           ^^^^^^ the trait `SharedState` is not implemented for `u64`
+  |
+  = help: the following other types implement trait `SharedState`:
+            f64
+            i16
+            i32
+            i64
+            i8
+            u16
+            u32
+            u8
+  = note: required for `u64` to implement `CommandParam`

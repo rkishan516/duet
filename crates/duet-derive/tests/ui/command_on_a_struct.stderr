@@ -1,0 +1,7 @@
+error: `#[command]` describes a function, and this is not one (expected `fn`).
+       A command is a plain Rust function: `#[command] fn add(a: i64, b: i64) -> i64`. It stays callable from Rust exactly as it was — the macro adds a description of it beside it rather than replacing it.
+       Fix: move `#[command]` onto the function you meant.
+ --> tests/ui/command_on_a_struct.rs:5:1
+  |
+5 | struct Add {
+  | ^^^^^^
