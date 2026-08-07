@@ -344,6 +344,202 @@ void main() {
 
   _optionBehaviours(corpus['wide'], skip: skip);
   _subscriptions(corpus['app'], skip: skip);
+  _commands(corpus['app'], skip: skip);
+}
+
+/// Commands against the real host: the `#[command]` RPC proof.
+///
+/// `crates/duet-host-stdio/src/commands.rs` registers three of them, and each
+/// exists to be measured from here:
+///
+/// - `subtract(a, b)` — arguments arrive under the right names. Subtraction is
+///   not commutative, so a client that swapped them answers `-7` rather than
+///   `7`; an `add` would have agreed with a completely broken encoder.
+/// - `raise` — a command that ran and returned `Err` reaches this guest as a
+///   `DuetRaised` carrying a structured value, not as prose.
+/// - `bump(path, by)` — a command body reads and writes the **same store** this
+///   guest reads through its generated accessors.
+///
+/// Every assertion names an exact value. A conformance run that only checked
+/// "no error was thrown" would pass against a client that sent no arguments at
+/// all.
+void _commands(CorpusSchema schema, {required String? skip}) {
+  group('commands, against the real host', () {
+    late StdioHost host;
+    late DuetClient client;
+    late DuetRouter router;
+    app.AppClient c() => app.AppClient(router);
+
+    setUpAll(() async {
+      host = await StdioHost.start('app');
+      client = DuetClient(host);
+      router = DuetRouter(client)..attach();
+    });
+
+    tearDownAll(() async {
+      expect(host.unmatched, isEmpty,
+          reason: 'the host sent lines answering no request');
+      await host.close();
+    });
+
+    setUp(() async {
+      await client.set('', schema.seed);
+    });
+
+    test('a command with arguments returns the exact value', () async {
+      // Arguments deliberately built out of canonical order, so what reaches
+      // the host is the encoder's sort rather than this literal's order.
+      expect(
+        await client.invoke('subtract', const <String, DuetValue>{
+          'b': DuetInt(3),
+          'a': DuetInt(10),
+        }),
+        const DuetReturned(DuetInt(7)),
+        reason: '10 - 3; a client that swapped the argument names answers -7',
+      );
+    });
+
+    test('a command that returns Err arrives as a typed raise', () async {
+      // The distinction `raised` exists for, end to end over a real pipe: the
+      // error is a structured value this guest can match on, and a `failed`
+      // would have flattened it into a sentence on the way out.
+      final DuetInvocation outcome = await client.invoke('raise');
+      expect(
+        outcome,
+        const DuetRaised(
+          DuetMap(<String, DuetValue>{
+            'code': DuetStr('unlucky'),
+            'short_by': DuetInt(42),
+          }),
+        ),
+      );
+      final DuetValue error = (outcome as DuetRaised).error;
+      expect((error as DuetMap).entries['short_by'], const DuetInt(42),
+          reason: 'the integer field must survive as an integer');
+    });
+
+    test('an unknown command is refused, never raised', () async {
+      // A near-miss of a registered name, so the answer cannot come from the
+      // request being malformed. It must arrive as a `DuetFailure` — the host
+      // would not run it — and never as a `DuetRaised`, which would say
+      // something ran and failed.
+      await expectLater(
+        client.invoke('subtrac'),
+        throwsA(
+          isA<DuetFailure>().having(
+            (DuetFailure e) => e.message,
+            'message',
+            'no command named "subtrac" is registered for this surface',
+          ),
+        ),
+      );
+    });
+
+    test('malformed arguments are refused with a bounded message', () async {
+      // The right values under the wrong names: exactly what a client whose
+      // argument encoder had been renamed would send.
+      await expectLater(
+        client.invoke('subtract', const <String, DuetValue>{
+          'x': DuetInt(10),
+          'y': DuetInt(3),
+        }),
+        throwsA(
+          isA<DuetFailure>().having(
+            (DuetFailure e) => e.message,
+            'message',
+            'argument "a" is missing',
+          ),
+        ),
+      );
+
+      // ...and a one-megabyte argument must not become a one-megabyte reply.
+      // The refusal names the argument and the KIND that arrived, never the
+      // value.
+      try {
+        await client.invoke('subtract', <String, DuetValue>{
+          'a': DuetStr('z' * 1000000),
+          'b': const DuetInt(1),
+        });
+        fail('a string where an integer is required must be refused');
+      } on DuetFailure catch (e) {
+        expect(e.message, 'argument "a" must be an integer, got a string');
+        expect(e.message.length, lessThan(300));
+      }
+    });
+
+    test('a command writes the store, and the typed path reads it back',
+        () async {
+      // THE claim of the whole increment: commands and shared state are one
+      // world. The read is through the **generated accessor**, not through the
+      // raw client, so a command whose write landed at some other path — or
+      // under a camel-cased key — reads nothing here.
+      expect(await c().counter.get(), const DuetPresent<int>(0),
+          reason: 'the premise: the seed leaves counter at 0');
+
+      expect(
+        await client.invoke('bump', const <String, DuetValue>{
+          'path': DuetStr('counter'),
+          'by': DuetInt(5),
+        }),
+        const DuetReturned(DuetInt(5)),
+      );
+      expect(await c().counter.get(), const DuetPresent<int>(5));
+
+      // Twice, because a body that read a stale copy of the store would still
+      // answer 5 the first time.
+      expect(
+        await client.invoke('bump', const <String, DuetValue>{
+          'path': DuetStr('counter'),
+          'by': DuetInt(5),
+        }),
+        const DuetReturned(DuetInt(10)),
+      );
+      expect(await c().counter.get(), const DuetPresent<int>(10));
+    });
+
+    test('a command\'s write reaches a typed watcher', () async {
+      // The same claim through the push path. A host that served commands
+      // against some second store would satisfy the read-back test above by
+      // accident of ordering and deliver nothing here.
+      final List<DuetReading<int>> seen = <DuetReading<int>>[];
+      final DuetWatch<int> watch = await c().counter.watch(seen.add);
+      expect(watch.current, const DuetPresent<int>(0));
+
+      expect(
+        await client.invoke('bump', const <String, DuetValue>{
+          'path': DuetStr('counter'),
+          'by': DuetInt(2),
+        }),
+        const DuetReturned(DuetInt(2)),
+      );
+      await router.settled();
+
+      expect(seen, <DuetReading<int>>[const DuetPresent<int>(2)]);
+      expect(watch.current, const DuetPresent<int>(2));
+      await watch.close();
+    });
+
+    test('a command that cannot do its job raises rather than refusing',
+        () async {
+      // The other side of the refused/raised line, decided by the host: the
+      // call was well-formed and `title` simply is not an integer. A guest must
+      // see that as a command that RAN and failed.
+      expect(
+        await client.invoke('bump', const <String, DuetValue>{
+          'path': DuetStr('title'),
+          'by': DuetInt(1),
+        }),
+        const DuetRaised(
+          DuetMap(<String, DuetValue>{
+            'code': DuetStr('not_an_integer'),
+            'found': DuetStr('string'),
+          }),
+        ),
+      );
+      // ...and the store is untouched, so the refusal was not cosmetic.
+      expect(await client.get('title'), const DuetStr(''));
+    });
+  }, skip: skip);
 }
 
 /// The accessor sweep for one schema.

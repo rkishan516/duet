@@ -46,8 +46,11 @@ import { after, before, beforeEach, describe, test } from 'node:test';
 
 import {
   DuetClient,
+  DuetFailure,
+  duetInt,
   duetStr,
   encodeValueText,
+  type DuetInvocation,
   type DuetValue,
 } from '../src/index.ts';
 import {
@@ -660,3 +663,220 @@ describe('a subscription against the real host', { skip }, () => {
     assert.deepStrictEqual(host.unmatched, []);
   });
 });
+
+/**
+ * Commands against the real host: the `#[command]` RPC proof.
+ *
+ * `crates/duet-host-stdio/src/commands.rs` registers three of them, and each
+ * exists to be measured from here:
+ *
+ * - `subtract(a, b)` — arguments arrive under the right names. Subtraction is
+ *   not commutative, so a client that swapped them answers `-7n` rather than
+ *   `7n`; an `add` would have agreed with a completely broken encoder.
+ * - `raise` — a command that ran and returned `Err` reaches this guest as a
+ *   `raised` carrying a structured value, not as prose.
+ * - `bump(path, by)` — a command body reads and writes the **same store** this
+ *   guest reads through its generated accessors.
+ *
+ * Every assertion names an exact value. A conformance run that only checked "no
+ * error was thrown" would pass against a client that sent no arguments at all.
+ */
+describe('commands, against the real host', { skip }, () => {
+  const schema = schemaNamed(corpus, 'app');
+  let host: StdioHost;
+  let client: DuetClient;
+  let router: DuetRouter;
+  const c = (): AppClient => new AppClient(router);
+
+  before(() => {
+    host = StdioHost.start('app');
+    client = new DuetClient(host);
+    router = new DuetRouter(client);
+    router.attach();
+  });
+
+  after(async () => {
+    assert.deepStrictEqual(host.unmatched, [], 'the host sent lines answering no request');
+    await host.close();
+  });
+
+  beforeEach(async () => {
+    await client.set('', schema.seed);
+  });
+
+  test(
+    'a command with arguments returns the exact value',
+    { timeout: CASE_TIMEOUT_MS },
+    async () => {
+      // Arguments deliberately built out of canonical order, so what reaches the
+      // host is the encoder's sort rather than this literal's order.
+      const outcome = await client.invoke(
+        'subtract',
+        new Map<string, DuetValue>([
+          ['b', duetInt(3n)],
+          ['a', duetInt(10n)],
+        ]),
+      );
+      assert.deepStrictEqual(
+        outcome,
+        { kind: 'returned', value: duetInt(7n) },
+        '10 - 3; a client that swapped the argument names answers -7',
+      );
+    },
+  );
+
+  test(
+    'a command that returns Err arrives as a typed raise',
+    { timeout: CASE_TIMEOUT_MS },
+    async () => {
+      // The distinction `raised` exists for, end to end over a real pipe: the
+      // error is a structured value this guest can match on, and a `failed`
+      // would have flattened it into a sentence on the way out.
+      const outcome = await client.invoke('raise');
+      assert.equal(outcome.kind, 'raised');
+      if (outcome.kind !== 'raised') return;
+      assert.equal(
+        encodeValueText(outcome.error),
+        '{"t":"m","v":{"code":{"t":"s","v":"unlucky"},"short_by":{"t":"i","v":"42"}}}',
+      );
+      assert.equal(outcome.error.kind, 'map');
+      if (outcome.error.kind !== 'map') return;
+      assert.deepStrictEqual(
+        outcome.error.entries.get('short_by'),
+        duetInt(42n),
+        'the integer field must survive as a bigint',
+      );
+    },
+  );
+
+  test('an unknown command is refused, never raised', { timeout: CASE_TIMEOUT_MS }, async () => {
+    // A near-miss of a registered name, so the answer cannot come from the
+    // request being malformed. It must arrive as a `DuetFailure` — the host
+    // would not run it — and never as a `raised`, which would say something ran
+    // and failed.
+    await assert.rejects(
+      () => client.invoke('subtrac'),
+      (error: Error) =>
+        error instanceof DuetFailure &&
+        error.message === 'no command named "subtrac" is registered for this surface',
+    );
+  });
+
+  test(
+    'malformed arguments are refused with a bounded message',
+    { timeout: CASE_TIMEOUT_MS },
+    async () => {
+      // The right values under the wrong names: exactly what a client whose
+      // argument encoder had been renamed would send.
+      await assert.rejects(
+        () =>
+          client.invoke(
+            'subtract',
+            new Map<string, DuetValue>([
+              ['x', duetInt(10n)],
+              ['y', duetInt(3n)],
+            ]),
+          ),
+        (error: Error) =>
+          error instanceof DuetFailure && error.message === 'argument "a" is missing',
+      );
+
+      // ...and a one-megabyte argument must not become a one-megabyte reply. The
+      // refusal names the argument and the KIND that arrived, never the value.
+      await assert.rejects(
+        () =>
+          client.invoke(
+            'subtract',
+            new Map<string, DuetValue>([
+              ['a', duetStr('z'.repeat(1_000_000))],
+              ['b', duetInt(1n)],
+            ]),
+          ),
+        (error: Error) =>
+          error instanceof DuetFailure &&
+          error.message === 'argument "a" must be an integer, got a string' &&
+          error.message.length < 300,
+      );
+    },
+  );
+
+  test(
+    'a command writes the store, and the typed path reads it back',
+    { timeout: CASE_TIMEOUT_MS },
+    async () => {
+      // THE claim of the whole increment: commands and shared state are one
+      // world. The read is through the **generated accessor**, not through the
+      // raw client, so a command whose write landed at some other path — or
+      // under a camel-cased key — reads nothing here.
+      assert.deepStrictEqual(
+        await c().counter.get(),
+        duetPresent(0n),
+        'the premise: the seed leaves counter at 0',
+      );
+
+      assert.deepStrictEqual(await bump(client, 'counter', 5n), {
+        kind: 'returned',
+        value: duetInt(5n),
+      });
+      assert.deepStrictEqual(await c().counter.get(), duetPresent(5n));
+
+      // Twice, because a body that read a stale copy of the store would still
+      // answer 5 the first time.
+      assert.deepStrictEqual(await bump(client, 'counter', 5n), {
+        kind: 'returned',
+        value: duetInt(10n),
+      });
+      assert.deepStrictEqual(await c().counter.get(), duetPresent(10n));
+    },
+  );
+
+  test("a command's write reaches a typed watcher", { timeout: CASE_TIMEOUT_MS }, async () => {
+    // The same claim through the push path. A host that served commands against
+    // some second store would satisfy the read-back test above by accident of
+    // ordering and deliver nothing here.
+    const seen: DuetReading<bigint>[] = [];
+    const watch = await c().counter.watch((r) => seen.push(r));
+    assert.deepStrictEqual(watch.current, duetPresent(0n));
+
+    assert.deepStrictEqual(await bump(client, 'counter', 2n), {
+      kind: 'returned',
+      value: duetInt(2n),
+    });
+    await router.settled();
+
+    assert.deepStrictEqual(seen, [duetPresent(2n)]);
+    assert.deepStrictEqual(watch.current, duetPresent(2n));
+    await watch.close();
+  });
+
+  test(
+    'a command that cannot do its job raises rather than refusing',
+    { timeout: CASE_TIMEOUT_MS },
+    async () => {
+      // The other side of the refused/raised line, decided by the host: the call
+      // was well-formed and `title` simply is not an integer. A guest must see
+      // that as a command that RAN and failed.
+      const outcome = await bump(client, 'title', 1n);
+      assert.equal(outcome.kind, 'raised');
+      if (outcome.kind !== 'raised') return;
+      assert.equal(
+        encodeValueText(outcome.error),
+        '{"t":"m","v":{"code":{"t":"s","v":"not_an_integer"},"found":{"t":"s","v":"string"}}}',
+      );
+      // ...and the store is untouched, so the refusal was not cosmetic.
+      const held = await client.get('title');
+      assert.equal(encodeValueText(held as DuetValue), '{"t":"s","v":""}');
+    },
+  );
+});
+
+/** Invokes the host's `bump` command, which is called from four cases above. */
+function bump(client: DuetClient, path: string, by: bigint): Promise<DuetInvocation> {
+  return client.invoke(
+    'bump',
+    new Map<string, DuetValue>([
+      ['path', duetStr(path)],
+      ['by', duetInt(by)],
+    ]),
+  );
+}
