@@ -3,6 +3,7 @@
 //! fixture would be an awkward way to express.
 
 use super::*;
+use duet_schema::SCHEMA_VERSION;
 
 /// A document with one field of the given type.
 fn with_field(ty: &str) -> String {
@@ -52,14 +53,101 @@ fn the_error_names_where_in_the_document_it_looked() {
     assert!(message.contains("nope"), "no kind in: {message}");
 }
 
+/// A document at `version` with `extra` spliced in before it.
+///
+/// `extra` is written as complete `"key": value,` text so a test can add a key
+/// the reader may not know, which is the whole point of the version tolerance.
+fn document(extra: &str, version: u32) -> String {
+    format!(
+        "{{{extra}\"root\": {{\"kind\": \"named\", \"name\": \"App\"}}, \"types\": \
+         [{{\"fields\": [], \"name\": \"App\"}}], \"version\": {version}}}"
+    )
+}
+
 #[test]
-fn the_reader_and_the_writer_agree_on_the_version_they_speak() {
-    // The reader accepts exactly what the writer emits. Pinned because a bumped
-    // `SCHEMA_VERSION` with an unbumped reader would refuse every schema the
-    // workspace produces, and the failure would be at the far end of a pipeline.
+fn the_reader_accepts_the_version_the_writer_emits() {
+    // The reader must accept at least what the writer produces. Pinned because
+    // a bumped `SCHEMA_VERSION` with an unbumped reader would refuse every
+    // schema the workspace produces, and the failure would surface at the far
+    // end of a pipeline rather than here.
     let text = with_field("{\"kind\": \"int\"}");
     assert!(read_schema(&text).is_ok());
     assert!(text.contains(&format!("\"version\": {SCHEMA_VERSION}")));
+    assert!(
+        SUPPORTED_VERSIONS.contains(&SCHEMA_VERSION),
+        "the writer emits {SCHEMA_VERSION}, which the reader does not accept"
+    );
+}
+
+#[test]
+fn every_supported_version_is_accepted() {
+    // The tolerance itself, both directions at once: a newer reader meeting an
+    // older file, and an older reader meeting a newer one.
+    for version in SUPPORTED_VERSIONS {
+        assert!(
+            read_schema(&document("", *version)).is_ok(),
+            "version {version} is listed as supported but is refused"
+        );
+    }
+}
+
+#[test]
+fn a_version_outside_the_supported_set_is_refused_and_the_message_names_the_set() {
+    // The bound on either side, so a set that quietly grew a member is visible.
+    for version in [0, 3, 99] {
+        let error = read_schema(&document("", version)).expect_err("unsupported");
+        assert!(
+            matches!(error, ReadError::UnsupportedVersion { .. }),
+            "version {version}: {error}"
+        );
+        let message = error.to_string();
+        assert!(message.contains("1 and 2"), "version {version}: {message}");
+    }
+}
+
+#[test]
+fn a_version_2_document_may_carry_commands_and_this_reader_ignores_them() {
+    // The forward-tolerance path, tested here rather than discovered later.
+    // This reader has nowhere to put a command definition, so it reads the
+    // state half of the document and leaves the rest alone.
+    let commands = "\"commands\": [{\"name\": \"add\", \"params\": \
+                    [{\"key\": \"a\", \"type\": {\"kind\": \"int\"}}], \
+                    \"returns\": {\"kind\": \"int\"}}], ";
+    let schema = read_schema(&document(commands, 2)).expect("a version-2 document is readable");
+    assert_eq!(schema.root(), &Ty::Named("App".to_string()));
+    assert_eq!(schema.types().len(), 1);
+}
+
+#[test]
+fn a_version_2_document_without_commands_is_readable() {
+    // `commands` is optional at version 2, so a schema that declares none is
+    // not a special case the reader has to be told about.
+    assert!(read_schema(&document("", 2)).is_ok());
+}
+
+#[test]
+fn commands_in_a_version_1_document_are_refused() {
+    // The key set is a function of the version. A version-1 document carrying
+    // `commands` is a file that means one thing to a reader that knows the key
+    // and another to one that does not, which is worse than a file nobody
+    // accepts.
+    let error = read_schema(&document("\"commands\": [], ", 1)).expect_err("not a version-1 key");
+    assert!(
+        matches!(&error, ReadError::UnexpectedKey { key, .. } if key == "commands"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_commands_key_that_is_not_an_array_is_refused_even_though_it_is_ignored() {
+    // "Ignore the content" and "accept any bytes at all" are different
+    // promises. A corrupt `commands` is a corrupt document however little of it
+    // this reader consumes.
+    let error = read_schema(&document("\"commands\": 7, ", 2)).expect_err("not an array");
+    assert!(
+        matches!(&error, ReadError::WrongKind { at, .. } if at == "\"commands\""),
+        "{error}"
+    );
 }
 
 #[test]

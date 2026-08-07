@@ -20,6 +20,25 @@ pub(crate) fn truncate(text: &str) -> String {
     }
 }
 
+/// `[1, 2]` as `1 and 2`, so a message reads as a sentence.
+///
+/// The list is this crate's own [`SUPPORTED_VERSIONS`](crate::SUPPORTED_VERSIONS)
+/// and is never empty, but the empty case still renders rather than producing a
+/// message with a hole in it.
+fn joined(versions: &[u32]) -> String {
+    match versions {
+        [] => "no version".to_string(),
+        [only] => only.to_string(),
+        [rest @ .., last] => format!(
+            "{} and {last}",
+            rest.iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
 /// One reason a schema document is not a [`Schema`](duet_schema::Schema).
 ///
 /// Every variant is a rejection of *input*: the document is read from a file
@@ -73,8 +92,14 @@ pub enum ReadError {
     UnsupportedVersion {
         /// What the document says.
         found: u64,
-        /// What this reader implements.
-        expected: u32,
+        /// Every version this reader implements —
+        /// [`SUPPORTED_VERSIONS`](crate::SUPPORTED_VERSIONS).
+        ///
+        /// A set rather than a single number, because a reader that tolerates
+        /// more than one version has more than one answer to "what should I
+        /// have written instead", and naming only the newest would send someone
+        /// editing a perfectly readable older file.
+        supported: &'static [u32],
     },
     /// A type node nests deeper than [`MAX_TY_DEPTH`](crate::MAX_TY_DEPTH).
     TooDeep {
@@ -105,9 +130,10 @@ impl fmt::Display for ReadError {
                 "{at} has kind \"{}\", which is not a type this reader knows",
                 truncate(kind)
             ),
-            ReadError::UnsupportedVersion { found, expected } => write!(
+            ReadError::UnsupportedVersion { found, supported } => write!(
                 f,
-                "the schema declares version {found}; this reader implements {expected}"
+                "the schema declares version {found}; this reader implements {}",
+                joined(supported)
             ),
             ReadError::TooDeep { at, max } => {
                 write!(f, "{at} nests more than {max} type constructors deep")
@@ -297,6 +323,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_version_list_reads_as_a_sentence_at_every_length() {
+        // Including the empty case, which `SUPPORTED_VERSIONS` cannot be but
+        // `Display` must still be total for: a message with a hole in it is
+        // worse than a message that says "no version".
+        assert_eq!(joined(&[]), "no version");
+        assert_eq!(joined(&[1]), "1");
+        assert_eq!(joined(&[1, 2]), "1 and 2");
+        assert_eq!(joined(&[1, 2, 3]), "1, 2 and 3");
+    }
+
+    #[test]
     fn a_long_echo_is_cut_on_a_character_boundary() {
         let long = "é".repeat(200);
         let cut = truncate(&long);
@@ -334,7 +371,7 @@ mod tests {
             .to_string(),
             ReadError::UnsupportedVersion {
                 found: 9,
-                expected: 1,
+                supported: &[1, 2],
             }
             .to_string(),
             ReadError::TooDeep {

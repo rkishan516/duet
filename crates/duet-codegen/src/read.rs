@@ -27,8 +27,24 @@
 //!   is bounded even inside that limit.
 //! - Every object's key set is checked exactly, so an unknown key is a
 //!   rejection rather than a silently different meaning.
+//!
+//! # Two format versions, on purpose
+//!
+//! This reader accepts every version in [`SUPPORTED_VERSIONS`], not only the one
+//! [`Schema::render`] currently writes. The asymmetry is deliberate and it is
+//! the reason the tolerance landed **before** anything emitted a version 2:
+//! "an older reader meets a newer file" is then a path with tests on it rather
+//! than a path someone discovers, and the two halves of the format can move in
+//! separate commits without a window in which the workspace cannot read its own
+//! schemas.
+//!
+//! Tolerance is not indifference. The accepted key set is a function of the
+//! declared version — `commands` is defined at version 2 and at no other — so a
+//! version-1 document carrying one is refused rather than half-read. A schema
+//! that means different things to different readers is worse than one nobody
+//! accepts.
 
-use duet_schema::{FieldDef, SCHEMA_VERSION, Schema, Ty, TypeDef};
+use duet_schema::{FieldDef, Schema, Ty, TypeDef};
 use serde_json::{Map, Value as Json};
 
 use crate::error::ReadError;
@@ -49,6 +65,21 @@ pub const KINDS: &[&str] = &[
     "bool", "int", "float", "string", "bytes", "dynamic", "optional", "list", "map", "named",
 ];
 
+/// Every format version this reader accepts.
+///
+/// Version 1 is `root`, `types`, `version`. Version 2 adds `commands`.
+///
+/// [`SCHEMA_VERSION`](duet_schema::SCHEMA_VERSION) — what [`Schema::render`]
+/// *writes* — is always one of these, and
+/// `the_reader_accepts_the_version_the_writer_emits` pins that: a
+/// bumped writer with an unbumped reader would refuse every schema the
+/// workspace produces, and the failure would surface at the far end of a
+/// pipeline rather than here.
+pub const SUPPORTED_VERSIONS: &[u32] = &[1, 2];
+
+/// The first version that defines `commands`.
+const COMMANDS_SINCE: u32 = 2;
+
 /// Parses a rendered schema document.
 ///
 /// # Errors
@@ -59,16 +90,31 @@ pub const KINDS: &[&str] = &[
 pub fn read_schema(text: &str) -> Result<Schema, ReadError> {
     let document: Json = serde_json::from_str(text)?;
     let root_object = object(&document, "the schema")?;
-    exact_keys(root_object, "the schema", &["root", "types", "version"])?;
-    check_version(root_object)?;
+    let version = check_version(root_object)?;
+    exact_keys(root_object, "the schema", document_keys(version))?;
+    check_commands(root_object)?;
 
     let root = read_ty(require(root_object, "the schema", "root")?, "root", 0)?;
     let types = read_types(require(root_object, "the schema", "types")?)?;
     Schema::build(root, types).map_err(ReadError::Invalid)
 }
 
-/// Checks the document's declared format version against this reader's.
-fn check_version(document: &Map<String, Json>) -> Result<(), ReadError> {
+/// The keys a document of this version may carry.
+///
+/// A function of the version rather than one union of every version's keys:
+/// `commands` in a version-1 document is a key that version does not define,
+/// and accepting it there would let one file mean two things.
+fn document_keys(version: u32) -> &'static [&'static str] {
+    if version >= COMMANDS_SINCE {
+        &["commands", "root", "types", "version"]
+    } else {
+        &["root", "types", "version"]
+    }
+}
+
+/// Checks the document's declared format version against this reader's, and
+/// returns it.
+fn check_version(document: &Map<String, Json>) -> Result<u32, ReadError> {
     let found =
         require(document, "the schema", "version")?
             .as_u64()
@@ -76,14 +122,40 @@ fn check_version(document: &Map<String, Json>) -> Result<(), ReadError> {
                 at: "\"version\"".to_string(),
                 expected: "a non-negative integer",
             })?;
-    if found == u64::from(SCHEMA_VERSION) {
-        Ok(())
-    } else {
-        Err(ReadError::UnsupportedVersion {
+    SUPPORTED_VERSIONS
+        .iter()
+        .copied()
+        .find(|known| u64::from(*known) == found)
+        .ok_or(ReadError::UnsupportedVersion {
             found,
-            expected: SCHEMA_VERSION,
+            supported: SUPPORTED_VERSIONS,
         })
-    }
+}
+
+/// Reads the `commands` array — as far as this reader understands it.
+///
+/// # What this deliberately does *not* do
+///
+/// It does not build anything. [`Schema`] has no command definitions to hold
+/// yet, so a version-2 document's commands are checked for shape and then
+/// ignored: this is the older reader, and ignoring what it does not understand
+/// is exactly what forward tolerance means.
+///
+/// The shape is still checked, because "ignore the content" and "accept any
+/// bytes at all" are different promises. A `"commands": 7` is a corrupt
+/// document however little of it this reader consumes, and saying so here costs
+/// one line and means the tolerance never silently swallowed a mistake.
+fn check_commands(document: &Map<String, Json>) -> Result<(), ReadError> {
+    let Some(node) = document.get("commands") else {
+        // Absent: a version-1 document, or a version-2 one that declares none.
+        return Ok(());
+    };
+    node.as_array()
+        .map(|_| ())
+        .ok_or_else(|| ReadError::WrongKind {
+            at: "\"commands\"".to_string(),
+            expected: "an array",
+        })
 }
 
 /// Reads the `types` array.
