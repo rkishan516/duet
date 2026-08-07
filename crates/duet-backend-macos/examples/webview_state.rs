@@ -288,8 +288,12 @@ fn drive(app: &mut App, event: Event<DuetEvent>, control_flow: &mut ControlFlow)
             advance(app);
             *control_flow = next_turn();
         }
-        Event::UserEvent(DuetEvent::WebviewScript(js)) => {
-            if let Err(e) = app.surface.eval(&js) {
+        Event::UserEvent(DuetEvent::WebviewScript { subscriber, script }) => {
+            // Routed by subscriber even though this example owns exactly one
+            // webview: `deliver` is where the check lives, and a driver that
+            // called `eval` directly would be one more place two-guest routing
+            // could go wrong the day a second surface appeared.
+            if let Err(e) = app.surface.deliver(subscriber, &script) {
                 println!("[webview_state] evaluating a host script failed: {e}");
             }
         }

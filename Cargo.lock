@@ -432,6 +432,8 @@ name = "duet-backend-macos"
 version = "0.1.0"
 dependencies = [
  "block2",
+ "duet",
+ "duet-command",
  "duet-core",
  "duet-dev",
  "duet-host",

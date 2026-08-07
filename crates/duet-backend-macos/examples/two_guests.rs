@@ -687,16 +687,25 @@ fn drive(app: &mut App, event: Event<DuetEvent>, control_flow: &mut ControlFlow)
             advance(app);
             *control_flow = next_turn();
         }
-        Event::UserEvent(DuetEvent::WebviewScript(js)) => match app.webview.as_ref() {
-            Some(surface) => {
-                if let Err(e) = surface.eval(&js) {
-                    println!("[two_guests] evaluating a host script failed: {e}");
+        Event::UserEvent(DuetEvent::WebviewScript { subscriber, script }) => {
+            match app.webview.as_ref() {
+                // `deliver` rather than `eval`: the event names the surface its
+                // reply was produced for, and the surface checks. With two
+                // guests in this process — and, in an embedder with two
+                // webviews, two surfaces reachable from this arm — a driver
+                // that evaluated every script into whichever webview it
+                // happened to hold would settle the wrong pending call and hand
+                // one renderer another renderer's data.
+                Some(surface) => {
+                    if let Err(e) = surface.deliver(subscriber, &script) {
+                        println!("[two_guests] evaluating a host script failed: {e}");
+                    }
                 }
+                // Expected after teardown: the webview's own in-flight replies
+                // have nowhere to land, which is what being torn down means.
+                None => println!("[two_guests] dropped a reply for the torn-down webview"),
             }
-            // Expected after teardown: the webview's own in-flight replies
-            // have nowhere to land, which is what being torn down means.
-            None => println!("[two_guests] dropped a reply for the torn-down webview"),
-        },
+        }
         Event::UserEvent(DuetEvent::Notifications(batch)) => deliver_pushes(app, batch),
         Event::UserEvent(DuetEvent::Tick) => {}
         _ => {}

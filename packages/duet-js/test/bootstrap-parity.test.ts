@@ -64,6 +64,7 @@ const corpus = JSON.parse(readFileSync(CORPUS_URL, 'utf8')) as {
 /** The bootstrap's guest API, as far as this file drives it. */
 interface BootstrapDuet {
   get(path: string): Promise<unknown>;
+  invoke(command: string, args?: Record<string, unknown>): Promise<unknown>;
   float(n: number): { t: 'f'; v: number | string };
   toFloat(value: { v: unknown }): number;
   map(entries: Record<string, unknown>): { t: 'm'; v: Record<string, unknown> };
@@ -123,6 +124,7 @@ describe('the bootstrap loads and installs its hooks', () => {
     const { duet } = bootBootstrap();
     for (const member of [
       'get',
+      'invoke',
       'float',
       'toFloat',
       'map',
@@ -136,6 +138,66 @@ describe('the bootstrap loads and installs its hooks', () => {
         `the bootstrap must expose ${member}`,
       );
     }
+  });
+});
+
+describe('the bootstrap can invoke a command', () => {
+  // The fixture page is the only guest a macOS example can drive over a real
+  // transport, so an `invoke` it cannot send is command RPC that has never run
+  // over anything but stdio. A Rust test cannot execute this script; this is
+  // where what it actually posts on the wire is read.
+
+  test('an invoke posts the request kind and command the host decodes', () => {
+    const { duet, posted } = bootBootstrap();
+    void duet.invoke('subtract', { a: { t: 'i', v: '10' }, b: { t: 'i', v: '3' } });
+    assert.equal(posted.length, 1, 'exactly one message must be posted');
+    const sent = JSON.parse(posted[0] as string) as Record<string, unknown>;
+    assert.equal(sent['kind'], 'invoke');
+    assert.equal(sent['command'], 'subtract');
+    assert.equal(sent['id'], '1', 'ids are canonical decimal strings from 1');
+    assert.deepEqual(sent['args'], {
+      t: 'm',
+      v: { a: { t: 'i', v: '10' }, b: { t: 'i', v: '3' } },
+    });
+  });
+
+  test('the arguments travel as a tagged map with its keys in code-point order', () => {
+    // The reason `invoke` wraps `args` with `map()` rather than passing the
+    // object through: `args` is a `Value::Map` on the wire, and the wire orders
+    // a map's keys by code point. Built out of order deliberately, and across
+    // the surrogate boundary, where a default JavaScript sort disagrees with
+    // Rust.
+    const { duet, posted } = bootBootstrap();
+    void duet.invoke('save', {
+      '\u{1F600}': { t: 'n' },
+      '\u{FFFD}': { t: 'n' },
+      '\u{E000}': { t: 'n' },
+    });
+    const sent = posted[0] as string;
+    const args = (JSON.parse(sent) as { args: { v: Record<string, unknown> } }).args;
+    assert.deepEqual(Object.keys(args.v), ['\u{E000}', '\u{FFFD}', '\u{1F600}']);
+  });
+
+  test('a command with no arguments still sends an empty tagged map', () => {
+    // `args` is required by `duet_protocol::decode_request`; omitting it would
+    // be refused, and sending `{}` untagged would be refused too.
+    const { duet, posted } = bootBootstrap();
+    void duet.invoke('session.ping');
+    const sent = JSON.parse(posted[0] as string) as Record<string, unknown>;
+    assert.deepEqual(sent['args'], { t: 'm', v: {} });
+  });
+
+  test('a returned reply settles the call it answers', () => {
+    // The correlation half. A reply this map never matched would leave the
+    // promise unsettled forever, which is the failure shape this project has
+    // found twice.
+    const { duet, posted } = bootBootstrap();
+    const call = duet.invoke('subtract', { a: { t: 'i', v: '10' }, b: { t: 'i', v: '3' } });
+    const id = (JSON.parse(posted[0] as string) as { id: string }).id;
+    duet.onResponse({ id, kind: 'returned' });
+    return call.then((response) => {
+      assert.deepEqual(response, { id, kind: 'returned' });
+    });
   });
 });
 

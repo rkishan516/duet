@@ -14,6 +14,10 @@ duet-supervisor = { path = "../duet-supervisor" }
 duet-host = { path = "../duet-host" }
 duet-webview = { path = "../duet-webview" }
 duet-protocol = { path = "../duet-protocol" }
+# The command registry a surface is built with. `duet-protocol` owns the *seam*
+# (`CommandHost`); this owns the table an embedder writes and the `CommandEntry`
+# a `#[command]` expands to, which is what a surface takes.
+duet-command = { path = "../duet-command" }
 tao = "0.36"
 wry = "0.56"
 objc2 = { version = "0.6.4", features = ["catch-all"] }
@@ -25,6 +29,10 @@ objc2-app-kit = "0.3.2"
 objc2-foundation = "0.3.2"
 
 [dev-dependencies]
+# `examples/webview_commands.rs` writes its commands with `#[command]`, which is
+# what an embedder writes. A dev-dependency, not a dependency: the backend takes
+# a `&'static [CommandEntry]` and has no opinion about where it came from.
+duet = { path = "../duet", features = ["commands", "derive"] }
 # `examples/hot_reload.rs` drives the real reload driver against a real engine.
 # A dev-dependency, not a dependency: the backend itself has nothing to do with
 # hot reload, which is a tool-time concern owned by `duet dev`.
