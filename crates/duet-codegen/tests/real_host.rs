@@ -122,3 +122,90 @@ fn the_binding_scanner_finds_the_root_binding_too() {
     assert_eq!(found[0].path, "");
     assert_eq!(found[0].codec, "const AppCodec()");
 }
+
+#[test]
+fn every_command_the_goldens_invoke_is_one_the_schema_declares() {
+    // The command-side equivalent of the path check above, and it exists for the
+    // same reason: a golden proves the emitter still emits what it emitted
+    // before, and nothing in a byte comparison can notice that a command name
+    // addresses **nothing**. `crates/duet-host-stdio/tests/commands.rs` carries
+    // the same scan out to a live registry, which is the strongest form of this
+    // check; here it is against the schema, which is what the emitter read.
+    let mut checked = 0usize;
+    for fixture in support::FIXTURES {
+        let schema = support::schema(fixture.schema);
+        for relative in [fixture.dart_path(), fixture.ts_path()] {
+            let text = support::read(&relative);
+            checked += checks::commands_resolve(&text, &schema)
+                .unwrap_or_else(|e| panic!("{relative}: {e}"));
+        }
+    }
+    assert!(
+        checked >= 8,
+        "only {checked} command invocations were found; the scanner is not \
+         finding them, or no fixture declares commands"
+    );
+}
+
+#[test]
+fn every_command_binds_the_codecs_its_schema_types_call_for() {
+    for fixture in support::FIXTURES {
+        let schema = support::schema(fixture.schema);
+        for (relative, language) in [
+            (fixture.dart_path(), Language::Dart),
+            (fixture.ts_path(), Language::TypeScript),
+        ] {
+            let text = support::read(&relative);
+            checks::command_codecs_match_the_schema(&text, &schema, language)
+                .unwrap_or_else(|e| panic!("{relative}: {e}"));
+        }
+    }
+}
+
+#[test]
+fn a_command_free_schema_yields_no_command_bindings_at_all() {
+    // The compatibility half. `wide` declares no commands, so its goldens must
+    // contain not one invocation — which is also what makes the count assertion
+    // above a statement about `app` alone.
+    let wide = support::FIXTURES
+        .iter()
+        .find(|f| f.stem == "wide")
+        .expect("the wide fixture");
+    for relative in [wide.dart_path(), wide.ts_path()] {
+        assert!(
+            checks::command_bindings(&support::read(&relative)).is_empty(),
+            "{relative} has command bindings for a schema that declares none"
+        );
+    }
+}
+
+#[test]
+fn the_command_scanner_reads_both_languages_whole() {
+    // Without this, a scanner that lost the argument keys or stopped before the
+    // codecs would make every check above pass while comparing almost nothing.
+    let dart = checks::command_bindings(
+        "      duetDecodeOutcome<int, DuetValue>(\n\
+         \x20       await client.invoke('bump', <String, DuetValue>{\n\
+         \x20         'by': duetIntCodec.encode(by),\n\
+         \x20         'path': duetStringCodec.encode(path),\n\
+         \x20       }),\n\
+         \x20       duetIntCodec,\n\
+         \x20       duetDynamicCodec,\n      );\n",
+    );
+    assert_eq!(dart.len(), 1);
+    assert_eq!(dart[0].name, "bump");
+    assert_eq!(dart[0].keys, ["by", "path"]);
+    assert_eq!(dart[0].returns, "duetIntCodec");
+    assert_eq!(dart[0].raises, "duetDynamicCodec");
+
+    let ts = checks::command_bindings(
+        "    return duetDecodeOutcome<bigint, Unlucky>(\n\
+         \x20     await this.client.invoke('raise'),\n\
+         \x20     duetDynamicCodec,\n      unluckyCodec,\n    );\n",
+    );
+    assert_eq!(ts.len(), 1);
+    assert_eq!(ts[0].name, "raise");
+    assert!(ts[0].keys.is_empty());
+    assert_eq!(ts[0].returns, "duetDynamicCodec");
+    assert_eq!(ts[0].raises, "unluckyCodec");
+}

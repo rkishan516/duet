@@ -1,9 +1,19 @@
 //! The commands every session of this host registers.
 //!
-//! Three of them, hand-written. There is no codegen for commands yet, and that
-//! is the point: this module is what a guest's `invoke` is measured against
-//! *before* any generator exists, so a later generator has something to be
-//! compared to rather than being its own specification.
+//! Four of them, hand-written. Three predate any generator, and that is the
+//! point: this module is what a guest's `invoke` is measured against *before*
+//! one existed, so the generator has something to be compared to rather than
+//! being its own specification.
+//!
+//! # This registry and `schema/app.json` are two statements of one thing
+//!
+//! The schema declares these four commands, their parameter keys and their
+//! result types; this registry is what actually answers them. Nothing in Rust
+//! links the two, so `tests/commands.rs` compares them: every command the
+//! schema declares must resolve here, and every command registered here must be
+//! declared there. A generated client is built from the schema and calls this,
+//! so a name in one and not the other is a typed method that cannot be called —
+//! with no error until it is.
 //!
 //! # What each one is for
 //!
@@ -12,6 +22,7 @@
 //! | [`SUBTRACT`] | arguments arrive under the right names, and a value comes back |
 //! | [`RAISE`] | a command that ran and returned `Err` reaches the guest as `raised`, structured |
 //! | [`BUMP`] | a command body reads and writes the **same store** the guest reads through |
+//! | [`PING`] | a command that declares no result and cannot fail, under a **dotted** name |
 //!
 //! `subtract` rather than `add` deliberately: subtraction is not commutative,
 //! so a guest whose encoder swapped two argument names gets `-7` where it
@@ -53,11 +64,21 @@ pub const RAISE: &str = "raise";
 /// Adds `by` to the integer at `path`, returning the new value.
 pub const BUMP: &str = "bump";
 
+/// Answers, and does nothing else.
+///
+/// The liveness probe a guest uses to prove command RPC is wired end to end,
+/// and the one command here whose schema declares neither a `returns` nor a
+/// `raises` — the shape a generated client must still be able to call. Its
+/// **dotted** name is equally deliberate: a dot is legal in a command name and
+/// has to survive to the wire uncamel-cased, which is only checkable if some
+/// command actually carries one.
+pub const PING: &str = "session.ping";
+
 /// The registry every [`crate::Session`] is built with.
 ///
 /// One registry shape for both schema fixtures. `bump` takes the path to work
-/// on as an argument rather than hard-coding one, so the same three commands
-/// are meaningful whichever fixture seeded the store — and so the "malformed
+/// on as an argument rather than hard-coding one, so the same commands are
+/// meaningful whichever fixture seeded the store — and so the "malformed
 /// arguments" case has a natural shape to be malformed.
 #[must_use]
 pub fn commands() -> Commands {
@@ -65,6 +86,16 @@ pub fn commands() -> Commands {
         .with(SUBTRACT, subtract)
         .with(RAISE, raise)
         .with(BUMP, bump)
+        .with(PING, ping)
+}
+
+/// A command that answers and does nothing.
+///
+/// Returns [`Value::Null`], which is what the wire carries for a command with
+/// no result — `schema/app.json` declares no `returns` for it, and the two
+/// statements have to agree or a generated client decodes the wrong thing.
+fn ping(_args: Args, _store: &StoreHandle) -> Outcome {
+    Outcome::Returned(Value::Null)
 }
 
 /// `subtract(a, b) -> a - b`.

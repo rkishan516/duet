@@ -345,6 +345,7 @@ void main() {
   _optionBehaviours(corpus['wide'], skip: skip);
   _subscriptions(corpus['app'], skip: skip);
   _commands(corpus['app'], skip: skip);
+  _generatedCommands(corpus['app'], skip: skip);
 }
 
 /// Commands against the real host: the `#[command]` RPC proof.
@@ -538,6 +539,123 @@ void _commands(CorpusSchema schema, {required String? skip}) {
       );
       // ...and the store is untouched, so the refusal was not cosmetic.
       expect(await client.get('title'), const DuetStr(''));
+    });
+  }, skip: skip);
+}
+
+/// The **generated** command client, driven against the real host.
+///
+/// `_commands` above drives `DuetClient.invoke` by hand: a string name and a map
+/// of tagged values, written out at each call site. This drives
+/// `AppCommands` — the class `duet-codegen` emits from `schema/app.json` — over
+/// the same pipe, and it is the only thing in this repository that proves the
+/// generated names, argument keys and codecs are the ones a live host answers.
+///
+/// A golden test cannot make this check. `client.invoke('sessionPing')` is not a
+/// syntax error, not a type error and not a decode error; it is a refusal at run
+/// time, and a byte comparison would have recorded the camel-cased spelling as
+/// the truth forever.
+void _generatedCommands(CorpusSchema schema, {required String? skip}) {
+  group('the generated commands class, against the real host', () {
+    late StdioHost host;
+    late DuetClient client;
+    late DuetRouter router;
+    app.AppCommands commands() => app.AppCommands(client);
+
+    setUpAll(() async {
+      host = await StdioHost.start('app');
+      client = DuetClient(host);
+      router = DuetRouter(client)..attach();
+    });
+
+    tearDownAll(() async {
+      expect(host.unmatched, isEmpty,
+          reason: 'the host sent lines answering no request');
+      await host.close();
+    });
+
+    setUp(() async {
+      await client.set('', schema.seed);
+    });
+
+    test('a generated method binds its arguments by key and not by position',
+        () async {
+      // Subtraction is not commutative, so a generated method that encoded `a`
+      // under `b`'s key answers -7 rather than 7. An `add` would have agreed
+      // with a completely broken binding.
+      expect(await commands().subtract(a: 10, b: 3), const DuetOk<int, DuetValue>(7));
+      expect(await commands().subtract(a: 3, b: 10), const DuetOk<int, DuetValue>(-7));
+    });
+
+    test('a generated method decodes a raised error into its schema type',
+        () async {
+      // The `raises` type in `schema/app.json` is `Unlucky`, and the generated
+      // method binds `UnluckyCodec` to it. What arrives is that struct, not a
+      // `DuetValue` the caller has to take apart.
+      final DuetOutcome<DuetValue, app.Unlucky> outcome = await commands().raise();
+      expect(outcome, isA<DuetErr<DuetValue, app.Unlucky>>());
+      final app.Unlucky error = (outcome as DuetErr<DuetValue, app.Unlucky>).error;
+      expect(error.code, 'unlucky');
+      expect(error.shortBy, 42,
+          reason: 'the accessor is camel-cased and the wire key is not');
+    });
+
+    test('a dotted command name reaches the host uncamel-cased', () async {
+      // `session.ping` is the one command whose method name differs from its
+      // wire name by more than a case change. The host registers
+      // `session.ping`; a client that sent `sessionPing` would be refused, and
+      // nothing before this point could have noticed.
+      expect(
+        await commands().sessionPing(),
+        const DuetOk<DuetValue, DuetValue>(DuetNull()),
+        reason: 'a command with no declared result answers null',
+      );
+    });
+
+    test('a generated command writes the store the generated accessors read',
+        () async {
+      // The whole "commands and state are one world" claim, with both halves
+      // generated from one schema.
+      final app.AppClient state = app.AppClient(router);
+      expect(await state.counter.get(), const DuetPresent<int>(0));
+
+      expect(
+        await commands().bump(path: 'counter', by: 5),
+        const DuetOk<int, DuetValue>(5),
+      );
+      expect(await state.counter.get(), const DuetPresent<int>(5));
+    });
+
+    test('an unknown command still throws, through the generated class too',
+        () async {
+      // The refused/ran line, from the generated side. A method whose name the
+      // host does not register throws `DuetFailure`; it never becomes a
+      // `DuetErr`, which would say something ran and failed.
+      await expectLater(
+        client.invoke('sessionPing'),
+        throwsA(isA<DuetFailure>()),
+        reason: 'the camel-cased spelling must not resolve on the host',
+      );
+    });
+
+    test('a command that ran and failed is an outcome, not a thrown failure',
+        () async {
+      // `bump`'s declared `raises` is `dynamic`, which is the truth about this
+      // host: it raises three differently shaped maps under one name. So the
+      // generated method decodes it through `duetDynamicCodec` and the caller
+      // gets the raw value — typed as `DuetValue`, which is what the schema
+      // says.
+      final DuetOutcome<int, DuetValue> outcome =
+          await commands().bump(path: 'title', by: 1);
+      expect(
+        outcome,
+        const DuetErr<int, DuetValue>(
+          DuetMap(<String, DuetValue>{
+            'code': DuetStr('not_an_integer'),
+            'found': DuetStr('string'),
+          }),
+        ),
+      );
     });
   }, skip: skip);
 }

@@ -32,6 +32,9 @@
  *   notifications to watchers by subscription id.
  * - {@link DuetField} and {@link DuetOptionalField} — typed `get`/`set`/`watch`
  *   at one fixed path.
+ * - {@link DuetOutcome} and {@link duetDecodeOutcome} — the two arms of an
+ *   `invoke` that ran, decoded through the codecs the command's schema
+ *   declares, and the third arm for an answer no codec here could read.
  *
  * It is useful on its own: a guest with no generated code at all can build
  * fields by hand and get a mirror that stays correct under concurrent writes
@@ -78,6 +81,14 @@ export {
   type DuetReading,
   type DuetWatch,
 } from './reading.ts';
+
+export {
+  duetDecodeOutcome,
+  type DuetErr,
+  type DuetOk,
+  type DuetOutcome,
+  type DuetUndecodable,
+} from './outcome.ts';
 
 export { DuetRouter, DEFAULT_MAX_BUFFERED_PUSHES } from './router.ts';
 

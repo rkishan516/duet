@@ -139,6 +139,32 @@
             }
           ],
           "name": "Editor"
+        },
+        {
+          "fields": [
+            {
+              "accept": "{\"t\":\"s\",\"v\":\"sample\"}",
+              "key": "code",
+              "optional": false,
+              "rejects": [
+                "{\"t\":\"i\",\"v\":\"1\"}",
+                "{\"t\":\"n\"}"
+              ],
+              "ty": "string"
+            },
+            {
+              "accept": "{\"t\":\"i\",\"v\":\"7\"}",
+              "key": "short_by",
+              "optional": false,
+              "rejects": [
+                "{\"t\":\"f\",\"v\":1.0}",
+                "{\"t\":\"s\",\"v\":\"1\"}",
+                "{\"t\":\"n\"}"
+              ],
+              "ty": "int"
+            }
+          ],
+          "name": "Unlucky"
         }
       ]
     },

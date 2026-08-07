@@ -214,3 +214,120 @@ fn mutating_the_typescript_golden_is_caught_the_same_way() {
         "a wrong codec was not caught in TypeScript"
     );
 }
+
+/// The corruptions aimed at the **command** half of the emitter, against
+/// `packages/duet/test/generated/app.duet.dart` — the one golden whose schema
+/// declares commands.
+const COMMAND_MUTATIONS: &[Mutation] = &[
+    Mutation {
+        what: "a command name camel-cased, exactly as a method name is",
+        from: "invoke('session.ping')",
+        to: "invoke('sessionPing')",
+        // Only the resolution check. The codec check reads the same scan but
+        // reports the *name* failure first, which is why it is listed: the two
+        // are not independent, and pretending otherwise would make this table
+        // fiction.
+        caught_by: &["goldens", "commands_resolve", "command_codecs"],
+    },
+    Mutation {
+        what: "a command name misspelled",
+        from: "invoke('subtract'",
+        to: "invoke('subtrac'",
+        caught_by: &["goldens", "commands_resolve", "command_codecs"],
+    },
+    Mutation {
+        what: "an argument key camel-cased, exactly as a parameter name is",
+        from: "'short_by'",
+        to: "'shortBy'",
+        // Not a command mutation at all — it is the struct encoder's key for
+        // `Unlucky.short_by`, and it is in this table to show that the command
+        // checks do NOT fire on it. Only the golden does, which is exactly why
+        // `segments_are_schema_keys` exists for state.
+        caught_by: &["goldens"],
+    },
+    Mutation {
+        what: "an argument key misspelled",
+        from: "'path': duetStringCodec.encode(path)",
+        to: "'paht': duetStringCodec.encode(path)",
+        caught_by: &["goldens", "commands_resolve"],
+    },
+    Mutation {
+        what: "a return codec swapped for the float one",
+        from: "        duetIntCodec,\n        duetDynamicCodec,",
+        to: "        duetFloatCodec,\n        duetDynamicCodec,",
+        // Neither path check can see it, and neither can `commands_resolve` —
+        // the name and the keys are untouched. The codec check is the only one,
+        // and it is a restatement of the emitter's table, so the independent
+        // evidence is in the guest packages: a float codec on `subtract`'s
+        // `int` return decodes nothing against a live host and the assertion
+        // there names an exact value.
+        caught_by: &["goldens", "command_codecs"],
+    },
+    Mutation {
+        what: "an error codec swapped for the struct one it is not",
+        from: "        duetDynamicCodec,\n        const UnluckyCodec(),",
+        to: "        const UnluckyCodec(),\n        const UnluckyCodec(),",
+        caught_by: &["goldens", "command_codecs"],
+    },
+];
+
+#[test]
+fn every_command_mutation_is_caught_by_exactly_the_checks_that_should_catch_it() {
+    let fixture = support::FIXTURES
+        .iter()
+        .find(|f| f.stem == "app")
+        .expect("the app fixture");
+    let schema = support::schema(fixture.schema);
+    let original = support::read(&fixture.dart_path());
+
+    for mutation in COMMAND_MUTATIONS {
+        assert!(
+            original.contains(mutation.from),
+            "{}: {:?} is not in the golden, so the mutation changes nothing",
+            mutation.what,
+            mutation.from
+        );
+        let mutated = original.replacen(mutation.from, mutation.to, 1);
+        assert_ne!(mutated, original, "{}: nothing changed", mutation.what);
+
+        let verdicts = [
+            ("goldens", mutated == original),
+            (
+                "commands_resolve",
+                checks::commands_resolve(&mutated, &schema).is_ok(),
+            ),
+            (
+                "command_codecs",
+                checks::command_codecs_match_the_schema(&mutated, &schema, Language::Dart).is_ok(),
+            ),
+        ];
+        let caught: Vec<&str> = verdicts
+            .iter()
+            .filter(|(_, passed)| !passed)
+            .map(|(name, _)| *name)
+            .collect();
+        assert_eq!(
+            caught, mutation.caught_by,
+            "{}: the checks that fired are not the ones that should have",
+            mutation.what
+        );
+    }
+}
+
+#[test]
+fn the_command_checks_all_pass_on_the_unmutated_goldens() {
+    // Without this, a check that failed on *everything* would look like a check
+    // that caught every mutation.
+    for fixture in support::FIXTURES {
+        let schema = support::schema(fixture.schema);
+        for (relative, language) in [
+            (fixture.dart_path(), Language::Dart),
+            (fixture.ts_path(), Language::TypeScript),
+        ] {
+            let text = support::read(&relative);
+            checks::commands_resolve(&text, &schema).unwrap_or_else(|e| panic!("{relative}: {e}"));
+            checks::command_codecs_match_the_schema(&text, &schema, language)
+                .unwrap_or_else(|e| panic!("{relative}: {e}"));
+        }
+    }
+}

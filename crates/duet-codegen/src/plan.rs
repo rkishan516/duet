@@ -13,6 +13,7 @@
 use duet_core::{Path, Segment};
 use duet_schema::{Schema, Ty, TypeDef};
 
+use crate::command::{PlannedCommand, plan_commands};
 use crate::error::EmitError;
 use crate::name::{is_emittable_key, is_usable_identifier, lower_camel, upper_camel};
 
@@ -104,6 +105,16 @@ pub struct Plan {
     pub types: Vec<PlannedType>,
     /// Every accessor class, root first, then breadth-first by path.
     pub classes: Vec<PlannedClass>,
+    /// Every command, in the order [`Schema::commands`] gives them — sorted by
+    /// name, which is what makes the generated method order a function of the
+    /// schema rather than of how a registry was assembled.
+    ///
+    /// Empty for a schema that declares none, and the emitters write **no**
+    /// commands class at all in that case, so a command-free schema produces
+    /// byte-for-byte what it produced before commands existed.
+    ///
+    /// [`Schema::commands`]: duet_schema::Schema::commands
+    pub commands: Vec<PlannedCommand>,
 }
 
 impl Plan {
@@ -131,6 +142,7 @@ impl Plan {
             root: root.clone(),
             types,
             classes,
+            commands: plan_commands(schema.commands())?,
         };
         check_declaration_names(&plan)?;
         Ok(plan)
@@ -198,7 +210,7 @@ fn plan_ty(ty: &Ty, type_name: &str, key: &str) -> Result<PlannedTy, EmitError> 
 ///
 /// Iterative, for the reason every walk in this project is: the walk that finds
 /// a pathological schema must not itself be pathological.
-fn contains_optional(ty: &Ty) -> bool {
+pub(crate) fn contains_optional(ty: &Ty) -> bool {
     let mut pending = vec![ty];
     while let Some(node) = pending.pop() {
         match node {
@@ -215,7 +227,7 @@ fn contains_optional(ty: &Ty) -> bool {
 /// `Ty` is `#[non_exhaustive]`, so this cannot be a compile-time exhaustiveness
 /// check here; Phase 4b's new arms land as a runtime rejection naming the field
 /// rather than as generated source that does not compile.
-fn check_supported(ty: &Ty, type_name: &str, key: &str) -> Result<(), EmitError> {
+pub(crate) fn check_supported(ty: &Ty, type_name: &str, key: &str) -> Result<(), EmitError> {
     let mut pending = vec![ty];
     while let Some(node) = pending.pop() {
         match node {
@@ -328,6 +340,14 @@ fn class_name(stem: &str) -> String {
     format!("{stem}Client")
 }
 
+/// `<Root>Commands` — the one class the command half of the plan emits.
+///
+/// A function rather than a `format!` at each site so the Dart emitter, the
+/// TypeScript emitter and the collision check cannot disagree about it.
+pub(crate) fn commands_class_name(root: &str) -> String {
+    format!("{root}Commands")
+}
+
 /// Appends one key to a wire path.
 fn join(prefix: &str, key: &str) -> String {
     if prefix.is_empty() {
@@ -375,12 +395,19 @@ fn check_declaration_names(plan: &Plan) -> Result<(), EmitError> {
         .iter()
         .map(|t| format!("{}Codec", t.name))
         .collect();
+    // The commands class is one more top-level declaration in the same
+    // namespace, and it only exists when the schema declares commands — so a
+    // schema type called `AppCommands` is a collision only when there is
+    // something for it to collide with.
+    let commands_class = commands_class_name(&plan.root);
+    let emitted_commands_class = (!plan.commands.is_empty()).then_some(commands_class.as_str());
     let names = plan
         .types
         .iter()
         .map(|t| t.name.as_str())
         .chain(codecs.iter().map(String::as_str))
-        .chain(plan.classes.iter().map(|c| c.name.as_str()));
+        .chain(plan.classes.iter().map(|c| c.name.as_str()))
+        .chain(emitted_commands_class);
     for name in names {
         if seen.contains(&name) {
             return Err(EmitError::DeclarationCollision {

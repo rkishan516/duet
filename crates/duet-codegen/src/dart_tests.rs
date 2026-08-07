@@ -188,3 +188,137 @@ fn the_root_path_is_described_rather_than_shown_as_an_empty_literal() {
     assert_eq!(describe(""), "the store's root");
     assert_eq!(describe("editor.zoom"), "`editor.zoom`");
 }
+
+/// One command, spelled compactly.
+fn command(
+    name: &str,
+    params: Vec<FieldDef>,
+    returns: Option<Ty>,
+    raises: Option<Ty>,
+) -> duet_schema::CommandDef {
+    duet_schema::CommandDef {
+        name: name.to_string(),
+        params,
+        returns,
+        raises,
+    }
+}
+
+/// The Dart source for a schema declaring `commands`.
+fn with_commands(commands: Vec<duet_schema::CommandDef>) -> String {
+    let schema = Schema::build_with_commands(
+        Ty::Named("Root".to_string()),
+        vec![
+            TypeDef {
+                name: "Root".to_string(),
+                fields: vec![FieldDef::new("count", Ty::Int)],
+            },
+            TypeDef {
+                name: "Leaf".to_string(),
+                fields: vec![FieldDef::new("zoom", Ty::Float)],
+            },
+        ],
+        commands,
+    )
+    .expect("a legal schema");
+    emit(
+        &Plan::build(&schema).expect("emittable"),
+        &Options::new("test", "test"),
+    )
+}
+
+#[test]
+fn a_command_class_is_emitted_only_when_the_schema_declares_commands() {
+    // The whole compatibility promise of this increment: a schema with no
+    // commands must generate byte-for-byte what it generated before commands
+    // existed, which means not so much as a blank line.
+    let without = with_commands(Vec::new());
+    assert!(
+        !without.contains("Commands"),
+        "a command-free schema must emit no commands class:\n{without}"
+    );
+    let with = with_commands(vec![command("ping", Vec::new(), None, None)]);
+    assert!(with.contains("final class RootCommands {"), "{with}");
+    assert!(
+        with.starts_with(&without[..without.len() - 1]),
+        "the commands class must be appended, leaving everything before it \
+         untouched"
+    );
+}
+
+#[test]
+fn a_command_name_reaches_the_wire_verbatim_and_the_method_camel_cased() {
+    // The mutation that has no error anywhere: `documentsClose` invoked against
+    // a host that owns `documents.close` is refused at the far end of a call
+    // the developer believed was typed. Both halves are asserted, because
+    // asserting only the method name would pass for an emitter that camel-cased
+    // both.
+    let source = with_commands(vec![command("documents.close", Vec::new(), None, None)]);
+    assert!(
+        source.contains("client.invoke('documents.close')"),
+        "the wire name must be the schema's own:\n{source}"
+    );
+    assert!(
+        source.contains("documentsClose()"),
+        "the method name must be camel-cased:\n{source}"
+    );
+    assert!(
+        !source.contains("invoke('documentsClose')"),
+        "the camel-cased name must never reach the wire:\n{source}"
+    );
+}
+
+#[test]
+fn argument_keys_are_literals_in_wire_order_and_the_signature_is_in_declaration_order() {
+    let source = with_commands(vec![command(
+        "bump",
+        vec![FieldDef::new("path", Ty::Str), FieldDef::new("by", Ty::Int)],
+        Some(Ty::Int),
+        None,
+    )]);
+    assert!(
+        source.contains("bump({required String path, required int by})"),
+        "the signature keeps declaration order:\n{source}"
+    );
+    let args = source
+        .split("client.invoke('bump'")
+        .nth(1)
+        .expect("the invocation");
+    assert!(
+        args.find("'by':").expect("by") < args.find("'path':").expect("path"),
+        "the args literal must be in wire-key order:\n{source}"
+    );
+}
+
+#[test]
+fn a_command_binds_the_codecs_its_schema_types_call_for() {
+    let source = with_commands(vec![command(
+        "bump",
+        Vec::new(),
+        Some(Ty::Int),
+        Some(Ty::Named("Leaf".to_string())),
+    )]);
+    assert!(
+        source.contains("Future<DuetOutcome<int, Leaf>> bump()"),
+        "{source}"
+    );
+    assert!(
+        source.contains("        duetIntCodec,\n        const LeafCodec(),\n"),
+        "the return and error codecs must be bound in that order:\n{source}"
+    );
+}
+
+#[test]
+fn a_command_with_no_declared_types_binds_the_dynamic_codec_on_both_arms() {
+    // A command still answers when its schema declares nothing: the wire sends
+    // null, and `duetDynamicCodec` is the identity that reads it.
+    let source = with_commands(vec![command("ping", Vec::new(), None, None)]);
+    assert!(
+        source.contains("Future<DuetOutcome<DuetValue, DuetValue>> ping()"),
+        "{source}"
+    );
+    assert!(
+        source.contains("        duetDynamicCodec,\n        duetDynamicCodec,\n"),
+        "{source}"
+    );
+}

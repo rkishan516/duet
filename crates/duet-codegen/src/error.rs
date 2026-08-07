@@ -244,6 +244,42 @@ pub enum EmitError {
         /// The field's wire key, or `""` at the root.
         key: String,
     },
+    /// A command's name cannot be spelled as a method in Dart and TypeScript.
+    UnspellableCommand {
+        /// The command's wire name.
+        command: String,
+        /// What is wrong with it.
+        because: &'static str,
+    },
+    /// A command's parameter, return or error type cannot be spelled.
+    ///
+    /// `what` names the position — a parameter key, `"returns"` or
+    /// `"raises"` — because a command has three places a type can be wrong in
+    /// and a message that named only the command would leave a developer
+    /// guessing which.
+    UnspellableCommandType {
+        /// The command's wire name.
+        command: String,
+        /// Which part of the signature: a parameter key, or `returns`/`raises`.
+        what: String,
+        /// What is wrong with it.
+        because: &'static str,
+    },
+    /// Two commands want the same generated method name.
+    ///
+    /// `documents.close` and `documents_close` are different wire names and the
+    /// same Dart identifier. One of them must be renamed.
+    CommandCollision {
+        /// The contested method name.
+        method: String,
+    },
+    /// Two of one command's parameters want the same generated name.
+    ParamCollision {
+        /// The command holding both parameters.
+        command: String,
+        /// The contested parameter name.
+        accessor: String,
+    },
 }
 
 impl EmitError {
@@ -300,6 +336,28 @@ impl EmitError {
             EmitError::TooManyClasses { max } => format!(
                 "the schema reaches more than {max} struct-typed paths; \
                  expanding them all would generate an unbounded amount of source"
+            ),
+            EmitError::UnspellableCommand { command, because } => format!(
+                "command \"{}\" cannot be a generated method: {because}",
+                truncate(command)
+            ),
+            EmitError::UnspellableCommandType {
+                command,
+                what,
+                because,
+            } => format!(
+                "\"{}\" of command \"{}\" cannot be generated: {because}",
+                truncate(what),
+                truncate(command)
+            ),
+            EmitError::CommandCollision { method } => format!(
+                "two commands both want the method \"{}\"; rename one of them",
+                truncate(method)
+            ),
+            EmitError::ParamCollision { command, accessor } => format!(
+                "two parameters of command \"{}\" both want the name \"{}\"; rename one",
+                truncate(command),
+                truncate(accessor)
             ),
             // Unreachable: every remaining arm answered `field_message`.
             other => format!("{other:?}"),

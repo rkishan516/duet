@@ -136,7 +136,7 @@ pub mod fixture;
 pub mod frame;
 pub mod serve;
 
-pub use commands::{BUMP, RAISE, SUBTRACT, commands};
+pub use commands::{BUMP, PING, RAISE, SUBTRACT, commands};
 pub use error::SessionError;
 pub use fixture::{FIXTURES, Fixture, names};
 pub use frame::{Frame, MAX_REQUEST_BYTES, read_frame};

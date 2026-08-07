@@ -136,6 +136,60 @@ final class EditorCodec implements DuetCodec<Editor> {
   }
 }
 
+/// `Unlucky`, as the schema describes it.
+final class Unlucky {
+  /// Creates an `Unlucky`.
+  const Unlucky({required this.code, required this.shortBy});
+
+  /// The `code` field.
+  final String code;
+
+  /// The `short_by` field.
+  final int shortBy;
+
+  @override
+  bool operator ==(Object other) =>
+      other is Unlucky &&
+      other.code == code &&
+      other.shortBy == shortBy;
+
+  @override
+  int get hashCode => Object.hashAll(<Object?>[code, shortBy]);
+
+  @override
+  String toString() =>
+      'Unlucky(code: $code, shortBy: $shortBy)';
+}
+
+/// The [DuetCodec] for [Unlucky].
+final class UnluckyCodec implements DuetCodec<Unlucky> {
+  /// Creates the codec.
+  const UnluckyCodec();
+
+  @override
+  String get name => 'Unlucky';
+
+  @override
+  DuetValue encode(Unlucky value) {
+    return DuetMap(<String, DuetValue>{
+      'code': duetStringCodec.encode(value.code),
+      'short_by': duetIntCodec.encode(value.shortBy),
+    });
+  }
+
+  @override
+  Unlucky? decode(DuetValue value) {
+    if (value is! DuetMap) return null;
+    final DuetReading<String> code =
+        duetRequiredReading<String>(duetStringCodec, value.entries['code']);
+    if (code is! DuetPresent<String>) return null;
+    final DuetReading<int> shortBy =
+        duetRequiredReading<int>(duetIntCodec, value.entries['short_by']);
+    if (shortBy is! DuetPresent<int>) return null;
+    return Unlucky(code: code.value, shortBy: shortBy.value);
+  }
+}
+
 /// Typed accessors for `App` at the store's root.
 ///
 /// Every path here is a literal; see this file's header.
@@ -183,4 +237,67 @@ final class AppEditorClient {
   /// `Editor.theme` at `editor.theme`.
   DuetField<String> get theme =>
       DuetField<String>(router, 'editor.theme', duetStringCodec);
+}
+
+/// The commands `App` declares, as typed methods.
+///
+/// Every command name and every argument key here is a literal; see this
+/// file's header. A method returns what the command *answered*; a host that
+/// refused to run it throws [DuetFailure] out of [DuetClient.invoke].
+final class AppCommands {
+  /// Binds these commands to [client].
+  const AppCommands(this.client);
+
+  /// The client every command below is invoked through.
+  final DuetClient client;
+
+  /// Invokes `bump`.
+  ///
+  /// Returns `int`.
+  /// Raises `DuetValue`.
+  Future<DuetOutcome<int, DuetValue>> bump({required String path, required int by}) async =>
+      duetDecodeOutcome<int, DuetValue>(
+        await client.invoke('bump', <String, DuetValue>{
+          'by': duetIntCodec.encode(by),
+          'path': duetStringCodec.encode(path),
+        }),
+        duetIntCodec,
+        duetDynamicCodec,
+      );
+
+  /// Invokes `raise`.
+  ///
+  /// Returns nothing; the schema declares no type, so this is the raw value.
+  /// Raises `Unlucky`.
+  Future<DuetOutcome<DuetValue, Unlucky>> raise() async =>
+      duetDecodeOutcome<DuetValue, Unlucky>(
+        await client.invoke('raise'),
+        duetDynamicCodec,
+        const UnluckyCodec(),
+      );
+
+  /// Invokes `session.ping`.
+  ///
+  /// Returns nothing; the schema declares no type, so this is the raw value.
+  /// Raises nothing; the schema declares no type, so this is the raw value.
+  Future<DuetOutcome<DuetValue, DuetValue>> sessionPing() async =>
+      duetDecodeOutcome<DuetValue, DuetValue>(
+        await client.invoke('session.ping'),
+        duetDynamicCodec,
+        duetDynamicCodec,
+      );
+
+  /// Invokes `subtract`.
+  ///
+  /// Returns `int`.
+  /// Raises nothing; the schema declares no type, so this is the raw value.
+  Future<DuetOutcome<int, DuetValue>> subtract({required int a, required int b}) async =>
+      duetDecodeOutcome<int, DuetValue>(
+        await client.invoke('subtract', <String, DuetValue>{
+          'a': duetIntCodec.encode(a),
+          'b': duetIntCodec.encode(b),
+        }),
+        duetIntCodec,
+        duetDynamicCodec,
+      );
 }

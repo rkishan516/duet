@@ -1,5 +1,32 @@
 {
-  "commands": [],
+  "commands": [
+    {
+      "name": "bump",
+      "params": [
+        {"key": "path", "type": {"kind": "string"}},
+        {"key": "by", "type": {"kind": "int"}}
+      ],
+      "raises": {"kind": "dynamic"},
+      "returns": {"kind": "int"}
+    },
+    {
+      "name": "raise",
+      "params": [],
+      "raises": {"kind": "named", "name": "Unlucky"}
+    },
+    {
+      "name": "session.ping",
+      "params": []
+    },
+    {
+      "name": "subtract",
+      "params": [
+        {"key": "a", "type": {"kind": "int"}},
+        {"key": "b", "type": {"kind": "int"}}
+      ],
+      "returns": {"kind": "int"}
+    }
+  ],
   "root": {"kind": "named", "name": "App"},
   "types": [
     {
@@ -16,6 +43,13 @@
         {"key": "theme", "type": {"kind": "string"}}
       ],
       "name": "Editor"
+    },
+    {
+      "fields": [
+        {"key": "code", "type": {"kind": "string"}},
+        {"key": "short_by", "type": {"kind": "int"}}
+      ],
+      "name": "Unlucky"
     }
   ],
   "version": 2

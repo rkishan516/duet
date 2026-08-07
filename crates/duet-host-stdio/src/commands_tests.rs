@@ -31,7 +31,7 @@ fn the_registry_holds_exactly_the_three_documented_commands() {
     // A registry is the authorization boundary, so what is in it is part of
     // this host's contract rather than an implementation detail. A fourth
     // command appearing here without a guest case is what this catches.
-    assert_eq!(commands().names(), [BUMP, RAISE, SUBTRACT]);
+    assert_eq!(commands().names(), [BUMP, RAISE, PING, SUBTRACT]);
 }
 
 #[test]

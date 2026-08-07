@@ -22,16 +22,20 @@
 
 import {
   duetMap,
+  type DuetClient,
   type DuetValue,
 } from 'duet-protocol';
 
 import {
   DuetField,
+  duetDecodeOutcome,
+  duetDynamicCodec,
   duetFloatCodec,
   duetIntCodec,
   duetRequiredReading,
   duetStringCodec,
   type DuetCodec,
+  type DuetOutcome,
   type DuetRouter,
 } from 'duet-protocol/typed';
 
@@ -111,6 +115,40 @@ export const editorCodec: DuetCodec<Editor> = {
   },
 };
 
+/** `Unlucky`, as the schema describes it. */
+export interface Unlucky {
+  /** The `code` field. */
+  readonly code: string;
+  /** The `short_by` field. */
+  readonly shortBy: bigint;
+}
+
+/** The codec for {@link Unlucky}. */
+export const unluckyCodec: DuetCodec<Unlucky> = {
+  name: 'Unlucky',
+  encode: (value) =>
+    duetMap(
+      new Map<string, DuetValue>([
+        ['code', duetStringCodec.encode(value.code)],
+        ['short_by', duetIntCodec.encode(value.shortBy)],
+      ]),
+    ),
+  decode: (value) => {
+    if (value.kind !== 'map') return null;
+    const code = duetRequiredReading(
+      duetStringCodec,
+      value.entries.get('code') ?? null,
+    );
+    if (code.kind !== 'present') return null;
+    const shortBy = duetRequiredReading(
+      duetIntCodec,
+      value.entries.get('short_by') ?? null,
+    );
+    if (shortBy.kind !== 'present') return null;
+    return { code: code.value, shortBy: shortBy.value };
+  },
+};
+
 /**
  * Typed accessors for `App` at the store's root.
  *
@@ -173,5 +211,91 @@ export class AppEditorClient {
   /** `Editor.theme` at `editor.theme`. */
   get theme(): DuetField<string> {
     return new DuetField<string>(this.router, 'editor.theme', duetStringCodec);
+  }
+}
+
+/**
+ * The commands `App` declares, as typed methods.
+ *
+ * Every command name and every argument key here is a literal; see this
+ * file's header. A method resolves with what the command *answered*; a host
+ * that refused to run it rejects with a `DuetFailure` from
+ * `DuetClient.invoke`.
+ */
+export class AppCommands {
+  /** The client every command below is invoked through. */
+  readonly client: DuetClient;
+
+  /** Binds these commands to `client`. */
+  constructor(client: DuetClient) {
+    this.client = client;
+  }
+
+  /**
+   * Invokes `bump`.
+   *
+   * Returns `bigint`.
+   * Raises `DuetValue`.
+   */
+  async bump(params: {
+    readonly path: string;
+    readonly by: bigint;
+  }): Promise<DuetOutcome<bigint, DuetValue>> {
+    return duetDecodeOutcome<bigint, DuetValue>(
+      await this.client.invoke('bump', new Map<string, DuetValue>([
+        ['by', duetIntCodec.encode(params.by)],
+        ['path', duetStringCodec.encode(params.path)],
+      ])),
+      duetIntCodec,
+      duetDynamicCodec,
+    );
+  }
+
+  /**
+   * Invokes `raise`.
+   *
+   * Returns nothing; the schema declares no type, so this is the raw value.
+   * Raises `Unlucky`.
+   */
+  async raise(): Promise<DuetOutcome<DuetValue, Unlucky>> {
+    return duetDecodeOutcome<DuetValue, Unlucky>(
+      await this.client.invoke('raise'),
+      duetDynamicCodec,
+      unluckyCodec,
+    );
+  }
+
+  /**
+   * Invokes `session.ping`.
+   *
+   * Returns nothing; the schema declares no type, so this is the raw value.
+   * Raises nothing; the schema declares no type, so this is the raw value.
+   */
+  async sessionPing(): Promise<DuetOutcome<DuetValue, DuetValue>> {
+    return duetDecodeOutcome<DuetValue, DuetValue>(
+      await this.client.invoke('session.ping'),
+      duetDynamicCodec,
+      duetDynamicCodec,
+    );
+  }
+
+  /**
+   * Invokes `subtract`.
+   *
+   * Returns `bigint`.
+   * Raises nothing; the schema declares no type, so this is the raw value.
+   */
+  async subtract(params: {
+    readonly a: bigint;
+    readonly b: bigint;
+  }): Promise<DuetOutcome<bigint, DuetValue>> {
+    return duetDecodeOutcome<bigint, DuetValue>(
+      await this.client.invoke('subtract', new Map<string, DuetValue>([
+        ['a', duetIntCodec.encode(params.a)],
+        ['b', duetIntCodec.encode(params.b)],
+      ])),
+      duetIntCodec,
+      duetDynamicCodec,
+    );
   }
 }
