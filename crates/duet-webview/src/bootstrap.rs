@@ -1,6 +1,7 @@
 //! The HTML and JavaScript a webview guest boots with.
 
-/// A minimal guest client: `__duet.get/set/subscribe`, correlated by request id.
+/// A minimal guest client: `__duet.get/set/subscribe/invoke`, correlated by
+/// request id.
 ///
 /// Phase 4's codegen will generate a typed client over this same protocol; this
 /// is the hand-written floor that proves the transport works.
@@ -181,6 +182,27 @@ pub const BOOTSTRAP_HTML: &str = r#"<!doctype html>
     set: (path, value) => call("set", { path, value }),
     subscribe: (path) => call("subscribe", { path }),
 
+    // Runs a host command. `args` is an object of ALREADY-TAGGED values, keyed
+    // by the parameter names the host declares:
+    //
+    //   __duet.invoke("subtract", { a: {t:"i",v:"10"}, b: {t:"i",v:"3"} })
+    //
+    // It is wrapped with `map()` rather than sent as a plain object, because
+    // `args` is a `Value::Map` on the wire and its keys travel in code-point
+    // order. A guest that passed the object straight through would send
+    // whatever order it happened to insert in — which the host still DECODES
+    // correctly, since decoding is order-insensitive, but whose bytes are not
+    // canonical.
+    //
+    // The reply is a `returned` or a `raised` for a command that RAN, and a
+    // `failed` for one the host would not run — no such command, arguments
+    // that did not decode, a body that panicked. This bootstrap resolves all
+    // three: it hands back the whole response and the caller branches on
+    // `kind`. The published client (packages/duet-js) throws on `failed`
+    // instead, because it has a typed result to keep clean.
+    invoke: (command, args) =>
+      call("invoke", { command: command, args: map(args || {}) }),
+
     // Builds a tagged float value for `set`. Use this rather than writing
     // {t:"f", v:n} by hand: it is the only path that keeps -0's sign.
     float: (n) => ({ t: "f", v: encodeFloat(n) }),
@@ -280,6 +302,45 @@ mod tests {
             BOOTSTRAP_HTML.contains("window.ipc.postMessage"),
             "bootstrap must send on wry's IPC channel"
         );
+    }
+
+    #[test]
+    fn the_bootstrap_can_invoke_a_command() {
+        // Without this the fixture page can share state and nothing else, and
+        // no macOS example could drive command RPC over a real transport at
+        // all — the one place it can be shown over something other than stdio.
+        assert!(
+            BOOTSTRAP_HTML.contains("invoke:"),
+            "bootstrap must expose an invoke"
+        );
+        assert!(
+            BOOTSTRAP_HTML
+                .contains(r#"call("invoke", { command: command, args: map(args || {}) })"#),
+            "invoke must send the request kind the host decodes, with its args \
+             wrapped so the map's keys travel in canonical order"
+        );
+    }
+
+    #[test]
+    fn the_request_the_bootstrap_builds_for_an_invoke_is_one_the_host_decodes() {
+        // The substring assertions above pin the script's text; this pins what
+        // that text produces. A Rust test cannot execute JavaScript, so the
+        // request is transcribed by hand in exactly the shape the script emits
+        // — `kind`, a canonical decimal `id`, `command`, and `args` as a tagged
+        // map — and put through the real decoder. A bootstrap that spelled
+        // `args` as a bare object, or the kind as `"call"`, would pass every
+        // grep above and be refused here.
+        let request = r#"{"kind":"invoke","id":"1","command":"subtract",
+             "args":{"t":"m","v":{"a":{"t":"i","v":"10"},"b":{"t":"i","v":"3"}}}}"#;
+        let json: serde_json::Value = serde_json::from_str(request).expect("valid JSON");
+        match duet_protocol::decode_request(&json).expect("the host must decode it") {
+            duet_protocol::Request::Invoke { command, args, .. } => {
+                assert_eq!(command, "subtract");
+                assert_eq!(args.get("a"), Some(&duet_core::Value::Int(10)));
+                assert_eq!(args.get("b"), Some(&duet_core::Value::Int(3)));
+            }
+            other => panic!("expected an invoke, got {other:?}"),
+        }
     }
 
     #[test]

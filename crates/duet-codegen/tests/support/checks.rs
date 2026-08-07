@@ -289,3 +289,149 @@ pub fn fits(ty: &Ty, value: &Value) -> bool {
         _ => false,
     }
 }
+
+/// One command method found in a generated file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandBinding {
+    /// The wire name the method invokes, exactly as the literal spells it.
+    pub name: String,
+    /// The argument keys it sends, in the order they are written.
+    pub keys: Vec<String>,
+    /// The codec bound to the `returned` arm.
+    pub returns: String,
+    /// The codec bound to the `raised` arm.
+    pub raises: String,
+}
+
+/// Every command method in `text`.
+///
+/// Both emitters open an invocation with `invoke('<name>'`, put one argument per
+/// line beginning with its quoted key, and then write the return codec and the
+/// error codec on the two lines that follow. One scanner therefore serves both.
+/// Deliberately dumb, for the reason [`bindings`] is: a smarter parser could
+/// share a bug with the emitter it is checking.
+pub fn command_bindings(text: &str) -> Vec<CommandBinding> {
+    let mut found = Vec::new();
+    for after in text.split("invoke('").skip(1) {
+        let Some(end) = after.find('\'') else {
+            continue;
+        };
+        let name = after[..end].to_string();
+        let rest = &after[end + 1..];
+        let mut keys = Vec::new();
+        let mut codecs = Vec::new();
+        for line in rest.lines().skip(1) {
+            let trimmed = line.trim();
+            // An argument line opens with its quoted key; a bracket line closes
+            // the argument literal; anything else is the first codec.
+            if let Some(key) = argument_key(trimmed) {
+                keys.push(key);
+                continue;
+            }
+            if trimmed.starts_with('}') || trimmed.starts_with(']') {
+                continue;
+            }
+            codecs.push(trimmed.trim_end_matches(',').to_string());
+            if codecs.len() == 2 {
+                break;
+            }
+        }
+        found.push(CommandBinding {
+            name,
+            keys,
+            returns: codecs.first().cloned().unwrap_or_default(),
+            raises: codecs.get(1).cloned().unwrap_or_default(),
+        });
+    }
+    found
+}
+
+/// The argument key a generated line opens with, if it opens with one.
+///
+/// `'by': …` in Dart and `['by', …]` in TypeScript.
+fn argument_key(trimmed: &str) -> Option<String> {
+    let opened = trimmed.strip_prefix("['").or_else(|| {
+        trimmed
+            .strip_prefix('\'')
+            .filter(|_| trimmed.contains("':"))
+    })?;
+    let end = opened.find('\'')?;
+    Some(opened[..end].to_string())
+}
+
+/// Checks every command a generated file invokes is one `schema` declares, with
+/// exactly the parameter keys it declares.
+///
+/// The command-side counterpart of [`segments_are_schema_keys`], and the check a
+/// golden comparison cannot make: a camel-cased command name is not a syntax
+/// error, not a type error and not a decode error — it is a refusal at run time.
+/// `crates/duet-host-stdio/tests/commands.rs` takes the same scan one step
+/// further and resolves each name against a **live registry**.
+///
+/// # Errors
+///
+/// A description of the first command the schema does not declare, or the first
+/// argument list that disagrees with the declared parameters.
+pub fn commands_resolve(text: &str, schema: &Schema) -> Result<usize, String> {
+    let found = command_bindings(text);
+    for binding in &found {
+        let declared = schema
+            .commands()
+            .iter()
+            .find(|c| c.name == binding.name)
+            .ok_or_else(|| format!("{:?} is not a command the schema has", binding.name))?;
+        let mut expected: Vec<&str> = declared.params.iter().map(|p| p.key.as_str()).collect();
+        let mut sent: Vec<&str> = binding.keys.iter().map(String::as_str).collect();
+        expected.sort_unstable();
+        sent.sort_unstable();
+        if sent != expected {
+            return Err(format!(
+                "{:?} is called with {sent:?} but the schema declares {expected:?}",
+                binding.name
+            ));
+        }
+    }
+    Ok(found.len())
+}
+
+/// Checks the codecs bound to each command's two reply arms are the ones its
+/// schema types call for.
+///
+/// A restatement of the emitters' mapping, exactly as
+/// [`codecs_match_the_schema`] is, and worth the same caveat: it catches a
+/// change made on one side and not the other. The independent evidence that the
+/// mapping is right is in the guest packages, where a generated method is driven
+/// against a live host and the decoded value is compared to an exact literal.
+///
+/// # Errors
+///
+/// A description of the first arm whose codec disagrees.
+pub fn command_codecs_match_the_schema(
+    text: &str,
+    schema: &Schema,
+    language: Language,
+) -> Result<usize, String> {
+    let found = command_bindings(text);
+    for binding in &found {
+        let declared = schema
+            .commands()
+            .iter()
+            .find(|c| c.name == binding.name)
+            .ok_or_else(|| format!("{:?} is not a command the schema has", binding.name))?;
+        for (what, ty, bound) in [
+            ("returns", declared.returns.as_ref(), &binding.returns),
+            ("raises", declared.raises.as_ref(), &binding.raises),
+        ] {
+            // An undeclared type is generated with the identity codec, because
+            // the wire still answers there — with null.
+            let want = codec_for(ty.unwrap_or(&Ty::Dynamic), language);
+            if bound != &want {
+                return Err(format!(
+                    "{:?} binds {bound} for {what} but its schema type calls for {want}",
+                    binding.name
+                ));
+            }
+        }
+    }
+    Ok(found.len())
+}

@@ -12,9 +12,12 @@ use std::collections::BTreeSet;
 
 use duet_schema::Ty;
 
+use crate::command::PlannedCommand;
 use crate::emit::{Options, header};
 use crate::name::lower_camel;
-use crate::plan::{Plan, PlannedAccessor, PlannedClass, PlannedField, PlannedTy, PlannedType};
+use crate::plan::{
+    Plan, PlannedAccessor, PlannedClass, PlannedField, PlannedTy, PlannedType, commands_class_name,
+};
 
 /// The body under construction, plus the runtime symbols it has reached for.
 #[derive(Default)]
@@ -56,6 +59,13 @@ pub(crate) fn emit(plan: &Plan, options: &Options) -> String {
     for class in &plan.classes {
         body.push("\n");
         emit_client(&mut body, class);
+    }
+    // Nothing at all for a schema that declares no commands, so such a schema
+    // generates byte-for-byte what it generated before commands existed —
+    // including its import block, which is written from what the body used.
+    if !plan.commands.is_empty() {
+        body.push("\n");
+        emit_commands(&mut body, plan);
     }
 
     let mut out = header(options, "TypeScript");
@@ -99,6 +109,110 @@ fn imports(body: &Body, options: &Options) -> String {
         }
     }
     out
+}
+
+/// The commands class: one method per command, each a literal name, a literal
+/// key per argument, and a delegation to the hand-written `invoke`.
+fn emit_commands(body: &mut Body, plan: &Plan) {
+    let name = commands_class_name(&plan.root);
+    body.root_types.insert("DuetClient");
+    body.push(&format!(
+        "/**\n * The commands `{}` declares, as typed methods.\n *\n\
+         \x20* Every command name and every argument key here is a literal; see this\n\
+         \x20* file's header. A method resolves with what the command *answered*; a host\n\
+         \x20* that refused to run it rejects with a `DuetFailure` from\n\
+         \x20* `DuetClient.invoke`.\n */\n\
+         export class {name} {{\n\
+         \x20 /** The client every command below is invoked through. */\n  readonly client: DuetClient;\n\n\
+         \x20 /** Binds these commands to `client`. */\n  constructor(client: DuetClient) {{\n    this.client = client;\n  }}\n",
+        plan.root
+    ));
+    for command in &plan.commands {
+        body.push("\n");
+        emit_command(body, command);
+    }
+    body.push("}\n");
+}
+
+/// One command's method.
+fn emit_command(body: &mut Body, command: &PlannedCommand) {
+    let returns = ts_inner_ty(body, &command.returns);
+    let raises = ts_inner_ty(body, &command.raises);
+    body.typed_types.insert("DuetOutcome");
+    let decode = body.typed_value("duetDecodeOutcome");
+    body.push(&format!(
+        "  /**\n   * Invokes `{}`.\n   *\n   * {}\n   * {}\n   */\n",
+        command.name,
+        describe_result("Returns", command.declares_return, &returns),
+        describe_result("Raises", command.declares_raise, &raises),
+    ));
+    let members: Vec<String> = command
+        .params
+        .iter()
+        .map(|param| {
+            let ty = ts_inner_ty(body, &param.ty);
+            format!("readonly {}: {ty};", param.accessor)
+        })
+        .collect();
+    let signature = if members.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "params: {{\n{}  }}",
+            members
+                .iter()
+                .map(|member| format!("    {member}\n"))
+                .collect::<String>()
+        )
+    };
+    body.push(&format!(
+        "  async {}({signature}): Promise<DuetOutcome<{returns}, {raises}>> {{\n    return {decode}<{returns}, {raises}>(\n",
+        command.method
+    ));
+    emit_invocation(body, command);
+    let return_codec = ts_codec(body, &command.returns);
+    let raise_codec = ts_codec(body, &command.raises);
+    body.push(&format!(
+        "      {return_codec},\n      {raise_codec},\n    );\n  }}\n"
+    ));
+}
+
+/// The `this.client.invoke(...)` call, with the argument map in wire-key order.
+fn emit_invocation(body: &mut Body, command: &PlannedCommand) {
+    let name = &command.name;
+    if command.params.is_empty() {
+        body.push(&format!("      await this.client.invoke('{name}'),\n"));
+        return;
+    }
+    body.root_types.insert("DuetValue");
+    // The name stays on the same line as `invoke(` in both languages, so a
+    // reviewer — and `crates/duet-host-stdio/tests/commands.rs`, which resolves
+    // every one of them against a live registry — can grep one pattern for the
+    // exact wire string rather than two.
+    body.push(&format!(
+        "      await this.client.invoke('{name}', new Map<string, DuetValue>([\n"
+    ));
+    for param in command.sorted_params() {
+        let codec = ts_codec(body, &param.ty);
+        body.push(&format!(
+            "        ['{}', {codec}.encode(params.{})],\n",
+            param.key, param.accessor
+        ));
+    }
+    body.push("      ])),\n");
+}
+
+/// One line of a command method's doc comment.
+///
+/// A command that declares no type at that position still *answers* there —
+/// with `null` — so the generated doc says so rather than leaving a reader to
+/// infer it from a `DuetValue` in the signature.
+fn describe_result(what: &str, declared: bool, ty: &str) -> String {
+    if declared {
+        format!("{what} `{ty}`.")
+    } else {
+        format!("{what} nothing; the schema declares no type, so this is the raw value.")
+    }
 }
 
 /// `export interface Editor { … }`.

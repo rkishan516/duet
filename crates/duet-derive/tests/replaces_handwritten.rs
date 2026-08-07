@@ -5,11 +5,11 @@
 //!
 //! `crates/duet-host-stdio/src/commands.rs` was written before any generator
 //! existed, precisely so that a later generator would have something to be
-//! compared to rather than being its own specification. Its three commands are
-//! what the Dart and JavaScript live conformance runs already invoke, and their
-//! reply bytes are asserted there.
+//! compared to rather than being its own specification. Its commands are what
+//! the Dart and JavaScript live conformance runs already invoke, and their reply
+//! bytes are asserted there.
 //!
-//! So this file re-expresses all three with `#[command]` and drives **both**
+//! So this file re-expresses all of them with `#[command]` and drives **both**
 //! registries — the hand-written one, imported from the host crate, and the
 //! generated one — through `duet_protocol::handle_text_with` over the same
 //! table of requests, on two stores seeded identically. Nothing about the
@@ -131,6 +131,14 @@ fn raise() -> Result<(), Unlucky> {
     })
 }
 
+/// `session.ping`: no arguments, no result, no error.
+///
+/// The one command here that cannot differ from its hand-written twin in any
+/// way, which is why it is worth including: a registry comparison that only
+/// covered the interesting commands would not notice this one going missing.
+#[command(rename = "session.ping")]
+fn ping() {}
+
 #[command]
 fn bump(ctx: &CommandContext, path: PathArg, by: i64) -> Result<i64, BumpError> {
     let current = match ctx.store().get(&path.0) {
@@ -173,7 +181,7 @@ fn kind_of(value: &Value) -> &'static str {
     }
 }
 
-static COMMANDS: [CommandEntry; 3] = commands![subtract, raise, bump];
+static COMMANDS: [CommandEntry; 4] = commands![subtract, raise, bump, ping];
 
 /// The seed both hosts start from — the `app` fixture's shape, reduced to what
 /// these three commands touch.

@@ -32,7 +32,11 @@ import { describe, test } from 'node:test';
 import { duetMap, encodeValueText, parseDuetPath, type DuetValue } from '../src/index.ts';
 import { duetValueAt, type DuetCodec } from '../src/typed/index.ts';
 
-import { appCodec, editorCodec as appEditorCodec } from './generated/app.duet.ts';
+import {
+  appCodec,
+  editorCodec as appEditorCodec,
+  unluckyCodec,
+} from './generated/app.duet.ts';
 import {
   editorCodec as wideEditorCodec,
   outerCodec,
@@ -62,7 +66,7 @@ type AnyCodec = DuetCodec<NonNullable<unknown>>;
  * rather than going unchecked.
  */
 const CODECS: Record<string, Record<string, AnyCodec>> = {
-  app: { App: appCodec, Editor: appEditorCodec },
+  app: { App: appCodec, Editor: appEditorCodec, Unlucky: unluckyCodec },
   wide: { Editor: wideEditorCodec, Outer: outerCodec, Wide: wideCodec },
 };
 
@@ -74,7 +78,7 @@ const CODECS: Record<string, Record<string, AnyCodec>> = {
  * truncated to one entry would pass every assertion below.
  */
 const SCHEMA_COUNT = 2;
-const TYPE_COUNT = 5;
+const TYPE_COUNT = 6;
 const PATH_COUNT = 31;
 
 const corpus = loadSchemaCorpus();

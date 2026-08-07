@@ -58,14 +58,17 @@ import {
   duetAbsent,
   duetNone,
   duetPresent,
+  type DuetOutcome,
   type DuetReading,
   type DuetWatch,
 } from '../src/typed/index.ts';
 
 import {
   AppClient,
+  AppCommands,
   type App,
   type Editor as AppEditor,
+  type Unlucky,
 } from './generated/app.duet.ts';
 import {
   WideClient,
@@ -880,3 +883,147 @@ function bump(client: DuetClient, path: string, by: bigint): Promise<DuetInvocat
     ]),
   );
 }
+
+/**
+ * The **generated** command client, driven against the real host.
+ *
+ * The suite above drives `DuetClient.invoke` by hand: a string name and a map of
+ * tagged values, written out at each call site. This drives `AppCommands` — the
+ * class `duet-codegen` emits from `schema/app.json` — over the same pipe, and it
+ * is the only thing in this package that proves the generated names, argument
+ * keys and codecs are the ones a live host answers.
+ *
+ * A golden test cannot make this check. `client.invoke('sessionPing')` is not a
+ * syntax error, not a type error and not a decode error; it is a refusal at run
+ * time, and a byte comparison would have recorded the camel-cased spelling as
+ * the truth forever.
+ */
+describe('the generated commands class, against the real host', { skip }, () => {
+  const schema = schemaNamed(corpus, 'app');
+  let host: StdioHost;
+  let client: DuetClient;
+  let router: DuetRouter;
+  const commands = (): AppCommands => new AppCommands(client);
+
+  before(() => {
+    host = StdioHost.start('app');
+    client = new DuetClient(host);
+    router = new DuetRouter(client);
+    router.attach();
+  });
+
+  after(async () => {
+    assert.deepStrictEqual(host.unmatched, [], 'the host sent lines answering no request');
+    await host.close();
+  });
+
+  beforeEach(async () => {
+    await client.set('', schema.seed);
+  });
+
+  test(
+    'a generated method binds its arguments by key and not by position',
+    { timeout: CASE_TIMEOUT_MS },
+    async () => {
+      // Subtraction is not commutative, so a generated method that encoded `a`
+      // under `b`'s key answers -7 rather than 7. An `add` would have agreed
+      // with a completely broken binding.
+      assert.deepStrictEqual(await commands().subtract({ a: 10n, b: 3n }), {
+        kind: 'ok',
+        value: 7n,
+      });
+      assert.deepStrictEqual(await commands().subtract({ a: 3n, b: 10n }), {
+        kind: 'ok',
+        value: -7n,
+      });
+    },
+  );
+
+  test(
+    'a generated method decodes a raised error into its schema type',
+    { timeout: CASE_TIMEOUT_MS },
+    async () => {
+      // The `raises` type in `schema/app.json` is `Unlucky`, and the generated
+      // method binds `unluckyCodec` to it. What arrives is that struct, not a
+      // `DuetValue` the caller has to take apart.
+      const outcome: DuetOutcome<DuetValue, Unlucky> = await commands().raise();
+      assert.equal(outcome.kind, 'err');
+      if (outcome.kind !== 'err') return;
+      assert.equal(outcome.error.code, 'unlucky');
+      assert.equal(
+        outcome.error.shortBy,
+        42n,
+        'the member is camel-cased and the wire key is not',
+      );
+    },
+  );
+
+  test(
+    'a dotted command name reaches the host uncamel-cased',
+    { timeout: CASE_TIMEOUT_MS },
+    async () => {
+      // `session.ping` is the one command whose method name differs from its
+      // wire name by more than a case change. The host registers
+      // `session.ping`; a client that sent `sessionPing` would be refused, and
+      // nothing before this point could have noticed.
+      const outcome = await commands().sessionPing();
+      assert.equal(outcome.kind, 'ok');
+      if (outcome.kind !== 'ok') return;
+      assert.equal(
+        encodeValueText(outcome.value),
+        '{"t":"n"}',
+        'a command with no declared result answers null',
+      );
+    },
+  );
+
+  test(
+    'a generated command writes the store the generated accessors read',
+    { timeout: CASE_TIMEOUT_MS },
+    async () => {
+      // The whole "commands and state are one world" claim, with both halves
+      // generated from one schema.
+      const state = new AppClient(router);
+      assert.deepStrictEqual(await state.counter.get(), duetPresent(0n));
+      assert.deepStrictEqual(await commands().bump({ path: 'counter', by: 5n }), {
+        kind: 'ok',
+        value: 5n,
+      });
+      assert.deepStrictEqual(await state.counter.get(), duetPresent(5n));
+    },
+  );
+
+  test(
+    'an unknown command still throws, through the generated class too',
+    { timeout: CASE_TIMEOUT_MS },
+    async () => {
+      // The refused/ran line, from the generated side. A name the host does not
+      // register rejects with `DuetFailure`; it never becomes an `err`, which
+      // would say something ran and failed.
+      await assert.rejects(
+        () => client.invoke('sessionPing'),
+        DuetFailure,
+        'the camel-cased spelling must not resolve on the host',
+      );
+    },
+  );
+
+  test(
+    'a command that ran and failed is an outcome, not a rejection',
+    { timeout: CASE_TIMEOUT_MS },
+    async () => {
+      // `bump`'s declared `raises` is `dynamic`, which is the truth about this
+      // host: it raises three differently shaped maps under one name. So the
+      // generated method decodes it through `duetDynamicCodec` and the caller
+      // gets the raw value — typed as `DuetValue`, which is what the schema
+      // says.
+      const outcome = await commands().bump({ path: 'title', by: 1n });
+      assert.equal(outcome.kind, 'err');
+      if (outcome.kind !== 'err') return;
+      assert.equal(
+        encodeValueText(outcome.error),
+        '{"t":"m","v":{"code":{"t":"s","v":"not_an_integer"},"found":{"t":"s","v":"string"}}}',
+      );
+    },
+  );
+});

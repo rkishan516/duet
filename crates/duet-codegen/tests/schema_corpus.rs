@@ -374,8 +374,8 @@ fn the_corpus_states_enough_to_drive_a_conformance_run() {
     // above it. Changing these is a deliberate review step.
     const SCHEMAS: usize = 2;
     const PATHS: usize = 31;
-    const TYPES: usize = 5;
-    const FIELDS: usize = 27;
+    const TYPES: usize = 6;
+    const FIELDS: usize = 29;
 
     let document = parsed();
     let schemas = array(&document, "schemas");

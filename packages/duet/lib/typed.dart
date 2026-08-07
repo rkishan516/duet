@@ -31,6 +31,9 @@
 ///   notifications to watchers by subscription id.
 /// - [DuetField] and [DuetOptionalField] — typed `get`/`set`/`watch` at one
 ///   fixed path.
+/// - [DuetOutcome] and [duetDecodeOutcome] — the two arms of an `invoke` that
+///   ran, decoded through the codecs the command's schema declares, and the
+///   third arm for an answer no codec here could read.
 ///
 /// It is useful on its own: a guest with no generated code at all can build
 /// fields by hand and get a mirror that stays correct under concurrent writes
@@ -40,6 +43,7 @@ library;
 export 'src/typed/duet_codec.dart';
 export 'src/typed/duet_field.dart';
 export 'src/typed/duet_merge.dart';
+export 'src/typed/duet_outcome.dart';
 export 'src/typed/duet_reading.dart';
 export 'src/typed/duet_router.dart';
 export 'src/typed/duet_value_path.dart';

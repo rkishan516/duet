@@ -45,6 +45,7 @@ final Map<String, Map<String, DuetCodec<Object>>> _codecs =
   'app': <String, DuetCodec<Object>>{
     'App': const app.AppCodec(),
     'Editor': const app.EditorCodec(),
+    'Unlucky': const app.UnluckyCodec(),
   },
   'wide': <String, DuetCodec<Object>>{
     'Editor': const wide.EditorCodec(),
@@ -59,7 +60,7 @@ final Map<String, Map<String, DuetCodec<Object>>> _codecs =
 /// own: a corpus test that consumes whatever it is given proves nothing, and a
 /// file truncated to one entry would pass every assertion below.
 const int _schemaCount = 2;
-const int _typeCount = 5;
+const int _typeCount = 6;
 const int _pathCount = 31;
 
 void main() {

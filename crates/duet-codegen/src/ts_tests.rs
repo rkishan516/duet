@@ -221,3 +221,129 @@ fn the_root_path_is_described_rather_than_shown_as_an_empty_literal() {
     assert_eq!(describe(""), "the store's root");
     assert_eq!(describe("editor.zoom"), "`editor.zoom`");
 }
+
+/// One command, spelled compactly.
+fn command(
+    name: &str,
+    params: Vec<FieldDef>,
+    returns: Option<Ty>,
+    raises: Option<Ty>,
+) -> duet_schema::CommandDef {
+    duet_schema::CommandDef {
+        name: name.to_string(),
+        params,
+        returns,
+        raises,
+    }
+}
+
+/// The TypeScript source for a schema declaring `commands`.
+fn with_commands(commands: Vec<duet_schema::CommandDef>) -> String {
+    let schema = Schema::build_with_commands(
+        Ty::Named("Root".to_string()),
+        vec![
+            TypeDef {
+                name: "Root".to_string(),
+                fields: vec![FieldDef::new("count", Ty::Int)],
+            },
+            TypeDef {
+                name: "Leaf".to_string(),
+                fields: vec![FieldDef::new("zoom", Ty::Float)],
+            },
+        ],
+        commands,
+    )
+    .expect("a legal schema");
+    emit(
+        &Plan::build(&schema).expect("emittable"),
+        &Options::new("test", "test"),
+    )
+}
+
+#[test]
+fn a_command_class_is_emitted_only_when_the_schema_declares_commands() {
+    // Including the import block, which this emitter writes from what the body
+    // used: a commands class pulls in `DuetClient` and `duetDecodeOutcome`, and
+    // a command-free schema must import neither.
+    let without = with_commands(Vec::new());
+    assert!(!without.contains("Commands"), "{without}");
+    assert!(!without.contains("DuetClient"), "{without}");
+    assert!(!without.contains("duetDecodeOutcome"), "{without}");
+
+    let with = with_commands(vec![command("ping", Vec::new(), None, None)]);
+    assert!(with.contains("export class RootCommands {"), "{with}");
+    assert!(with.contains("  type DuetClient,\n"), "{with}");
+    assert!(with.contains("  duetDecodeOutcome,\n"), "{with}");
+    assert!(with.contains("  type DuetOutcome,\n"), "{with}");
+}
+
+#[test]
+fn a_command_name_reaches_the_wire_verbatim_and_the_method_camel_cased() {
+    let source = with_commands(vec![command("documents.close", Vec::new(), None, None)]);
+    assert!(
+        source.contains("this.client.invoke('documents.close')"),
+        "{source}"
+    );
+    assert!(source.contains("async documentsClose()"), "{source}");
+    assert!(
+        !source.contains("invoke('documentsClose')"),
+        "the camel-cased name must never reach the wire:\n{source}"
+    );
+}
+
+#[test]
+fn argument_keys_are_literals_in_wire_order_and_the_signature_is_in_declaration_order() {
+    let source = with_commands(vec![command(
+        "bump",
+        vec![FieldDef::new("path", Ty::Str), FieldDef::new("by", Ty::Int)],
+        Some(Ty::Int),
+        None,
+    )]);
+    let signature = source.split("async bump(").nth(1).expect("the signature");
+    assert!(
+        signature.find("path: string").expect("path") < signature.find("by: bigint").expect("by"),
+        "the signature keeps declaration order:\n{source}"
+    );
+    // Split on the invocation rather than on the `Map` literal: the struct
+    // encoder above builds one of those too, and a scanner that found it
+    // instead would compare the wrong keys and pass.
+    let args = source
+        .split("this.client.invoke(")
+        .nth(1)
+        .expect("the args literal");
+    assert!(
+        args.find("['by',").expect("by") < args.find("['path',").expect("path"),
+        "the args literal must be in wire-key order:\n{source}"
+    );
+}
+
+#[test]
+fn a_command_binds_the_codecs_its_schema_types_call_for() {
+    let source = with_commands(vec![command(
+        "bump",
+        Vec::new(),
+        Some(Ty::Int),
+        Some(Ty::Named("Leaf".to_string())),
+    )]);
+    assert!(
+        source.contains("Promise<DuetOutcome<bigint, Leaf>>"),
+        "{source}"
+    );
+    assert!(
+        source.contains("      duetIntCodec,\n      leafCodec,\n"),
+        "the return and error codecs must be bound in that order:\n{source}"
+    );
+}
+
+#[test]
+fn a_command_with_no_declared_types_binds_the_dynamic_codec_on_both_arms() {
+    let source = with_commands(vec![command("ping", Vec::new(), None, None)]);
+    assert!(
+        source.contains("Promise<DuetOutcome<DuetValue, DuetValue>>"),
+        "{source}"
+    );
+    assert!(
+        source.contains("      duetDynamicCodec,\n      duetDynamicCodec,\n"),
+        "{source}"
+    );
+}

@@ -127,6 +127,18 @@ const RESERVED: &[&str] = &[
 /// the class needs, or the handle on the struct as a whole.
 const EMITTER_OWNED: &[&str] = &["router", "self"];
 
+/// The name the generated **commands** class puts on itself.
+///
+/// Separate from [`EMITTER_OWNED`] because it applies to a different namespace:
+/// a schema *field* called `client` is perfectly emittable, and refusing it
+/// would be a rule imposed on state by a feature state has nothing to do with.
+/// Inside the commands class, though, `client` is both the field every method
+/// body reads and — in Dart, where a named parameter shadows a field for the
+/// whole body — a name a parameter would silently steal. So it is refused for
+/// command method names and for parameter names alike, in both languages, so
+/// that one schema cannot generate two clients with different spellings.
+const COMMANDS_OWNED: &[&str] = &["client"];
+
 /// True if `key` may be spelled inside a generated path literal with no
 /// escaping and no ambiguity.
 ///
@@ -149,6 +161,28 @@ pub fn is_usable_identifier(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
         && !RESERVED.contains(&name)
         && !EMITTER_OWNED.contains(&name)
+}
+
+/// True if `name` may be a member of the generated commands class — a method
+/// name or a parameter name.
+///
+/// [`is_usable_identifier`] plus the one name the generated commands class puts
+/// on itself, `client`. The two sets are separate because they apply to
+/// different namespaces: a schema *field* called `client` is perfectly
+/// emittable, and refusing it would impose a rule on state that only commands
+/// need.
+pub fn is_usable_member(name: &str) -> bool {
+    is_usable_identifier(name) && !COMMANDS_OWNED.contains(&name)
+}
+
+/// A dotted command name as one `lowerCamelCase` identifier.
+///
+/// `documents.close` becomes `documentsClose`, exactly as `documents_close`
+/// would: a dot separates in the same way an underscore does, and a name that
+/// used both must not land on two different identifiers. The **wire** name is
+/// untouched, here as everywhere — see this module's opening rule.
+pub fn command_method(name: &str) -> String {
+    lower_camel(&name.replace('.', "_"))
 }
 
 /// `snake_case` to `lowerCamelCase`, the accessor spelling both target

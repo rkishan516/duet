@@ -20,6 +20,7 @@
 
 use std::panic::{self, AssertUnwindSafe};
 
+use duet_command::{CommandEntry, Commands};
 use duet_core::{Notification, SubscriberId};
 use duet_host::BackendError;
 use duet_protocol::Push;
@@ -89,11 +90,14 @@ pub struct WebviewSurface {
 }
 
 impl WebviewSurface {
-    /// Builds a webview in `window`, wired to `store` as `subscriber`.
+    /// Builds a webview in `window` that reads and writes `store` but can run
+    /// **no commands**.
     ///
-    /// Replies are posted to `proxy` as [`DuetEvent::WebviewScript`]; the
-    /// caller's event loop must hand each one to [`WebviewSurface::eval`].
-    /// Without that arm, every reply is dropped and the guest hangs.
+    /// The entry point for a guest that shares state and nothing else; an
+    /// `invoke` from it is answered with a `failed` naming the command, exactly
+    /// as [`duet_protocol::handle_text`] answers one. Use
+    /// [`with_commands`](WebviewSurface::with_commands) to give a guest a
+    /// registry.
     ///
     /// # Errors
     ///
@@ -104,12 +108,48 @@ impl WebviewSurface {
         subscriber: SubscriberId,
         proxy: EventLoopProxy<DuetEvent>,
     ) -> Result<Self, BackendError> {
+        WebviewSurface::with_commands(window, store, subscriber, proxy, &[])
+    }
+
+    /// Builds a webview in `window`, wired to `store` as `subscriber`, able to
+    /// run `commands`.
+    ///
+    /// Replies are posted to `proxy` as [`DuetEvent::WebviewScript`]; the
+    /// caller's event loop must hand each one to
+    /// [`WebviewSurface::deliver`]. Without that arm, every reply is dropped
+    /// and the guest hangs.
+    ///
+    /// # `commands` **is** this surface's authorization boundary
+    ///
+    /// A guest names a command; it does not name a permission or itself. What
+    /// resolves is decided entirely by the table passed here, so a webview
+    /// running content the embedder did not write can be given a different
+    /// registry from a trusted Flutter surface over the same store — and has no
+    /// vocabulary at all for the commands it was not given. See
+    /// [`duet_command::Commands`].
+    ///
+    /// # Errors
+    ///
+    /// [`BackendError::Unavailable`] if `wry` could not create the webview.
+    pub fn with_commands(
+        window: &Window,
+        store: StoreHandle,
+        subscriber: SubscriberId,
+        proxy: EventLoopProxy<DuetEvent>,
+        commands: &'static [CommandEntry],
+    ) -> Result<Self, BackendError> {
         // The handler owns clones of everything it needs and borrows nothing
         // from this call — required, since it outlives `new`. Note wry's
         // bound is `Fn`, not `FnMut`, so it may only take `&self` on what it
         // captures; `EventLoopProxy::send_event` and `StoreHandle`'s methods
         // both satisfy that.
         let handler_store = store.clone();
+        // Built once, here, rather than per message: `Commands::from_entries`
+        // allocates a boxed closure per entry, and doing that inside the
+        // handler would put it on the path of every `get` a guest makes.
+        // `Commands` is `Send + Sync` and its `invoke` takes `&self`, which is
+        // what `wry`'s `Fn` bound on the handler requires.
+        let handler_commands = Commands::from_entries(commands);
         let webview = WebViewBuilder::new()
             .with_html(duet_webview::bootstrap::BOOTSTRAP_HTML)
             .with_ipc_handler(move |request| {
@@ -124,7 +164,12 @@ impl WebviewSurface {
                 // total by construction today; a user command body reached
                 // through `handle_text_with` is not, and cannot be made so.
                 let served = panic::catch_unwind(AssertUnwindSafe(|| {
-                    serve(&handler_store, subscriber, request.body())
+                    serve(
+                        &handler_store,
+                        subscriber,
+                        &handler_commands,
+                        request.body(),
+                    )
                 }));
                 let reply = match &served {
                     Ok(reply) => reply.as_str(),
@@ -137,9 +182,10 @@ impl WebviewSurface {
                 //
                 // A send failure means the event loop has already exited, so
                 // there is no guest left to answer — dropping is correct.
-                let _ = proxy.send_event(DuetEvent::WebviewScript(duet_webview::response_script(
-                    reply,
-                )));
+                let _ = proxy.send_event(DuetEvent::WebviewScript {
+                    subscriber,
+                    script: duet_webview::response_script(reply),
+                });
             })
             .build(window)
             .map_err(|e| BackendError::Unavailable(format!("webview: {e}")))?;
@@ -148,6 +194,35 @@ impl WebviewSurface {
             webview,
             subscriber,
         })
+    }
+
+    /// This surface's host-assigned subscriber — the one its handler serves,
+    /// the one [`WebviewSurface::push`] filters notifications on, and the one
+    /// [`DuetEvent::WebviewScript`] names.
+    pub fn subscriber(&self) -> SubscriberId {
+        self.subscriber
+    }
+
+    /// Evaluates a [`DuetEvent::WebviewScript`] in this guest, or drops it if
+    /// it was produced for a different one.
+    ///
+    /// The reply path's half of the confidentiality boundary
+    /// [`WebviewSurface::push`] enforces for notifications, and enforced the
+    /// same way and with the same predicate. An event loop owning two webviews
+    /// hands each script to both surfaces and lets each decide, so a caller
+    /// cannot deliver one guest's reply to another by forgetting a check.
+    ///
+    /// Silently succeeding for another guest's script is deliberate: fan-out to
+    /// a surface that is not the addressee is the normal case, not a fault.
+    ///
+    /// # Errors
+    ///
+    /// [`BackendError::Unavailable`] if the script could not be evaluated.
+    pub fn deliver(&self, subscriber: SubscriberId, script: &str) -> Result<(), BackendError> {
+        if !crate::flutter_surface::serves(subscriber, self.subscriber) {
+            return Ok(());
+        }
+        self.eval(script)
     }
 
     /// Delivers a notification to this guest, or drops it silently if it is
@@ -224,14 +299,17 @@ impl WebviewSurface {
 /// entirely; a size cap that only a human on a Mac can exercise is a size cap
 /// nobody checks.
 ///
-/// Total: [`duet_protocol::handle_text`] answers malformed guest input with a
-/// `failed` response rather than an error, and the oversize branch answers with
-/// a `failed` of its own.
-fn serve(store: &StoreHandle, subscriber: SubscriberId, body: &str) -> String {
+/// Total: [`duet_protocol::handle_text_with`] answers malformed guest input with
+/// a `failed` response rather than an error, and the oversize branch answers
+/// with a `failed` of its own. A command **body** is not total — it is arbitrary
+/// user code — but `handle_text_with` catches a panic out of one and turns it
+/// into a `failed` too, which is why the caller's `catch_unwind` is a second
+/// line of defence rather than the only one.
+fn serve(store: &StoreHandle, subscriber: SubscriberId, commands: &Commands, body: &str) -> String {
     if exceeds_inbound_cap(body.len()) {
         return OVERSIZE_FAILURE.to_string();
     }
-    duet_protocol::handle_text(store, subscriber, body)
+    duet_protocol::handle_text_with(store, subscriber, commands, body)
 }
 
 /// Whether a request body of `len` bytes is over [`MAX_INBOUND_BYTES`].
@@ -260,6 +338,57 @@ mod tests {
 
     fn rt() -> Runtime {
         Runtime::spawn(Value::map([("editor", Value::Int(0))]), NullSink)
+    }
+
+    #[test]
+    fn a_reply_is_routed_to_the_surface_it_was_produced_for_and_no_other() {
+        // The gap this closes was real: `DuetEvent::WebviewScript` used to
+        // carry a bare `String`, so an event loop owning two webviews could
+        // only guess which one a reply belonged to. With one guest the guess is
+        // always right; with two it settles the wrong pending call, hangs the
+        // right one, and hands one renderer another renderer's data.
+        //
+        // `deliver` cannot run without a live `WebView`, so the decision it is
+        // built on is asserted directly — the same arrangement
+        // `flutter_surface`'s `push` filter is tested under, and deliberately
+        // the same predicate.
+        assert!(
+            crate::flutter_surface::serves(SubscriberId(7), SubscriberId(7)),
+            "a script produced for this surface must be evaluated"
+        );
+        assert!(
+            !crate::flutter_surface::serves(SubscriberId(8), SubscriberId(7)),
+            "another guest's reply must not be evaluated here"
+        );
+        assert!(
+            !crate::flutter_surface::serves(SubscriberId(0), SubscriberId(7)),
+            "subscriber 0 must not be treated as a wildcard"
+        );
+    }
+
+    #[test]
+    fn a_surface_with_no_commands_refuses_an_invoke_by_name() {
+        // What `WebviewSurface::new` builds. The refusal must say "there is
+        // nothing by that name" rather than "malformed request": the guest's
+        // message was well-formed and simply unserved, and telling a developer
+        // otherwise sends them to debug their encoder.
+        let rt = rt();
+        let reply = serve(
+            &rt.handle(),
+            SubscriberId(1),
+            &Commands::from_entries(&[]),
+            r#"{"kind":"invoke","id":"1","command":"subtract","args":{"t":"m","v":{}}}"#,
+        );
+        let json: serde_json::Value = serde_json::from_str(&reply).expect("valid JSON");
+        assert_eq!(json["kind"], "failed", "got {reply}");
+        assert!(
+            json["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("subtract"),
+            "got {reply}"
+        );
+        rt.shutdown().expect("shutdown should succeed");
     }
 
     #[test]
@@ -296,7 +425,12 @@ mod tests {
             r#"{{"kind":"get","id":"1","path":"editor","pad":"{}"}}"#,
             "p".repeat(MAX_INBOUND_BYTES)
         );
-        let reply = serve(&rt.handle(), SubscriberId(1), &padded);
+        let reply = serve(
+            &rt.handle(),
+            SubscriberId(1),
+            &Commands::from_entries(&[]),
+            &padded,
+        );
         assert_eq!(reply, OVERSIZE_FAILURE, "got {reply}");
 
         // The positive control: the same request unpadded is served normally,
@@ -305,6 +439,7 @@ mod tests {
         let ok = serve(
             &rt.handle(),
             SubscriberId(1),
+            &Commands::from_entries(&[]),
             r#"{"kind":"get","id":"1","path":"editor"}"#,
         );
         let json: serde_json::Value = serde_json::from_str(&ok).expect("valid JSON");
@@ -320,6 +455,7 @@ mod tests {
         let reply = serve(
             &rt.handle(),
             SubscriberId(1),
+            &Commands::from_entries(&[]),
             &"z".repeat(4 * MAX_INBOUND_BYTES),
         );
         assert!(

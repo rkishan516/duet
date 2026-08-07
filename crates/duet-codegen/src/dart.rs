@@ -6,8 +6,11 @@
 
 use duet_schema::Ty;
 
+use crate::command::PlannedCommand;
 use crate::emit::{Options, header};
-use crate::plan::{Plan, PlannedAccessor, PlannedClass, PlannedField, PlannedTy, PlannedType};
+use crate::plan::{
+    Plan, PlannedAccessor, PlannedClass, PlannedField, PlannedTy, PlannedType, commands_class_name,
+};
 
 /// Emits the whole Dart client.
 pub(crate) fn emit(plan: &Plan, options: &Options) -> String {
@@ -27,7 +30,102 @@ pub(crate) fn emit(plan: &Plan, options: &Options) -> String {
         out.push('\n');
         emit_client(&mut out, class);
     }
+    // Nothing at all for a schema that declares no commands, so such a schema
+    // generates byte-for-byte what it generated before commands existed.
+    if !plan.commands.is_empty() {
+        out.push('\n');
+        emit_commands(&mut out, plan);
+    }
     out
+}
+
+/// The commands class: one method per command, each a literal name, a literal
+/// key per argument, and a delegation to the hand-written `invoke`.
+fn emit_commands(out: &mut String, plan: &Plan) {
+    let name = commands_class_name(&plan.root);
+    out.push_str(&format!(
+        "/// The commands `{}` declares, as typed methods.\n\
+         ///\n\
+         /// Every command name and every argument key here is a literal; see this\n\
+         /// file's header. A method returns what the command *answered*; a host that\n\
+         /// refused to run it throws [DuetFailure] out of [DuetClient.invoke].\n\
+         final class {name} {{\n\
+         \x20 /// Binds these commands to [client].\n  const {name}(this.client);\n\n\
+         \x20 /// The client every command below is invoked through.\n  final DuetClient client;\n",
+        plan.root
+    ));
+    for command in &plan.commands {
+        out.push('\n');
+        emit_command(out, command);
+    }
+    out.push_str("}\n");
+}
+
+/// One command's method.
+fn emit_command(out: &mut String, command: &PlannedCommand) {
+    let returns = dart_inner_ty(&command.returns);
+    let raises = dart_inner_ty(&command.raises);
+    let outcome = format!("DuetOutcome<{returns}, {raises}>");
+    out.push_str(&format!(
+        "  /// Invokes `{}`.\n  ///\n  /// {}\n  /// {}\n",
+        command.name,
+        describe_result("Returns", command.declares_return, &returns),
+        describe_result("Raises", command.declares_raise, &raises),
+    ));
+    let parameters: Vec<String> = command
+        .params
+        .iter()
+        .map(|param| format!("required {} {}", dart_inner_ty(&param.ty), param.accessor))
+        .collect();
+    let signature = if parameters.is_empty() {
+        String::new()
+    } else {
+        listed("{", &parameters, "}", "  ")
+    };
+    out.push_str(&format!(
+        "  Future<{outcome}> {}({signature}) async =>\n      duetDecodeOutcome<{returns}, {raises}>(\n",
+        command.method
+    ));
+    emit_invocation(out, command);
+    out.push_str(&format!(
+        "        {},\n        {},\n      );\n",
+        dart_codec(&command.returns),
+        dart_codec(&command.raises)
+    ));
+}
+
+/// The `client.invoke(...)` call, with the argument map in wire-key order.
+fn emit_invocation(out: &mut String, command: &PlannedCommand) {
+    let name = &command.name;
+    if command.params.is_empty() {
+        out.push_str(&format!("        await client.invoke('{name}'),\n"));
+        return;
+    }
+    out.push_str(&format!(
+        "        await client.invoke('{name}', <String, DuetValue>{{\n"
+    ));
+    for param in command.sorted_params() {
+        out.push_str(&format!(
+            "          '{}': {}.encode({}),\n",
+            param.key,
+            dart_codec(&param.ty),
+            param.accessor
+        ));
+    }
+    out.push_str("        }),\n");
+}
+
+/// One line of a command method's doc comment.
+///
+/// A command that declares no type at that position still *answers* there —
+/// with `null` — so the generated doc says so rather than leaving a reader to
+/// infer it from a `DuetValue` in the signature.
+fn describe_result(what: &str, declared: bool, ty: &str) -> String {
+    if declared {
+        format!("{what} `{ty}`.")
+    } else {
+        format!("{what} nothing; the schema declares no type, so this is the raw value.")
+    }
 }
 
 /// `final class Editor { … }` — fields, value equality and a `toString`.

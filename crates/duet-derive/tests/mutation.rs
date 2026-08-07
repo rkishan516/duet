@@ -29,10 +29,24 @@
 //! because a `Value::Map` sorts its keys. That is measured here rather than
 //! reasoned about, and it is why `TypeDef` documents field order as part of the
 //! contract — nothing downstream of the wire would have caught it.
+//!
+//! # Commands are mutated here too, and one check cannot be here
+//!
+//! A command name and a parameter key are wire strings exactly as a field key
+//! is, and the same edits are plausible: a `rename` that camel-cases, a typo. So
+//! the last two mutations below rename a command and rename a parameter.
+//!
+//! `wire_shape` is blind to both, and necessarily so: a command name is not in
+//! the store, so nothing about the shape of state can reflect it. The check that
+//! *can* see it — the one that puts a generated client's command names on the
+//! wire against a live registry — lives in
+//! `crates/duet-host-stdio/tests/commands.rs`, because the registry is there.
+//! That is the check a golden comparison cannot make, and it is deliberately not
+//! duplicated here.
 
 mod support;
 
-use duet::{Schema, SharedState, Value};
+use duet::{CommandContext, CommandEntry, Schema, SharedState, Value, command, commands, describe};
 use duet_codegen::{Options, TsImports};
 
 /// The type `schema/app.json` describes, unmutated.
@@ -47,6 +61,88 @@ struct App {
 struct Editor {
     zoom: f64,
     theme: String,
+}
+
+/// The structured error `raise` returns.
+#[derive(SharedState)]
+pub struct Unlucky {
+    pub code: String,
+    pub short_by: i64,
+}
+
+/// The four commands `schema/app.json` declares, unmutated.
+///
+/// Signatures only — the bodies are irrelevant to every check in this file,
+/// which compares schemas and generated source. `crates/duet-derive/tests/commands.rs`
+/// is where bodies are driven against a live host.
+pub mod command_set {
+    use super::{CommandContext, Unlucky, Value, command};
+
+    #[command]
+    pub fn subtract(a: i64, b: i64) -> i64 {
+        a.saturating_sub(b)
+    }
+
+    #[command]
+    pub fn raise() -> Result<(), Unlucky> {
+        Err(Unlucky {
+            code: "unlucky".to_string(),
+            short_by: 42,
+        })
+    }
+
+    #[command]
+    pub fn bump(_ctx: &CommandContext, path: String, by: i64) -> Result<i64, Value> {
+        let _ = (path, by);
+        Ok(0)
+    }
+
+    #[command(rename = "session.ping")]
+    pub fn ping() {}
+}
+
+/// The unmutated registration.
+static COMMANDS: [CommandEntry; 4] = commands![
+    command_set::subtract,
+    command_set::raise,
+    command_set::bump,
+    command_set::ping,
+];
+
+/// A command renamed on the wire. The edit a `rename` invites, and the one that
+/// produces no error anywhere until someone runs the app.
+mod command_name {
+    use super::{CommandEntry, command, command_set, commands};
+
+    #[command(rename = "subtrackt")]
+    pub fn subtract(a: i64, b: i64) -> i64 {
+        a.saturating_sub(b)
+    }
+
+    pub static COMMANDS: [CommandEntry; 4] = commands![
+        subtract,
+        command_set::raise,
+        command_set::bump,
+        command_set::ping,
+    ];
+}
+
+/// A parameter key renamed on the wire. Arguments arrive in a map the host
+/// decodes **by name**, so this is the same hazard one level down.
+mod param_key {
+    use super::{CommandEntry, command, command_set, commands};
+
+    #[command]
+    pub fn subtract(#[duet(rename = "A")] a: i64, b: i64) -> i64 {
+        a.saturating_sub(b)
+    }
+
+    pub static COMMANDS: [CommandEntry; 4] = commands![
+        subtract,
+        command_set::raise,
+        command_set::bump,
+        command_set::ping,
+    ];
 }
 
 /// A reordered declaration. The schema records declaration order, and generated
@@ -113,9 +209,11 @@ struct Report {
     caught: bool,
 }
 
-/// Runs all three checks over the schema and value of one type.
-fn checks<T: SharedState>(zero: &T) -> Vec<Report> {
-    let schema = Schema::of::<T>().expect("every type in this file has a valid schema");
+/// Runs all three checks over the schema and value of one type, with one set of
+/// commands described into the same registry.
+fn checks<T: SharedState>(zero: &T, commands: &'static [CommandEntry]) -> Vec<Report> {
+    let schema = Schema::of_with_commands::<T>(|registry| describe(commands, registry))
+        .expect("every type in this file has a valid schema");
     vec![
         Report {
             name: "schema_bytes",
@@ -194,8 +292,8 @@ fn shape(value: &Value) -> String {
 }
 
 /// The names of the checks that noticed.
-fn caught_by<T: SharedState>(zero: &T) -> Vec<&'static str> {
-    checks(zero)
+fn caught_by<T: SharedState>(zero: &T, commands: &'static [CommandEntry]) -> Vec<&'static str> {
+    checks(zero, commands)
         .into_iter()
         .filter(|report| report.caught)
         .map(|report| report.name)
@@ -218,7 +316,7 @@ fn every_check_passes_on_the_unmutated_type() {
         editor: zero_editor(),
         title: String::new(),
     };
-    assert_eq!(caught_by(&zero), Vec::<&str>::new());
+    assert_eq!(caught_by(&zero, &COMMANDS), Vec::<&str>::new());
 }
 
 #[test]
@@ -228,7 +326,10 @@ fn a_reordered_field_is_caught_by_the_schema_and_the_clients_but_not_by_the_wire
         counter: 0,
         editor: zero_editor(),
     };
-    assert_eq!(caught_by(&zero), ["schema_bytes", "generated_clients"]);
+    assert_eq!(
+        caught_by(&zero, &COMMANDS),
+        ["schema_bytes", "generated_clients"]
+    );
 }
 
 #[test]
@@ -239,7 +340,7 @@ fn a_misspelled_key_is_caught_by_all_three() {
         title: String::new(),
     };
     assert_eq!(
-        caught_by(&zero),
+        caught_by(&zero, &COMMANDS),
         ["schema_bytes", "generated_clients", "wire_shape"]
     );
 }
@@ -252,7 +353,7 @@ fn a_widened_number_is_caught_by_all_three() {
         title: String::new(),
     };
     assert_eq!(
-        caught_by(&zero),
+        caught_by(&zero, &COMMANDS),
         ["schema_bytes", "generated_clients", "wire_shape"]
     );
 }
@@ -268,7 +369,40 @@ fn a_key_misspelled_one_level_down_is_caught_by_all_three() {
         title: String::new(),
     };
     assert_eq!(
-        caught_by(&zero),
+        caught_by(&zero, &COMMANDS),
         ["schema_bytes", "generated_clients", "wire_shape"]
+    );
+}
+
+/// The unmutated `App`, for the mutations that change only the commands.
+fn zero_app() -> App {
+    App {
+        counter: 0,
+        editor: zero_editor(),
+        title: String::new(),
+    }
+}
+
+#[test]
+fn a_misspelled_command_name_is_caught_by_the_schema_and_the_clients_but_not_by_the_wire() {
+    // The mutation this increment exists to make visible. A command name is a
+    // wire string with nothing in the store behind it, so `wire_shape` cannot
+    // see it — and neither could any amount of state testing. What catches it
+    // beyond a byte comparison is a live registry, in
+    // `crates/duet-host-stdio/tests/commands.rs`.
+    assert_eq!(
+        caught_by(&zero_app(), &command_name::COMMANDS),
+        ["schema_bytes", "generated_clients"]
+    );
+}
+
+#[test]
+fn a_misspelled_parameter_key_is_caught_by_the_schema_and_the_clients_but_not_by_the_wire() {
+    // Arguments arrive in a map the host decodes by name, so a renamed key is a
+    // `failed` naming a missing argument at run time. Same blindness in
+    // `wire_shape`, same reason.
+    assert_eq!(
+        caught_by(&zero_app(), &param_key::COMMANDS),
+        ["schema_bytes", "generated_clients"]
     );
 }

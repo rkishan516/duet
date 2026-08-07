@@ -1,6 +1,6 @@
 //! Marshals store notifications onto the UI thread.
 
-use duet_core::Notification;
+use duet_core::{Notification, SubscriberId};
 use duet_runtime::{Sink, SinkError};
 use tao::event_loop::EventLoopProxy;
 
@@ -11,14 +11,31 @@ pub enum DuetEvent {
     Notifications(Vec<Notification>),
     /// Ask the host to run a supervisor tick.
     Tick,
-    /// JavaScript the host wants evaluated in a webview surface — an IPC
-    /// reply, or a push.
+    /// JavaScript the host wants evaluated in **one** webview surface — an
+    /// IPC reply, or a push.
     ///
     /// `wry`'s IPC handler is installed before `build()` hands back the
     /// `WebView`, so the handler cannot hold the webview it replies through.
     /// It posts this instead, and the event loop — which does own the
     /// webview — evaluates it on the next turn.
-    WebviewScript(String),
+    ///
+    /// # Why it names a subscriber
+    ///
+    /// The event loop owns every surface and this event owns none of them, so
+    /// without a name on it the loop can only guess. With one webview that
+    /// guess is always right; with two it is right half the time, and the
+    /// failure is a reply delivered to the **wrong guest** — which settles the
+    /// wrong pending call, hangs the right one, and hands one renderer another
+    /// renderer's data. A `SubscriberId` is what every surface already has and
+    /// what [`crate::WebviewSurface::push`] already filters notifications on,
+    /// so routing a reply is the same decision made with the same value; see
+    /// [`crate::WebviewSurface::deliver`].
+    WebviewScript {
+        /// The surface this script was produced for.
+        subscriber: SubscriberId,
+        /// The JavaScript to evaluate there.
+        script: String,
+    },
 }
 
 /// Marshals notification batches onto the UI thread via `tao`'s proxy.

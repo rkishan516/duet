@@ -77,6 +77,7 @@ use std::panic::{self, AssertUnwindSafe};
 use std::ptr::NonNull;
 
 use block2::{DynBlock, RcBlock};
+use duet_command::{CommandEntry, Commands};
 use duet_core::{Notification, SubscriberId};
 use duet_host::BackendError;
 use duet_protocol::Push;
@@ -189,7 +190,35 @@ pub struct FlutterSurface {
 
 impl FlutterSurface {
     /// Registers the [`DUET_RPC_CHANNEL`] handler against `engine`'s binary
-    /// messenger, serving `store` as `subscriber`.
+    /// messenger, serving `store` as `subscriber` and running **no commands**.
+    ///
+    /// The entry point for a guest that shares state and nothing else; an
+    /// `invoke` from it is answered with a `failed` naming the command. Use
+    /// [`with_commands`](FlutterSurface::with_commands) to give a guest a
+    /// registry.
+    ///
+    /// # Errors
+    ///
+    /// [`BackendError::Unavailable`] if `engine`'s `binaryMessenger` could
+    /// not be reached, or if registering the handler threw an Objective-C
+    /// exception.
+    pub fn new(
+        engine: &FlutterEngine,
+        store: StoreHandle,
+        subscriber: SubscriberId,
+    ) -> Result<Self, BackendError> {
+        FlutterSurface::with_commands(engine, store, subscriber, &[])
+    }
+
+    /// Registers the [`DUET_RPC_CHANNEL`] handler against `engine`'s binary
+    /// messenger, serving `store` as `subscriber` and able to run `commands`.
+    ///
+    /// # `commands` **is** this surface's authorization boundary
+    ///
+    /// Exactly as it is for [`crate::WebviewSurface::with_commands`], and the
+    /// point of stating it on both: two guests over one store can be given two
+    /// different registries, and neither has any vocabulary for what it was not
+    /// given.
     ///
     /// # Errors
     ///
@@ -197,10 +226,11 @@ impl FlutterSurface {
     /// not be reached, or if registering the handler threw an Objective-C
     /// exception (caught by `objc2`'s `catch-all` and converted here rather
     /// than left to unwind).
-    pub fn new(
+    pub fn with_commands(
         engine: &FlutterEngine,
         store: StoreHandle,
         subscriber: SubscriberId,
+        commands: &'static [CommandEntry],
     ) -> Result<Self, BackendError> {
         let messenger = engine.binary_messenger()?;
 
@@ -218,6 +248,11 @@ impl FlutterSurface {
         // must be checked by hand for the same property; the compiler will
         // not do it.
         let handler_store = store;
+        // Built once, here, rather than per message — see
+        // `WebviewSurface::with_commands` for why. `Commands` is `Send + Sync`,
+        // which is what the note above about block2's missing bound requires of
+        // anything added to this capture.
+        let handler_commands = Commands::from_entries(commands);
         let handler: MessageHandler =
             RcBlock::new(move |message: *mut NSData, reply: NonNull<ReplyBlock>| {
                 // Exactly one reply per invocation, tracked rather than
@@ -244,7 +279,16 @@ impl FlutterSurface {
                     // the engine invokes this handler inline on the platform
                     // thread, which is where `serve`'s own contract requires
                     // it to run.
-                    unsafe { serve(&handler_store, subscriber, message, reply, &replied) };
+                    unsafe {
+                        serve(
+                            &handler_store,
+                            subscriber,
+                            &handler_commands,
+                            message,
+                            reply,
+                            &replied,
+                        );
+                    };
                 }));
                 if served.is_err() && !replied.get() {
                     // The guest is waiting on this reply; leaving it
@@ -385,6 +429,7 @@ impl Drop for FlutterSurface {
 unsafe fn serve(
     store: &StoreHandle,
     subscriber: SubscriberId,
+    commands: &Commands,
     message: *mut NSData,
     reply: NonNull<ReplyBlock>,
     replied: &Cell<bool>,
@@ -400,7 +445,7 @@ unsafe fn serve(
     // a `failed` response rather than an error, so there is nothing to handle
     // here. `subscriber` is the host-supplied one; a `subscriber` field on
     // the wire is ignored.
-    let out = duet_protocol::handle_text(store, subscriber, &text);
+    let out = duet_protocol::handle_text_with(store, subscriber, commands, &text);
     // SAFETY: `reply` is live per this function's contract and has not been
     // invoked on this path.
     unsafe { reply_with(reply, &out, replied) };
@@ -481,7 +526,18 @@ fn decode_inbound(bytes: &[u8]) -> String {
 /// both surfaces enforce the boundary with one implementation rather than two
 /// that can drift apart.
 pub(crate) fn is_addressed_to(note: &Notification, subscriber: SubscriberId) -> bool {
-    note.subscriber == subscriber
+    serves(note.subscriber, subscriber)
+}
+
+/// Whether traffic produced for `produced_for` belongs to the surface whose own
+/// subscriber is `owner`.
+///
+/// The one comparison behind both filters. A notification names its addressee
+/// and a [`DuetEvent::WebviewScript`](crate::DuetEvent) names the surface its
+/// reply was produced for; they are the same question asked of two different
+/// carriers, and answering it in two places is how they would come to disagree.
+pub(crate) fn serves(produced_for: SubscriberId, owner: SubscriberId) -> bool {
+    produced_for == owner
 }
 
 #[cfg(test)]
