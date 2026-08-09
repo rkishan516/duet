@@ -77,7 +77,7 @@ pub use duet_command as command;
 /// duet = { version = "0.1", features = ["derive", "commands"] }
 /// ```
 ///
-/// The module [`command`] and this attribute macro share a name and live in
+/// The module [`mod@command`] and this attribute macro share a name and live in
 /// different namespaces, exactly as [`SharedState`] the trait and
 /// `SharedState` the derive do, so one `use duet::command;` brings the macro
 /// into scope without shadowing anything.

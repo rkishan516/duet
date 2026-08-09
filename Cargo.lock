@@ -565,6 +565,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "duet-showcase"
+version = "0.1.0"
+dependencies = [
+ "duet",
+ "duet-backend-macos",
+ "duet-core",
+ "duet-host",
+ "duet-runtime",
+ "duet-supervisor",
+ "tao",
+]
+
+[[package]]
 name = "duet-supervisor"
 version = "0.1.0"
 dependencies = [

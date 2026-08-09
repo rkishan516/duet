@@ -1,0 +1,33 @@
+[package]
+name = "duet-showcase"
+description = "The Duet showcase: one Rust host, a Flutter guest and a webview guest, sharing one store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+# `cargo run -p duet-showcase` is the demo. `--bin schema` is the tool that
+# writes the contract out; naming a default here keeps the common case short.
+default-run = "duet-showcase"
+
+[dependencies]
+# The front door, and the only Duet dependency the *definition* needs:
+# `#[derive(SharedState)]`, `#[command]`, `install`, `Schema`. Everything in
+# `src/state.rs`, `src/commands.rs` and `src/bin/schema.rs` builds from this
+# alone, on every platform.
+duet = { path = "../../../crates/duet", features = ["derive", "commands"] }
+
+# The surfaces are macOS-only, and so is the tour that drives them. Declaring
+# them under a target predicate rather than plainly is what keeps this crate a
+# workspace member: `duet-backend-macos` links `FlutterMacOS.framework` and
+# cannot compile on the Linux runner that builds the rest of the workspace, so
+# on any other platform this crate is just the definition plus a `main` that
+# says so.
+[target.'cfg(target_os = "macos")'.dependencies]
+duet-backend-macos = { path = "../../../crates/duet-backend-macos" }
+duet-core = { path = "../../../crates/duet-core" }
+duet-host = { path = "../../../crates/duet-host" }
+duet-runtime = { path = "../../../crates/duet-runtime" }
+duet-supervisor = { path = "../../../crates/duet-supervisor" }
+tao = "0.36"

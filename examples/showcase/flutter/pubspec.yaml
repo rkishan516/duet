@@ -1,0 +1,27 @@
+name: duet_showcase
+description: >-
+  The Flutter guest of the Duet showcase. A real app with a widget tree, not a
+  test driver: it reads and writes the same store the webview guest does, and it
+  survives being torn down and booted again. See examples/showcase/README.md.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.13.0-133.0.dev
+
+dependencies:
+  # The pure-Dart client (`duet`) plus its Flutter binding (`duet_flutter`).
+  # Declared with published constraints and resolved from this checkout by
+  # pubspec_overrides.yaml, exactly as fixtures/duet_guest does.
+  duet: ^0.2.0
+  duet_flutter: ^0.1.0
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

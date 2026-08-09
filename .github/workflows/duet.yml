@@ -211,6 +211,25 @@ jobs:
             --dart examples/generated/app.duet.dart \
             --ts examples/generated/app.duet.ts \
             --check
+      # The showcase's clients, from the showcase's own schema. A separate step
+      # from the one above because the two answer different questions: that one
+      # gates a hand-written schema, this one gates a schema a Rust definition
+      # *produces*. `duet-showcase`'s own test suite already fails if
+      # `examples/showcase/schema/showcase.json` stops being what
+      # `#[derive(SharedState)]` renders; this is the other half of the chain,
+      # and without it the two guests could compile happily against a client
+      # generated from a schema nobody has regenerated.
+      #
+      # The showcase's guests are macOS-only and cannot run here. Its definition
+      # and its contract are not, which is exactly what this step checks.
+      - name: Assert the committed showcase clients are what duet generates
+        run: |
+          set -euo pipefail
+          cargo run -p duet-cli --locked --quiet -- generate \
+            --schema examples/showcase/schema/showcase.json \
+            --dart examples/showcase/flutter/lib/src/showcase.duet.dart \
+            --ts examples/showcase/web/src/showcase.duet.ts \
+            --check
 
   # The pure-Dart client. This job is the entire reason `packages/duet` and
   # `packages/duet_flutter` are separate packages: `package:flutter/services.dart`

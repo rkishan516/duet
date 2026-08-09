@@ -1,0 +1,13 @@
+# The showcase always runs against the packages in THIS checkout, never whatever
+# is on pub.dev — it is a demonstration of this working tree, and a demo that
+# silently resolved a published client would stop demonstrating anything the
+# moment the two diverged.
+#
+# In `pubspec_overrides.yaml` rather than in `pubspec.yaml`, matching
+# `packages/duet_flutter` and `fixtures/duet_guest`, so `pubspec.yaml` keeps
+# stating the real published constraints.
+dependency_overrides:
+  duet:
+    path: ../../../packages/duet
+  duet_flutter:
+    path: ../../../packages/duet_flutter
