@@ -17,6 +17,11 @@ members = [
     "crates/duet-protocol",
     "crates/duet-host-stdio",
     "crates/duet-webview",
+    # The showcase example app. A member, not an excluded directory, so it is
+    # linted and built by the same commands as everything else; its macOS-only
+    # dependencies are declared under a target predicate so the Linux runner
+    # still builds it.
+    "examples/showcase/host",
 ]
 # Phase 0 spikes are throwaway experiments with their own dependencies.
 # They must never affect the zero-dependency guarantee of duet-core.

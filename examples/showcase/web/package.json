@@ -1,0 +1,15 @@
+{
+  "name": "duet-showcase-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The webview guest of the Duet showcase, bundled for evaluate_script",
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --format=iife --target=es2022 --platform=browser --alias:duet-protocol=../../../packages/duet-js/src/index.ts --alias:duet-protocol/typed=../../../packages/duet-js/src/typed/index.ts --alias:duet-protocol/wry=../../../packages/duet-js/src/wry.ts --outfile=build/guest.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "esbuild": "0.27.3",
+    "typescript": "^5.9.2"
+  }
+}

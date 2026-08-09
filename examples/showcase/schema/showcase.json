@@ -1,0 +1,64 @@
+{
+  "commands": [
+    {
+      "name": "append_line",
+      "params": [
+        {"key": "text", "type": {"kind": "string"}}
+      ],
+      "raises": {"kind": "named", "name": "ComposeError"},
+      "returns": {"kind": "int"}
+    },
+    {
+      "name": "word_count",
+      "params": [
+        {"key": "text", "type": {"kind": "string"}}
+      ],
+      "returns": {"kind": "int"}
+    }
+  ],
+  "root": {"kind": "named", "name": "Showcase"},
+  "types": [
+    {
+      "fields": [
+        {"key": "code", "type": {"kind": "string"}},
+        {"key": "detail", "type": {"kind": "string"}}
+      ],
+      "name": "ComposeError"
+    },
+    {
+      "fields": [
+        {"key": "title", "type": {"kind": "string"}},
+        {"key": "lines", "type": {"kind": "list", "of": {"kind": "string"}}}
+      ],
+      "name": "Document"
+    },
+    {
+      "fields": [
+        {"key": "act", "type": {"kind": "string"}},
+        {"key": "detail", "type": {"kind": "string"}}
+      ],
+      "name": "HostNote"
+    },
+    {
+      "fields": [
+        {"key": "status", "type": {"kind": "string"}},
+        {"key": "note", "type": {"kind": "string"}},
+        {"key": "saw_peer_note", "type": {"kind": "string"}},
+        {"key": "saw_lines", "type": {"kind": "int"}},
+        {"key": "returned", "type": {"kind": "string"}},
+        {"key": "raised", "type": {"kind": "string"}}
+      ],
+      "name": "Presence"
+    },
+    {
+      "fields": [
+        {"key": "document", "type": {"kind": "named", "name": "Document"}},
+        {"key": "flutter", "type": {"kind": "named", "name": "Presence"}},
+        {"key": "web", "type": {"kind": "named", "name": "Presence"}},
+        {"key": "host", "type": {"kind": "named", "name": "HostNote"}}
+      ],
+      "name": "Showcase"
+    }
+  ],
+  "version": 2
+}

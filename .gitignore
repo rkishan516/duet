@@ -57,3 +57,16 @@ fixtures/duet_guest/*
 !fixtures/duet_guest/pubspec.yaml
 !fixtures/duet_guest/pubspec_overrides.yaml
 !fixtures/duet_guest/README.md
+
+# Showcase Flutter guest scaffolding — regenerate with:
+#   flutter create --platforms=macos --org com.example --project-name duet_showcase examples/showcase/flutter
+#
+# `/*` rather than `/`, for the same reason as fixtures/duet_guest above: git
+# cannot re-include anything inside an excluded *directory*, so excluding the
+# directory's children is what leaves the negations below able to work.
+examples/showcase/flutter/*
+# ...except the hand-written app and the two manifests that point it at the
+# packages in this checkout. `flutter create` will NOT regenerate these.
+!examples/showcase/flutter/lib/
+!examples/showcase/flutter/pubspec.yaml
+!examples/showcase/flutter/pubspec_overrides.yaml

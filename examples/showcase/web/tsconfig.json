@@ -1,0 +1,34 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+
+    // `packages/duet-js`'s own sources import each other as `'./errors.ts'`, and
+    // this guest imports the generated client the same way. Nothing is emitted
+    // here — esbuild does the bundling — so the extensions are honest about what
+    // is actually on disk.
+    "allowImportingTsExtensions": true,
+
+    // `duet generate` emits `from 'duet-protocol'` — the specifier a published
+    // app would use, and one the CLI has no flag to change. There is no npm
+    // install of `duet-protocol` here (the point of the showcase is to run
+    // against THIS checkout), so both the type checker and the bundler are
+    // pointed at the package's TypeScript sources instead. The bundler's half
+    // of this lives in package.json's `--alias:` flags; the two must agree.
+    "paths": {
+      "duet-protocol": ["../../../packages/duet-js/src/index.ts"],
+      "duet-protocol/typed": ["../../../packages/duet-js/src/typed/index.ts"],
+      "duet-protocol/wry": ["../../../packages/duet-js/src/wry.ts"]
+    }
+  },
+  "include": ["src"]
+}
