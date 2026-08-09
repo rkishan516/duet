@@ -111,8 +111,14 @@ jobs:
             echo "  actual:   $default"
             exit 1
           fi
+          # `commands` pulls in duet-command, and through it duet-protocol and
+          # duet-codec: a command's arguments and result travel the same wire
+          # as everything else, so the registry needs the envelope types. That
+          # is the intended shape of the feature, not drift — and note the
+          # DEFAULT set above is unchanged, which is the property that
+          # actually protects a user who never opts in.
           full="$(packages --all-features)"
-          expected_full="duet duet-codegen duet-core duet-derive duet-runtime duet-schema itoa memchr proc-macro2 quote serde_core serde_json syn unicode-ident zmij "
+          expected_full="duet duet-codec duet-codegen duet-command duet-core duet-derive duet-protocol duet-runtime duet-schema itoa memchr proc-macro2 quote serde_core serde_json syn unicode-ident zmij "
           if [ "$full" != "$expected_full" ]; then
             echo "::error::duet's --all-features dependencies changed"
             echo "  expected: $expected_full"
