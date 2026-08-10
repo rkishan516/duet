@@ -252,6 +252,8 @@ export interface Showcase {
   readonly host: HostNote;
   /** The `control` field. */
   readonly control: HostControl;
+  /** The `counter` field. */
+  readonly counter: bigint;
 }
 
 /** The codec for {@link Showcase}. */
@@ -265,6 +267,7 @@ export const showcaseCodec: DuetCodec<Showcase> = {
         ['web', presenceCodec.encode(value.web)],
         ['host', hostNoteCodec.encode(value.host)],
         ['control', hostControlCodec.encode(value.control)],
+        ['counter', duetIntCodec.encode(value.counter)],
       ]),
     ),
   decode: (value) => {
@@ -294,12 +297,18 @@ export const showcaseCodec: DuetCodec<Showcase> = {
       value.entries.get('control') ?? null,
     );
     if (control.kind !== 'present') return null;
+    const counter = duetRequiredReading(
+      duetIntCodec,
+      value.entries.get('counter') ?? null,
+    );
+    if (counter.kind !== 'present') return null;
     return {
       document: document.value,
       flutter: flutter.value,
       web: web.value,
       host: host.value,
       control: control.value,
+      counter: counter.value,
     };
   },
 };
@@ -346,6 +355,11 @@ export class ShowcaseClient {
   /** `Showcase.control`'s own accessors, at `control`. */
   get control(): ShowcaseControlClient {
     return new ShowcaseControlClient(this.router);
+  }
+
+  /** `Showcase.counter` at `counter`. */
+  get counter(): DuetField<bigint> {
+    return new DuetField<bigint>(this.router, 'counter', duetIntCodec);
   }
 }
 
@@ -564,6 +578,20 @@ export class ShowcaseCommands {
       await this.client.invoke('append_line', new Map<string, DuetValue>([
         ['text', duetStringCodec.encode(params.text)],
       ])),
+      duetIntCodec,
+      composeErrorCodec,
+    );
+  }
+
+  /**
+   * Invokes `increment`.
+   *
+   * Returns `bigint`.
+   * Raises `ComposeError`.
+   */
+  async increment(): Promise<DuetOutcome<bigint, ComposeError>> {
+    return duetDecodeOutcome<bigint, ComposeError>(
+      await this.client.invoke('increment'),
       duetIntCodec,
       composeErrorCodec,
     );

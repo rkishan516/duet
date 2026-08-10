@@ -99,6 +99,11 @@ class ShowcaseGuest extends ChangeNotifier {
   /// Anything that went wrong locally, for the panel to show.
   String trouble = '';
 
+  /// The shared counter, as this guest last saw it.
+  String counter = '';
+
+  int _controlSerial = 0;
+
   /// Subscribes to everything this guest displays, then runs its opening moves.
   ///
   /// Watchers are armed *before* the first command, so the push produced by this
@@ -133,6 +138,17 @@ class ShowcaseGuest extends ChangeNotifier {
 
     final DuetWatch<HostNote> host = await state.host.self.watch(_onHostNote);
     _onHostNote(host.current);
+
+    final DuetWatch<int> shared = await state.counter.watch(_onCounter);
+    _onCounter(shared.current);
+  }
+
+  void _onCounter(DuetReading<int> reading) {
+    counter = switch (reading) {
+      DuetPresent<int>(:final int value) => '$value',
+      _ => '—',
+    };
+    notifyListeners();
   }
 
   void _onTitle(DuetReading<String> reading) {
@@ -233,6 +249,43 @@ class ShowcaseGuest extends ChangeNotifier {
   /// constant re-publishes it without anything restarting.
   Future<void> publishNote(String note) =>
       _write(() => state.flutter.note.set(note), 'flutter.note');
+
+  /// Bumps the shared counter through the `increment` command.
+  ///
+  /// A command, not a `set`: the host is the only writer of `counter`, and
+  /// command bodies run one at a time on its platform thread — so any number
+  /// of windows clicking `+` at once are N increments, never a lost update.
+  /// Every window's watcher then redraws from the same push.
+  Future<void> incrementCounter() async {
+    try {
+      final DuetOutcome<int, ComposeError> outcome = await commands.increment();
+      if (outcome case DuetErr<int, ComposeError>(:final ComposeError error)) {
+        trouble = 'increment raised ${error.code}: ${error.detail}';
+        notifyListeners();
+      }
+    } on DuetFailure catch (e) {
+      trouble = 'increment was refused: ${e.message}';
+      notifyListeners();
+    }
+  }
+
+  /// Asks the host to perform [verb] — the playground's remote control.
+  ///
+  /// The request is a store write like any other; the playground host watches
+  /// `control.request` and obeys. The suffix is what makes every click a
+  /// *distinct* value: the store's minimal-patch rule notifies nobody about a
+  /// write that changes nothing, so a bare verb would work once and then go
+  /// quiet — and the instance tag is what keeps two windows' counters from
+  /// ever colliding on the same string. The scripted tour ignores this field
+  /// entirely.
+  Future<void> requestHost(String verb) {
+    _controlSerial += 1;
+    final String tag = identityHashCode(this).toRadixString(36);
+    return _write(
+      () => state.control.request.set('$verb#$tag-$_controlSerial'),
+      'control.request',
+    );
+  }
 
   Future<void> _write(Future<void> Function() write, String what) async {
     try {

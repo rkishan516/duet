@@ -110,6 +110,8 @@ class _GuestPanelState extends State<_GuestPanel> {
           const SizedBox(height: 4),
           Text('host: ${guest.hostAct} — ${guest.hostDetail}'),
           const Divider(height: 28),
+          _Row('counter (shared)', guest.counter),
+          const Divider(height: 28),
           _Row('document.title', guest.title),
           _Row('document.lines', '${guest.lines.length} line(s)'),
           for (final String line in guest.lines)
@@ -127,6 +129,7 @@ class _GuestPanelState extends State<_GuestPanel> {
           const SizedBox(height: 20),
           Wrap(
             spacing: 12,
+            runSpacing: 8,
             children: <Widget>[
               FilledButton(
                 onPressed: () => guest.appendLine(kFlutterLine),
@@ -136,12 +139,52 @@ class _GuestPanelState extends State<_GuestPanel> {
                 onPressed: () => guest.appendLine(kBlankLine),
                 child: const Text('append a blank line (raises)'),
               ),
+              FilledButton(
+                onPressed: guest.incrementCounter,
+                child: const Text('+'),
+              ),
             ],
           ),
           const SizedBox(height: 20),
           const Text(
-            'Both buttons call the same Rust #[command]. One returns, one '
-            'raises a typed ComposeError.',
+            'All three buttons call Rust #[command]s. append returns or '
+            'raises a typed ComposeError; + increments one counter every '
+            'window shares.',
+            style: TextStyle(fontSize: 12),
+          ),
+          const Divider(height: 36),
+          Text('Host controls', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          // The same verbs the webview panel offers, spelled identically:
+          // both write control.request into the store, where the playground
+          // host watches and obeys. Lifecycle belongs to the host — a guest
+          // can only ask. Booting spawns an additional window each time.
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: <Widget>[
+              for (final (String verb, String label) in const <(String, String)>[
+                ('boot_flutter', 'boot a Flutter window'),
+                ('suspend_flutter', 'suspend newest Flutter'),
+                ('resume_flutter', 'resume newest Flutter'),
+                ('teardown_flutter', 'tear newest Flutter down'),
+                ('boot_web', 'boot a WebView window'),
+                ('teardown_web', 'tear newest WebView down'),
+                ('host_line', 'host: append a line'),
+                ('sample', 'sample memory'),
+                ('quit', 'quit'),
+              ])
+                OutlinedButton(
+                  onPressed: () => guest.requestHost(verb),
+                  child: Text(label),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'These buttons write control.request into the store; the '
+            'playground host watches it and obeys. Under the scripted tour '
+            'nobody is listening.',
             style: TextStyle(fontSize: 12),
           ),
         ],

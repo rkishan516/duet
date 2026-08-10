@@ -9,6 +9,12 @@
       "returns": {"kind": "int"}
     },
     {
+      "name": "increment",
+      "params": [],
+      "raises": {"kind": "named", "name": "ComposeError"},
+      "returns": {"kind": "int"}
+    },
+    {
       "name": "word_count",
       "params": [
         {"key": "text", "type": {"kind": "string"}}
@@ -62,7 +68,8 @@
         {"key": "flutter", "type": {"kind": "named", "name": "Presence"}},
         {"key": "web", "type": {"kind": "named", "name": "Presence"}},
         {"key": "host", "type": {"kind": "named", "name": "HostNote"}},
-        {"key": "control", "type": {"kind": "named", "name": "HostControl"}}
+        {"key": "control", "type": {"kind": "named", "name": "HostControl"}},
+        {"key": "counter", "type": {"kind": "int"}}
       ],
       "name": "Showcase"
     }

@@ -101,10 +101,58 @@ pub fn word_count(text: String) -> i64 {
     i64::try_from(text.split_whitespace().count()).unwrap_or(i64::MAX)
 }
 
+/// Where [`increment`] counts. Hand-written for the same reason as
+/// [`LINES_PATH`]: a command body has no generated Rust accessor to borrow.
+pub const COUNTER_PATH: &str = "counter";
+
+/// Adds one to `counter` and returns the new value.
+///
+/// The only writer of `counter`, which is what makes the playground's shared
+/// counter honest with any number of windows clicking `+` at once: every
+/// increment is a read-modify-write on the host's platform thread, where
+/// command bodies run one at a time, so N concurrent clicks are N increments
+/// and never a lost update.
+///
+/// # Errors
+///
+/// Raises [`ComposeError`] with code `store` if the store refuses the read or
+/// the write, and `overflow` at `i64::MAX` — which no amount of clicking
+/// reaches, but a command must be total.
+#[command]
+pub fn increment(ctx: &CommandContext) -> Result<i64, ComposeError> {
+    let path = Path::parse(COUNTER_PATH).map_err(|e| {
+        ComposeError::new("store", format!("{COUNTER_PATH} is not a valid path: {e}"))
+    })?;
+    let store = ctx.store();
+    let existing = store
+        .get(&path)
+        .map_err(|e| ComposeError::new("store", format!("reading {COUNTER_PATH} failed: {e}")))?;
+    // Absent is treated as zero rather than as an error, for `append_line`'s
+    // reason: a command should not depend on the seeding of a store it does
+    // not own.
+    let current = match existing {
+        Some(Value::Int(n)) => n,
+        None | Some(Value::Null) => 0,
+        Some(other) => {
+            return Err(ComposeError::new(
+                "store",
+                format!("{COUNTER_PATH} holds {other:?}, which is not an integer"),
+            ));
+        }
+    };
+    let next = current
+        .checked_add(1)
+        .ok_or_else(|| ComposeError::new("overflow", "the counter is at i64::MAX"))?;
+    store
+        .set(&path, Value::Int(next))
+        .map_err(|e| ComposeError::new("store", format!("writing {COUNTER_PATH} failed: {e}")))?;
+    Ok(next)
+}
+
 /// The table a surface is built with.
 ///
 /// This is the authorization boundary, not a convenience: a surface can only
 /// invoke what is in the slice it was handed. Both guests here get the same
 /// table, but two surfaces could just as easily get two different ones over one
 /// store.
-pub static COMMANDS: [CommandEntry; 2] = commands![append_line, word_count];
+pub static COMMANDS: [CommandEntry; 3] = commands![append_line, word_count, increment];

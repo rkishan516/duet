@@ -33,6 +33,13 @@ pub struct Showcase {
     /// A guest's standing request to the host — the playground's remote
     /// control. The scripted tour ignores it entirely.
     pub control: HostControl,
+    /// One number every window shows and any window can bump — the smallest
+    /// possible shared state. Written only by the [`increment`] command, so
+    /// any number of concurrent clickers serialize on the host and none
+    /// clobbers another.
+    ///
+    /// [`increment`]: crate::commands::increment
+    pub counter: i64,
 }
 
 /// A request a guest addresses to the *host*, through the store.
@@ -161,5 +168,6 @@ pub fn initial_state() -> Showcase {
         control: HostControl {
             request: String::new(),
         },
+        counter: 0,
     }
 }

@@ -39,6 +39,8 @@ export interface PanelActions {
   appendLine(): void;
   /** Appends a blank one, so the command raises. */
   appendBlank(): void;
+  /** Bumps the shared counter through the `increment` command. */
+  incrementCounter(): void;
   /**
    * Asks the host to do something only the host can do — see
    * `ShowcaseGuest.requestHost`. `null` when there is nobody listening (the
@@ -46,6 +48,25 @@ export interface PanelActions {
    */
   requestHost: ((verb: string) => void) | null;
 }
+
+/**
+ * The host-control verbs and their button labels, shared by both guests'
+ * panels (the Flutter panel spells the same verbs — see
+ * `flutter/lib/src/showcase_app.dart`). Lifecycle is symmetric on purpose:
+ * either guest kind can ask for more or fewer of either kind, which is also
+ * how the playground grows extra windows.
+ */
+export const HOST_VERBS: readonly (readonly [string, string])[] = [
+  ['boot_flutter', 'boot a Flutter window'],
+  ['suspend_flutter', 'suspend newest Flutter'],
+  ['resume_flutter', 'resume newest Flutter'],
+  ['teardown_flutter', 'tear newest Flutter down'],
+  ['boot_web', 'boot a WebView window'],
+  ['teardown_web', 'tear newest WebView down'],
+  ['host_line', 'host: append a line'],
+  ['sample', 'sample memory'],
+  ['quit', 'quit'],
+];
 
 /**
  * Builds the page once and returns a function that redraws it.
@@ -65,14 +86,16 @@ export function mountPanel(actions: PanelActions): (view: GuestView) => void {
   const body = el('div', '');
   const good = button('append a line', 'primary', actions.appendLine);
   const blank = button('append a blank line (raises)', '', actions.appendBlank);
+  const bump = button('+', 'primary', actions.incrementCounter);
+  bump.title = 'increment the shared counter — every window ticks together';
   const note = el(
     'div',
-    'Both buttons call the same Rust #[command]. One returns, one raises a ' +
-      'typed ComposeError.',
+    'All three buttons call Rust #[command]s. append returns or raises a ' +
+      'typed ComposeError; + increments one counter every window shares.',
     'note',
   );
   const buttons = document.createElement('div');
-  buttons.append(good, blank);
+  buttons.append(good, blank, bump);
   document.body.append(heading, host, body, buttons, note);
 
   if (actions.requestHost) {
@@ -83,21 +106,14 @@ export function mountPanel(actions: PanelActions): (view: GuestView) => void {
     controls.style.display = 'flex';
     controls.style.flexWrap = 'wrap';
     controls.style.gap = '8px';
-    for (const [verb, label] of [
-      ['suspend', 'suspend Flutter'],
-      ['resume', 'resume Flutter'],
-      ['teardown', 'tear Flutter down'],
-      ['boot', 'boot Flutter again'],
-      ['host_line', 'host: append a line'],
-      ['sample', 'sample memory'],
-    ] as const) {
+    for (const [verb, label] of HOST_VERBS) {
       controls.append(button(label, '', () => ask(verb)));
     }
     const controlNote = el(
       'div',
       'These buttons write control.request into the store; the playground ' +
         'host watches it and obeys. Lifecycle belongs to the host — a guest ' +
-        'can only ask.',
+        'can only ask. Booting spawns an additional window each time.',
       'note',
     );
     document.body.append(hr(), controlHeading, controls, controlNote);
@@ -106,6 +122,8 @@ export function mountPanel(actions: PanelActions): (view: GuestView) => void {
   return (view: GuestView) => {
     host.textContent = `host: ${view.hostAct} — ${view.hostDetail}`;
     body.replaceChildren(
+      row('counter (shared)', view.counter),
+      hr(),
       row('document.title', view.title),
       row('document.lines', `${view.lines.length} line(s)`),
       list(view.lines),

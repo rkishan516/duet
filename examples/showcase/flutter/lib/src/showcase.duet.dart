@@ -344,6 +344,7 @@ final class Showcase {
     required this.web,
     required this.host,
     required this.control,
+    required this.counter,
   });
 
   /// The `document` field.
@@ -361,6 +362,9 @@ final class Showcase {
   /// The `control` field.
   final HostControl control;
 
+  /// The `counter` field.
+  final int counter;
+
   @override
   bool operator ==(Object other) =>
       other is Showcase &&
@@ -368,7 +372,8 @@ final class Showcase {
       other.flutter == flutter &&
       other.web == web &&
       other.host == host &&
-      other.control == control;
+      other.control == control &&
+      other.counter == counter;
 
   @override
   int get hashCode => Object.hashAll(<Object?>[
@@ -377,11 +382,12 @@ final class Showcase {
     web,
     host,
     control,
+    counter,
   ]);
 
   @override
   String toString() =>
-      'Showcase(document: $document, flutter: $flutter, web: $web, host: $host, control: $control)';
+      'Showcase(document: $document, flutter: $flutter, web: $web, host: $host, control: $control, counter: $counter)';
 }
 
 /// The [DuetCodec] for [Showcase].
@@ -400,6 +406,7 @@ final class ShowcaseCodec implements DuetCodec<Showcase> {
       'web': const PresenceCodec().encode(value.web),
       'host': const HostNoteCodec().encode(value.host),
       'control': const HostControlCodec().encode(value.control),
+      'counter': duetIntCodec.encode(value.counter),
     });
   }
 
@@ -421,12 +428,16 @@ final class ShowcaseCodec implements DuetCodec<Showcase> {
     final DuetReading<HostControl> control =
         duetRequiredReading<HostControl>(const HostControlCodec(), value.entries['control']);
     if (control is! DuetPresent<HostControl>) return null;
+    final DuetReading<int> counter =
+        duetRequiredReading<int>(duetIntCodec, value.entries['counter']);
+    if (counter is! DuetPresent<int>) return null;
     return Showcase(
       document: document.value,
       flutter: flutter.value,
       web: web.value,
       host: host.value,
       control: control.value,
+      counter: counter.value,
     );
   }
 }
@@ -459,6 +470,10 @@ final class ShowcaseClient {
 
   /// `Showcase.control`'s own accessors, at `control`.
   ShowcaseControlClient get control => ShowcaseControlClient(router);
+
+  /// `Showcase.counter` at `counter`.
+  DuetField<int> get counter =>
+      DuetField<int>(router, 'counter', duetIntCodec);
 }
 
 /// Typed accessors for `Document` at `document`.
@@ -625,6 +640,17 @@ final class ShowcaseCommands {
         await client.invoke('append_line', <String, DuetValue>{
           'text': duetStringCodec.encode(text),
         }),
+        duetIntCodec,
+        const ComposeErrorCodec(),
+      );
+
+  /// Invokes `increment`.
+  ///
+  /// Returns `int`.
+  /// Raises `ComposeError`.
+  Future<DuetOutcome<int, ComposeError>> increment() async =>
+      duetDecodeOutcome<int, ComposeError>(
+        await client.invoke('increment'),
         duetIntCodec,
         const ComposeErrorCodec(),
       );

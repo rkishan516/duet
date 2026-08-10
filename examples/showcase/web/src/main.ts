@@ -46,6 +46,7 @@ function boot(): void {
     const render = mountPanel({
       appendLine: () => void guest.appendLine(WEB_LINE),
       appendBlank: () => void guest.appendLine(BLANK_LINE),
+      incrementCounter: () => void guest.incrementCounter(),
       // Always offered: under the scripted tour the writes land and nobody
       // acts on them, which is itself honest — lifecycle belongs to the host.
       requestHost: (verb) => guest.requestHost(verb),

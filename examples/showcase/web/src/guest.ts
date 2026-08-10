@@ -40,6 +40,8 @@ export interface GuestView {
   returned: string;
   raised: string;
   trouble: string;
+  /** The shared counter every window shows and any window can bump. */
+  counter: string;
 }
 
 /** The starting view, before any push has arrived. */
@@ -53,6 +55,7 @@ export function emptyView(): GuestView {
     returned: '',
     raised: '',
     trouble: '',
+    counter: '',
   };
 }
 
@@ -104,19 +107,44 @@ export class ShowcaseGuest {
   }
 
   #controlSerial = 0;
+  /** Distinguishes this window's requests from another's — see requestHost. */
+  readonly #controlTag = Math.random().toString(36).slice(2, 8);
+
+  /**
+   * Bumps the shared counter through the `increment` command.
+   *
+   * A command, not a `set`: the host is the only writer of `counter`, and
+   * command bodies run one at a time on its platform thread — so any number
+   * of windows clicking `+` at once are N increments, never a lost update.
+   * Every window's watcher then redraws from the same push.
+   */
+  async incrementCounter(): Promise<void> {
+    try {
+      const outcome = await this.commands.increment();
+      if (outcome.kind === 'err') {
+        this.#update({
+          trouble: `increment raised ${outcome.error.code}: ${outcome.error.detail}`,
+        });
+      }
+    } catch (cause) {
+      this.#update({ trouble: `increment failed: ${String(cause)}` });
+    }
+  }
 
   /**
    * Asks the host to perform `verb` — the playground's remote control.
    *
    * The request is a store write like any other; the playground host watches
-   * `control.request` and obeys. The `#n` suffix is what makes every click a
+   * `control.request` and obeys. The suffix is what makes every click a
    * *distinct* value: the store's minimal-patch rule notifies nobody about a
    * write that changes nothing, so a bare verb would work once and then go
-   * quiet. The scripted tour ignores this field entirely.
+   * quiet — and the instance tag is what keeps two windows' counters from
+   * ever colliding on the same string. The scripted tour ignores this field
+   * entirely.
    */
   requestHost(verb: string): void {
     this.#controlSerial += 1;
-    const request = `${verb}#${this.#controlSerial}`;
+    const request = `${verb}#${this.#controlTag}-${this.#controlSerial}`;
     void this.#publish(
       () => this.state.control.request.set(request),
       'control.request',
@@ -213,6 +241,13 @@ export class ShowcaseGuest {
       }
     };
     onHostNote((await this.state.host.self.watch(onHostNote)).current);
+
+    const onCounter = (reading: DuetReading<bigint>) => {
+      this.#update({
+        counter: reading.kind === 'present' ? reading.value.toString() : '—',
+      });
+    };
+    onCounter((await this.state.counter.watch(onCounter)).current);
   }
 
   async #publish(write: () => Promise<void>, what: string): Promise<void> {
