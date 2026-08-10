@@ -17,4 +17,13 @@ error[E0277]: `HashMap<i64, String>` cannot be shared through a Duet store
             `Duration` `SystemTime` `Instant`    ->  an explicit `i64` or `String` encoding you choose
             `Option<Option<T>>`                  ->  `Option<T>` (`Some(None)` and `None` both lower to `Value::Null`)
           For anything else, write `impl SharedState for HashMap<i64, String>` yourself — it is a supported escape hatch, not a workaround.
-  = help: the trait `SharedState` is implemented for `HashMap<String, V, S>`
+help: the trait `SharedState` is implemented for `HashMap<String, V, S>`
+ --> $WORKSPACE/crates/duet-schema/src/impls/collection.rs
+  |
+  | /         impl<V: SharedState $(, $hasher: BuildHasher + Default)?> SharedState
+  | |             for $map<String, V $(, $hasher)?>
+  | |_____________________________________________^
+...
+  |   string_map_state!(HashMap, S);
+  |   ----------------------------- in this macro invocation
+  = note: this error originates in the macro `string_map_state` (in Nightly builds, run with -Z macro-backtrace for more info)

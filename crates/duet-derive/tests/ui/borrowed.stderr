@@ -17,7 +17,11 @@ error[E0277]: `&'static str` cannot be shared through a Duet store
             `Duration` `SystemTime` `Instant`    ->  an explicit `i64` or `String` encoding you choose
             `Option<Option<T>>`                  ->  `Option<T>` (`Some(None)` and `None` both lower to `Value::Null`)
           For anything else, write `impl SharedState for &'static str` yourself — it is a supported escape hatch, not a workaround.
-  = help: the trait `SharedState` is implemented for `String`
+help: the trait `SharedState` is implemented for `String`
+ --> $WORKSPACE/crates/duet-schema/src/impls/scalar.rs
+  |
+  | impl SharedState for String {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 error[E0277]: `&'static [i64]` cannot be shared through a Duet store
  --> tests/ui/borrowed.rs:9:13

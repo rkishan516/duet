@@ -11,4 +11,8 @@ error[E0277]: a `#[command]` parameter written as a reference must be `&CommandC
           The fixes:
             to read or write the store, take `&CommandContext` and use `ctx.store()`
             to take this as an argument, take it by value — `&str` becomes `String`, `&[T]` becomes `Vec<T>` (the store owns a `'static` tree, so a command cannot borrow from it)
-  = help: the trait `FromContext<'a>` is implemented for `&'a CommandContext`
+help: the trait `FromContext<'a>` is implemented for `&'a CommandContext`
+ --> $WORKSPACE/crates/duet-command/src/context.rs
+  |
+  | impl<'a> FromContext<'a> for &'a CommandContext {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
