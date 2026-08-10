@@ -39,6 +39,12 @@ export interface PanelActions {
   appendLine(): void;
   /** Appends a blank one, so the command raises. */
   appendBlank(): void;
+  /**
+   * Asks the host to do something only the host can do — see
+   * `ShowcaseGuest.requestHost`. `null` when there is nobody listening (the
+   * scripted tour), in which case the host-control section is not rendered.
+   */
+  requestHost: ((verb: string) => void) | null;
 }
 
 /**
@@ -68,6 +74,34 @@ export function mountPanel(actions: PanelActions): (view: GuestView) => void {
   const buttons = document.createElement('div');
   buttons.append(good, blank);
   document.body.append(heading, host, body, buttons, note);
+
+  if (actions.requestHost) {
+    const ask = actions.requestHost;
+    const controlHeading = el('h1', 'Host controls');
+    controlHeading.style.marginTop = '20px';
+    const controls = document.createElement('div');
+    controls.style.display = 'flex';
+    controls.style.flexWrap = 'wrap';
+    controls.style.gap = '8px';
+    for (const [verb, label] of [
+      ['suspend', 'suspend Flutter'],
+      ['resume', 'resume Flutter'],
+      ['teardown', 'tear Flutter down'],
+      ['boot', 'boot Flutter again'],
+      ['host_line', 'host: append a line'],
+      ['sample', 'sample memory'],
+    ] as const) {
+      controls.append(button(label, '', () => ask(verb)));
+    }
+    const controlNote = el(
+      'div',
+      'These buttons write control.request into the store; the playground ' +
+        'host watches it and obeys. Lifecycle belongs to the host — a guest ' +
+        'can only ask.',
+      'note',
+    );
+    document.body.append(hr(), controlHeading, controls, controlNote);
+  }
 
   return (view: GuestView) => {
     host.textContent = `host: ${view.hostAct} — ${view.hostDetail}`;

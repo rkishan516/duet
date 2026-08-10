@@ -30,6 +30,26 @@ pub struct Showcase {
     pub web: Presence,
     /// What the Rust host is doing, so a guest's UI can narrate along.
     pub host: HostNote,
+    /// A guest's standing request to the host — the playground's remote
+    /// control. The scripted tour ignores it entirely.
+    pub control: HostControl,
+}
+
+/// A request a guest addresses to the *host*, through the store.
+///
+/// The playground (`--bin playground`) polls this and obeys: the webview
+/// panel's host-control buttons write it, and lifecycle operations only the
+/// host can perform — suspending, resuming, tearing down, re-booting the
+/// Flutter guest — happen at a button's request. The request travels through
+/// the same store as everything else on purpose: the demo has no side
+/// channels, and "a guest asked the host to do something" is just one more
+/// write one more watcher saw.
+#[derive(Debug, Clone, PartialEq, Eq, SharedState)]
+pub struct HostControl {
+    /// The verb, suffixed `#n` with a guest-local counter so every click is a
+    /// distinct value — the store's minimal-patch rule notifies nobody about
+    /// a write that changes nothing.
+    pub request: String,
 }
 
 /// The shared document.
@@ -137,6 +157,9 @@ pub fn initial_state() -> Showcase {
         host: HostNote {
             act: "starting".to_string(),
             detail: "the host has not opened a surface yet".to_string(),
+        },
+        control: HostControl {
+            request: String::new(),
         },
     }
 }

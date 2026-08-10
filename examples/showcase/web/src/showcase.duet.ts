@@ -107,6 +107,32 @@ export const documentCodec: DuetCodec<Document> = {
   },
 };
 
+/** `HostControl`, as the schema describes it. */
+export interface HostControl {
+  /** The `request` field. */
+  readonly request: string;
+}
+
+/** The codec for {@link HostControl}. */
+export const hostControlCodec: DuetCodec<HostControl> = {
+  name: 'HostControl',
+  encode: (value) =>
+    duetMap(
+      new Map<string, DuetValue>([
+        ['request', duetStringCodec.encode(value.request)],
+      ]),
+    ),
+  decode: (value) => {
+    if (value.kind !== 'map') return null;
+    const request = duetRequiredReading(
+      duetStringCodec,
+      value.entries.get('request') ?? null,
+    );
+    if (request.kind !== 'present') return null;
+    return { request: request.value };
+  },
+};
+
 /** `HostNote`, as the schema describes it. */
 export interface HostNote {
   /** The `act` field. */
@@ -224,6 +250,8 @@ export interface Showcase {
   readonly web: Presence;
   /** The `host` field. */
   readonly host: HostNote;
+  /** The `control` field. */
+  readonly control: HostControl;
 }
 
 /** The codec for {@link Showcase}. */
@@ -236,6 +264,7 @@ export const showcaseCodec: DuetCodec<Showcase> = {
         ['flutter', presenceCodec.encode(value.flutter)],
         ['web', presenceCodec.encode(value.web)],
         ['host', hostNoteCodec.encode(value.host)],
+        ['control', hostControlCodec.encode(value.control)],
       ]),
     ),
   decode: (value) => {
@@ -260,11 +289,17 @@ export const showcaseCodec: DuetCodec<Showcase> = {
       value.entries.get('host') ?? null,
     );
     if (host.kind !== 'present') return null;
+    const control = duetRequiredReading(
+      hostControlCodec,
+      value.entries.get('control') ?? null,
+    );
+    if (control.kind !== 'present') return null;
     return {
       document: document.value,
       flutter: flutter.value,
       web: web.value,
       host: host.value,
+      control: control.value,
     };
   },
 };
@@ -306,6 +341,11 @@ export class ShowcaseClient {
   /** `Showcase.host`'s own accessors, at `host`. */
   get host(): ShowcaseHostClient {
     return new ShowcaseHostClient(this.router);
+  }
+
+  /** `Showcase.control`'s own accessors, at `control`. */
+  get control(): ShowcaseControlClient {
+    return new ShowcaseControlClient(this.router);
   }
 }
 
@@ -466,6 +506,31 @@ export class ShowcaseHostClient {
   /** `HostNote.detail` at `host.detail`. */
   get detail(): DuetField<string> {
     return new DuetField<string>(this.router, 'host.detail', duetStringCodec);
+  }
+}
+
+/**
+ * Typed accessors for `HostControl` at `control`.
+ *
+ * Every path here is a literal; see this file's header.
+ */
+export class ShowcaseControlClient {
+  /** The router every accessor below is bound to. */
+  readonly router: DuetRouter;
+
+  /** Binds these accessors to `router`. */
+  constructor(router: DuetRouter) {
+    this.router = router;
+  }
+
+  /** `HostControl` itself, as one value at `control`. */
+  get self(): DuetField<HostControl> {
+    return new DuetField<HostControl>(this.router, 'control', hostControlCodec);
+  }
+
+  /** `HostControl.request` at `control.request`. */
+  get request(): DuetField<string> {
+    return new DuetField<string>(this.router, 'control.request', duetStringCodec);
   }
 }
 

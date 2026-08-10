@@ -155,7 +155,31 @@ act unfalsifiable. The new guest then rediscovers, from the store alone:
 - every line, including the one written while it did not exist,
 - the webview guest's greeting, which it never saw written.
 
-## Hot reload
+## The playground: drive it yourself
+
+The tour is scripted so a machine can check it. `--bin playground` opens the
+same two guests over the same store and hands the keys over:
+
+```console
+$ cargo run -p duet-showcase --bin playground
+```
+
+The guests' own panels carry their buttons (append a line, append a blank one
+that raises). Everything only the host can do is reachable two ways: the
+webview panel's **Host controls** section — whose buttons write
+`control.request` into the store, where the playground host watches and obeys;
+lifecycle belongs to the host, so a guest can only ask — and single-letter
+commands typed into the launching terminal (`h` lists them: suspend, resume,
+teardown, boot, host writes, memory samples, quit). Closing the Flutter window
+is a teardown; closing the webview window quits.
+
+Things worth doing by hand, and what each shows: click append in one panel and
+watch the other's watcher redraw (one write, two renderers); suspend Flutter,
+make writes happen, resume — the view returns already current, because a
+parked engine's watchers never stopped; tear Flutter down, keep using the
+webview, boot it again — a fresh engine with a fresh store identity
+rediscovers the whole document, the host having wiped the old guest's claims
+first; sample memory around those.
 
 `flutter.note` is published from the Flutter guest's `build`, so editing one
 constant propagates all the way through to the other renderer without anything

@@ -103,6 +103,26 @@ export class ShowcaseGuest {
     );
   }
 
+  #controlSerial = 0;
+
+  /**
+   * Asks the host to perform `verb` — the playground's remote control.
+   *
+   * The request is a store write like any other; the playground host watches
+   * `control.request` and obeys. The `#n` suffix is what makes every click a
+   * *distinct* value: the store's minimal-patch rule notifies nobody about a
+   * write that changes nothing, so a bare verb would work once and then go
+   * quiet. The scripted tour ignores this field entirely.
+   */
+  requestHost(verb: string): void {
+    this.#controlSerial += 1;
+    const request = `${verb}#${this.#controlSerial}`;
+    void this.#publish(
+      () => this.state.control.request.set(request),
+      'control.request',
+    );
+  }
+
   /** Invokes `append_line` and records whichever arm came back. */
   async appendLine(text: string): Promise<string> {
     let rendered = '';

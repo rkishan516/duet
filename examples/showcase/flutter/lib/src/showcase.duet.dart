@@ -128,6 +128,52 @@ final class DocumentCodec implements DuetCodec<Document> {
   }
 }
 
+/// `HostControl`, as the schema describes it.
+final class HostControl {
+  /// Creates a `HostControl`.
+  const HostControl({required this.request});
+
+  /// The `request` field.
+  final String request;
+
+  @override
+  bool operator ==(Object other) =>
+      other is HostControl &&
+      other.request == request;
+
+  @override
+  int get hashCode => Object.hashAll(<Object?>[request]);
+
+  @override
+  String toString() =>
+      'HostControl(request: $request)';
+}
+
+/// The [DuetCodec] for [HostControl].
+final class HostControlCodec implements DuetCodec<HostControl> {
+  /// Creates the codec.
+  const HostControlCodec();
+
+  @override
+  String get name => 'HostControl';
+
+  @override
+  DuetValue encode(HostControl value) {
+    return DuetMap(<String, DuetValue>{
+      'request': duetStringCodec.encode(value.request),
+    });
+  }
+
+  @override
+  HostControl? decode(DuetValue value) {
+    if (value is! DuetMap) return null;
+    final DuetReading<String> request =
+        duetRequiredReading<String>(duetStringCodec, value.entries['request']);
+    if (request is! DuetPresent<String>) return null;
+    return HostControl(request: request.value);
+  }
+}
+
 /// `HostNote`, as the schema describes it.
 final class HostNote {
   /// Creates a `HostNote`.
@@ -297,6 +343,7 @@ final class Showcase {
     required this.flutter,
     required this.web,
     required this.host,
+    required this.control,
   });
 
   /// The `document` field.
@@ -311,13 +358,17 @@ final class Showcase {
   /// The `host` field.
   final HostNote host;
 
+  /// The `control` field.
+  final HostControl control;
+
   @override
   bool operator ==(Object other) =>
       other is Showcase &&
       other.document == document &&
       other.flutter == flutter &&
       other.web == web &&
-      other.host == host;
+      other.host == host &&
+      other.control == control;
 
   @override
   int get hashCode => Object.hashAll(<Object?>[
@@ -325,11 +376,12 @@ final class Showcase {
     flutter,
     web,
     host,
+    control,
   ]);
 
   @override
   String toString() =>
-      'Showcase(document: $document, flutter: $flutter, web: $web, host: $host)';
+      'Showcase(document: $document, flutter: $flutter, web: $web, host: $host, control: $control)';
 }
 
 /// The [DuetCodec] for [Showcase].
@@ -347,6 +399,7 @@ final class ShowcaseCodec implements DuetCodec<Showcase> {
       'flutter': const PresenceCodec().encode(value.flutter),
       'web': const PresenceCodec().encode(value.web),
       'host': const HostNoteCodec().encode(value.host),
+      'control': const HostControlCodec().encode(value.control),
     });
   }
 
@@ -365,11 +418,15 @@ final class ShowcaseCodec implements DuetCodec<Showcase> {
     final DuetReading<HostNote> host =
         duetRequiredReading<HostNote>(const HostNoteCodec(), value.entries['host']);
     if (host is! DuetPresent<HostNote>) return null;
+    final DuetReading<HostControl> control =
+        duetRequiredReading<HostControl>(const HostControlCodec(), value.entries['control']);
+    if (control is! DuetPresent<HostControl>) return null;
     return Showcase(
       document: document.value,
       flutter: flutter.value,
       web: web.value,
       host: host.value,
+      control: control.value,
     );
   }
 }
@@ -399,6 +456,9 @@ final class ShowcaseClient {
 
   /// `Showcase.host`'s own accessors, at `host`.
   ShowcaseHostClient get host => ShowcaseHostClient(router);
+
+  /// `Showcase.control`'s own accessors, at `control`.
+  ShowcaseControlClient get control => ShowcaseControlClient(router);
 }
 
 /// Typed accessors for `Document` at `document`.
@@ -523,6 +583,25 @@ final class ShowcaseHostClient {
   /// `HostNote.detail` at `host.detail`.
   DuetField<String> get detail =>
       DuetField<String>(router, 'host.detail', duetStringCodec);
+}
+
+/// Typed accessors for `HostControl` at `control`.
+///
+/// Every path here is a literal; see this file's header.
+final class ShowcaseControlClient {
+  /// Binds these accessors to [router].
+  const ShowcaseControlClient(this.router);
+
+  /// The router every accessor below is bound to.
+  final DuetRouter router;
+
+  /// `HostControl` itself, as one value at `control`.
+  DuetField<HostControl> get self =>
+      DuetField<HostControl>(router, 'control', const HostControlCodec());
+
+  /// `HostControl.request` at `control.request`.
+  DuetField<String> get request =>
+      DuetField<String>(router, 'control.request', duetStringCodec);
 }
 
 /// The commands `Showcase` declares, as typed methods.

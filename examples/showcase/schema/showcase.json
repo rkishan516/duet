@@ -34,6 +34,12 @@
     },
     {
       "fields": [
+        {"key": "request", "type": {"kind": "string"}}
+      ],
+      "name": "HostControl"
+    },
+    {
+      "fields": [
         {"key": "act", "type": {"kind": "string"}},
         {"key": "detail", "type": {"kind": "string"}}
       ],
@@ -55,7 +61,8 @@
         {"key": "document", "type": {"kind": "named", "name": "Document"}},
         {"key": "flutter", "type": {"kind": "named", "name": "Presence"}},
         {"key": "web", "type": {"kind": "named", "name": "Presence"}},
-        {"key": "host", "type": {"kind": "named", "name": "HostNote"}}
+        {"key": "host", "type": {"kind": "named", "name": "HostNote"}},
+        {"key": "control", "type": {"kind": "named", "name": "HostControl"}}
       ],
       "name": "Showcase"
     }
