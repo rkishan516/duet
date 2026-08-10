@@ -20,6 +20,32 @@ fn write(path: &Path, contents: &str) {
     std::fs::write(path, contents).expect("write");
 }
 
+/// Rewrites `path` until its mtime is distinguishable from the previous one.
+///
+/// The watcher's documented stamp is (mtime, length) — see [`Stamp`]'s note:
+/// a same-length rewrite whose timestamp also does not move is invisible to
+/// any stat-based watcher, not just this one. Windows makes that case real
+/// rather than theoretical: file times advance at system-timer ticks (up to
+/// ~16 ms), so a rewrite landing in the same tick as the previous write gets
+/// an identical stamp — the first windows CI run failed both same-length
+/// tests exactly this way. The retry pins the assertion to the watcher's
+/// actual contract (a *distinguishable* edit is caught) instead of to the
+/// host's timer resolution. This sleep is not the module-doc's derided
+/// sleeping-through-the-debounce — the debounce clock stays injected; the
+/// sleep only spans mtime granularity.
+fn write_distinguishable(path: &Path, contents: &str) {
+    let before = std::fs::metadata(path).ok().and_then(|m| m.modified().ok());
+    for _ in 0..1000 {
+        write(path, contents);
+        let after = std::fs::metadata(path).ok().and_then(|m| m.modified().ok());
+        if after != before {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    panic!("the filesystem never produced a distinguishable mtime");
+}
+
 fn config(root: &Path, debounce: Duration) -> WatchConfig {
     WatchConfig {
         roots: vec![root.to_path_buf()],
@@ -79,7 +105,7 @@ fn a_rewrite_of_the_same_length_within_the_same_instant_is_still_caught() {
     let file = root.join("main.dart");
     write(&file, "const String kMarker = 'MARKER_V1';");
     let mut watcher = instant(&root);
-    write(&file, "const String kMarker = 'MARKER_V2';");
+    write_distinguishable(&file, "const String kMarker = 'MARKER_V2';");
     assert_eq!(
         watcher.poll(Instant::now()),
         Some(vec![file]),
@@ -209,7 +235,10 @@ fn changes_are_held_until_the_tree_has_been_quiet() {
     let mut watcher = Watcher::new(config(&root, debounce)).expect("root exists");
 
     let t0 = Instant::now();
-    write(&file, "// v2");
+    // Distinguishable because "// v2" is the same length as "// v1": on a
+    // coarse-mtime host a plain write could be invisible and this test would
+    // then be asserting about the timer, not the debounce.
+    write_distinguishable(&file, "// v2");
     assert_eq!(watcher.poll(t0), None, "still settling");
     assert_eq!(
         watcher.poll(t0 + Duration::from_millis(119)),
@@ -237,12 +266,14 @@ fn a_further_change_during_the_quiet_period_extends_it() {
     let mut watcher = Watcher::new(config(&root, debounce)).expect("root exists");
 
     let t0 = Instant::now();
-    write(&first, "// a2");
+    // Both rewrites are same-length, so both need the mtime-granularity guard
+    // — see write_distinguishable.
+    write_distinguishable(&first, "// a2");
     assert_eq!(watcher.poll(t0), None);
 
     // A second change 80 ms in resets the clock.
     let t1 = t0 + Duration::from_millis(80);
-    write(&second, "// b2");
+    write_distinguishable(&second, "// b2");
     assert_eq!(watcher.poll(t1), None, "the second change extends the wait");
     assert_eq!(
         watcher.poll(t1 + Duration::from_millis(99)),
