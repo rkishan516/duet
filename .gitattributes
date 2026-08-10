@@ -1,0 +1,14 @@
+# Several suites compare committed files byte-for-byte against generator
+# output that always uses LF: the duet-cli integration tests against
+# examples/generated/*, the codegen goldens under packages/*/test/generated/,
+# and the two corpus files. GitHub's Windows runners check repositories out
+# with core.autocrlf=true, which rewrites every text file to CRLF and fails
+# all of those comparisons at once (found by the first run of the `windows`
+# CI job). Force LF in every working tree instead; byte-identical means one
+# spelling of a line ending, everywhere.
+* text=auto eol=lf
+
+# Never candidates for text auto-detection or normalization.
+*.png binary
+*.bmp binary
+*.ico binary
