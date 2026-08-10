@@ -21,12 +21,26 @@ fn run(arguments: &[&str], input: &str) -> (i32, String, String) {
         .stderr(Stdio::piped())
         .spawn()
         .expect("the host binary should start");
-    child
+    // A host that rejects its arguments exits without ever reading stdin, and
+    // on a loaded machine it can be gone before this write lands — the pipe
+    // then reports BrokenPipe (a CI runner lost exactly that race; a fast
+    // machine's write always slips into the pipe buffer first, which is why
+    // no local run ever saw it). That is not a fault in the thing under test:
+    // every test that expects a *served* session asserts on stdout and the
+    // exit code, which a wrongly-dead host fails loudly. Any other write
+    // error is still a real fault worth stopping on.
+    let written = child
         .stdin
         .as_mut()
         .expect("stdin was piped")
-        .write_all(input.as_bytes())
-        .expect("writing to the host should succeed");
+        .write_all(input.as_bytes());
+    if let Err(e) = written {
+        assert_eq!(
+            e.kind(),
+            std::io::ErrorKind::BrokenPipe,
+            "writing to the host should succeed or find it already exited: {e}"
+        );
+    }
     let done = child
         .wait_with_output()
         .expect("the host should exit on end of input");
