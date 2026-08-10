@@ -96,6 +96,15 @@ pub struct FrontendServer {
     /// The stderr reader thread, joined by [`FrontendServer::exited`] before
     /// the tail is read — see there for the race this closes.
     stderr_reader: Option<thread::JoinHandle<()>>,
+    /// Whether this child has ever produced a line of stdout, across every
+    /// exchange. This — not the site where death was noticed — is what
+    /// decides the never-answered hint in [`FrontendServer::exited`]: a child
+    /// that dies before the first command's *write* still never answered,
+    /// and hard-coding the write path's answer lost exactly that case (a CI
+    /// runner slow enough for an instantly-dying child to be dead before the
+    /// write reported "died mid-conversation" for a compiler that never said
+    /// a word).
+    ever_answered: bool,
     output_dill: PathBuf,
     /// Monotonic source of boundary keys.
     boundary: u64,
@@ -178,6 +187,7 @@ impl FrontendServer {
             lines,
             stderr: tail,
             stderr_reader,
+            ever_answered: false,
             output_dill: config.output_dill.clone(),
             boundary: 0,
         })
@@ -283,7 +293,6 @@ impl FrontendServer {
 
         let deadline = started + timeout;
         let mut parser = ResultParser::default();
-        let mut saw_any_line = false;
         let mut seen = 0usize;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -292,7 +301,7 @@ impl FrontendServer {
             }
             match self.lines.recv_timeout(remaining) {
                 Ok(Ok(line)) => {
-                    saw_any_line = true;
+                    self.ever_answered = true;
                     seen += 1;
                     if let Feed::Done(terminator) = parser.feed(&line) {
                         return Ok(self.finish(parser.take_diagnostics(), terminator, started));
@@ -312,7 +321,7 @@ impl FrontendServer {
                     // The reader thread ended, which means stdout hit EOF —
                     // the child is gone, or closed the pipe. Either way the
                     // developer needs its stderr, not "unexpected EOF".
-                    return Err(self.exited(stage, saw_any_line));
+                    return Err(self.exited(stage));
                 }
             }
         }
@@ -354,8 +363,12 @@ impl FrontendServer {
         {
             Ok(()) => Ok(()),
             // A dead child's pipe reports `BrokenPipe`; anything else is a
-            // genuine I/O fault worth reporting as itself.
-            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Err(self.exited(stage, true)),
+            // genuine I/O fault worth reporting as itself. Whether the child
+            // ever answered is `ever_answered`'s call, not this site's: a
+            // child that died before the session's first write never spoke,
+            // and claiming otherwise here suppressed the never-answered hint
+            // exactly when it applied.
+            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Err(self.exited(stage)),
             Err(source) => Err(DevError::Io {
                 stage,
                 doing: "writing to frontend_server's stdin",
@@ -367,10 +380,10 @@ impl FrontendServer {
     /// Builds the "the compiler is gone" error, collecting its status and the
     /// tail of its stderr.
     ///
-    /// `saw_output` distinguishes "died mid-conversation" from "never started
-    /// talking", which is usually a bad `--sdk-root` or a snapshot from a
-    /// different SDK — a different first thing to check.
-    fn exited(&mut self, stage: Stage, saw_output: bool) -> DevError {
+    /// `self.ever_answered` distinguishes "died mid-conversation" from "never
+    /// started talking", which is usually a bad `--sdk-root` or a snapshot
+    /// from a different SDK — a different first thing to check.
+    fn exited(&mut self, stage: Stage) -> DevError {
         // Give a just-exited child a moment to be reapable, so the status is
         // usually present rather than usually absent.
         let status = match self.child.wait() {
@@ -393,7 +406,7 @@ impl FrontendServer {
             // tail is survivable; failing to report the death is not.
             Err(_) => "<the stderr reader failed>".to_string(),
         };
-        if !saw_output {
+        if !self.ever_answered {
             stderr.push_str(
                 "\n(it exited before answering at all, which usually means a bad --sdk-root \
                  or a frontend_server snapshot from a different SDK)",
