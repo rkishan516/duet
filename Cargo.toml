@@ -15,6 +15,7 @@ members = [
     "crates/duet-host",
     "crates/duet-backend-macos",
     "crates/duet-backend-windows",
+    "crates/duet-backend-linux",
     "crates/duet-protocol",
     "crates/duet-host-stdio",
     "crates/duet-webview",

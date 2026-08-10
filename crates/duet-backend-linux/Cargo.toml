@@ -1,0 +1,42 @@
+[package]
+name = "duet-backend-linux"
+description = "Linux backend for Duet: tao/GTK windows, a Flutter engine and a wry webview"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+duet-core = { path = "../duet-core" }
+duet-runtime = { path = "../duet-runtime" }
+duet-supervisor = { path = "../duet-supervisor" }
+duet-host = { path = "../duet-host" }
+duet-webview = { path = "../duet-webview" }
+duet-protocol = { path = "../duet-protocol" }
+# The command registry a surface is built with. `duet-protocol` owns the *seam*
+# (`CommandHost`); this owns the table an embedder writes and the `CommandEntry`
+# a `#[command]` expands to, which is what a surface takes.
+duet-command = { path = "../duet-command" }
+tao = "0.36"
+wry = "0.56"
+# The same gtk-rs stack tao 0.36 itself links, so every widget handle this
+# crate passes around belongs to one GTK. The Flutter engine itself is spoken
+# to through hand-declared `extern "C"` signatures from the `flutter_linux`
+# headers (see `src/ffi.rs`) — the API surface is a dozen functions, which is
+# not worth a bindgen step.
+gtk = "0.18"
+glib = "0.18"
+glib-sys = "0.18"
+gobject-sys = "0.18"
+
+[dev-dependencies]
+# `examples/webview_commands.rs` writes its commands with `#[command]`, which is
+# what an embedder writes. A dev-dependency, not a dependency: the backend takes
+# a `&'static [CommandEntry]` and has no opinion about where it came from.
+duet = { path = "../duet", features = ["commands", "derive"] }
+# `examples/hot_reload.rs` drives the real reload driver against a real engine.
+duet-dev = { path = "../duet-dev" }
+# Only the examples that parse JSON readbacks need this; the library itself
+# does not depend on serde_json.
+serde_json = { version = "1", features = ["float_roundtrip"] }

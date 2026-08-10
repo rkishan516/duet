@@ -428,6 +428,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "duet-backend-linux"
+version = "0.1.0"
+dependencies = [
+ "duet",
+ "duet-command",
+ "duet-core",
+ "duet-dev",
+ "duet-host",
+ "duet-protocol",
+ "duet-runtime",
+ "duet-supervisor",
+ "duet-webview",
+ "glib",
+ "glib-sys",
+ "gobject-sys",
+ "gtk",
+ "serde_json",
+ "tao",
+ "wry",
+]
+
+[[package]]
 name = "duet-backend-macos"
 version = "0.1.0"
 dependencies = [

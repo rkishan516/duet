@@ -126,24 +126,30 @@ jobs:
             exit 1
           fi
           printf 'default:      %s\nall-features: %s\n' "$default" "$full"
-      # The two platform backends cannot even *compile* on ubuntu-latest.
+      # The three platform backends cannot build on this runner.
       # duet-backend-macos links FlutterMacOS.framework and calls into
       # tao/objc2-app-kit; duet-backend-windows links flutter_windows.dll and
-      # calls Win32 — this runner has neither toolchain and no window server.
-      # Both are excluded from every step below that would try to build them
-      # (clippy, docs, coverage, test) rather than silently letting CI stop
-      # covering them while looking green. The macOS crate's verification is
-      # recorded in crates/duet-backend-macos/FINDINGS.md (real hardware, by
-      # hand); the Windows crate gets the `windows` job below — the first
-      # platform backend under CI.
+      # calls Win32 — neither can even *compile* on ubuntu-latest.
+      # duet-backend-linux targets this very OS, but linking it needs the GTK
+      # development headers and a Flutter engine artifact cache
+      # (libflutter_linux_gtk.so) that this runner does not carry, and
+      # installing both belongs in a dedicated job with its own caching — the
+      # analog of the `windows` job below, planned alongside the Linux
+      # examples port. All three are excluded from every step below that
+      # would try to build them (clippy, docs, coverage, test) rather than
+      # silently letting CI stop covering them while looking green. The macOS
+      # crate's verification is recorded in
+      # crates/duet-backend-macos/FINDINGS.md (real hardware, by hand); the
+      # Windows crate gets the `windows` job below — the first platform
+      # backend under CI.
       - name: Clippy
-        run: cargo clippy --workspace --exclude duet-backend-macos --exclude duet-backend-windows --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --exclude duet-backend-macos --exclude duet-backend-windows --exclude duet-backend-linux --all-targets --locked -- -D warnings
       - name: Docs
-        run: cargo doc --workspace --exclude duet-backend-macos --exclude duet-backend-windows --no-deps --locked
+        run: cargo doc --workspace --exclude duet-backend-macos --exclude duet-backend-windows --exclude duet-backend-linux --no-deps --locked
         env:
           RUSTDOCFLAGS: -D warnings
       - name: Test with coverage gate
-        run: cargo llvm-cov --workspace --exclude duet-backend-macos --exclude duet-backend-windows --locked --fail-under-lines 90
+        run: cargo llvm-cov --workspace --exclude duet-backend-macos --exclude duet-backend-windows --exclude duet-backend-linux --locked --fail-under-lines 90
       # Runs duet-protocol's `corpus_matches_the_committed_file`, which
       # regenerates the corpus in memory and compares bytes against the
       # committed file. Both this step and the coverage step above execute it;
@@ -179,7 +185,7 @@ jobs:
       # the guidance naming the fix stopped reaching the user, so a blind
       # regeneration cannot quietly empty the check.
       - name: Test single-threaded (includes all three staleness checks)
-        run: cargo test --workspace --exclude duet-backend-macos --exclude duet-backend-windows --locked -- --test-threads=1
+        run: cargo test --workspace --exclude duet-backend-macos --exclude duet-backend-windows --exclude duet-backend-linux --locked -- --test-threads=1
       # The fourth staleness check, and the only one a user outside this
       # workspace can reproduce.
       #
