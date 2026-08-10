@@ -152,7 +152,20 @@ fn read_mappings(json: &Value, base: &Path) -> Vec<Mapping> {
 /// the directory holding `package_config.json`.
 fn resolve(base: &Path, root_uri: &str) -> PathBuf {
     match root_uri.strip_prefix("file://") {
-        Some(absolute) => PathBuf::from(absolute),
+        Some(rest) => {
+            // A POSIX file URI carries the absolute path directly after the
+            // empty authority (`file:///tmp/x` -> `/tmp/x`). A Windows drive
+            // URI is `file:///C:/x` — its path component starts `/C:/`, which
+            // is not an absolute Windows path until the leading slash is
+            // dropped. Without this, every hosted-package rootUri `pub get`
+            // writes on Windows resolved to garbage.
+            let bytes = rest.as_bytes();
+            if bytes.len() >= 3 && bytes[0] == b'/' && bytes[2] == b':' {
+                PathBuf::from(&rest[1..])
+            } else {
+                PathBuf::from(rest)
+            }
+        }
         None => base.join(root_uri),
     }
 }

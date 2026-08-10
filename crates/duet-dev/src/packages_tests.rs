@@ -64,10 +64,12 @@ fn a_file_outside_every_package_falls_back_to_a_file_uri() {
     let config = write_config(&project, &[("duet_guest", "../", "lib/")]);
     let packages = PackageConfig::read(&config).expect("read");
     let stray = project.join("tool/generate.dart");
-    assert_eq!(
-        packages.uri_for(&stray),
-        format!("file://{}", stray.display())
-    );
+    // Compared against `file_uri` (the shape `frontend_server::file_uri`'s own
+    // tests pin) rather than a hand-glued string: `uri_for` normalises the
+    // path through platform components first, so a literal expectation built
+    // from `stray.display()` carries mixed separators on Windows and can
+    // never match. What THIS test claims is the fallback itself.
+    assert_eq!(packages.uri_for(&stray), file_uri(&stray));
     let _ = std::fs::remove_dir_all(&project);
 }
 
@@ -133,10 +135,10 @@ fn a_file_scheme_root_uri_is_understood() {
     let project = scratch("fileuri");
     let lib = project.join("lib");
     std::fs::create_dir_all(&lib).expect("mkdir");
-    let config = write_config(
-        &project,
-        &[("absolute", &format!("file://{}", project.display()), "lib/")],
-    );
+    // Written through `file_uri` so the URI is well-formed on every platform:
+    // gluing `project.display()` after `file://` embeds raw backslashes on
+    // Windows, which are not even legal JSON string content, let alone a URI.
+    let config = write_config(&project, &[("absolute", &file_uri(&project), "lib/")]);
     let packages = PackageConfig::read(&config).expect("read");
     assert_eq!(
         packages.uri_for(&lib.join("x.dart")),
@@ -233,7 +235,7 @@ fn a_relative_config_and_an_absolute_file_still_match() {
     // produces — would match nothing and degrade every URI to `file://`. That
     // still compiles, so nothing would ever report it; the only symptom is
     // that library identity no longer matches the running program's kernel.
-    let project = scratch("mixedforms");
+    let project = scratch_on_this_volume("mixedforms");
     let config = write_config(&project, &[("mixed", "../", "lib/")]);
 
     // Re-derive the config path as a *relative* one, as a caller working from
@@ -255,7 +257,7 @@ fn a_relative_config_and_an_absolute_file_still_match() {
 fn a_relative_file_matches_an_absolutely_read_config() {
     // The mirror image, so the normalisation is symmetric rather than
     // accidentally working in one direction.
-    let project = scratch("relfile");
+    let project = scratch_on_this_volume("relfile");
     let config = write_config(&project, &[("rel", "../", "lib/")]);
     let packages = PackageConfig::read(&config).expect("read");
 
@@ -269,18 +271,49 @@ fn a_relative_file_matches_an_absolutely_read_config() {
     let _ = std::fs::remove_dir_all(&project);
 }
 
+/// A scratch directory guaranteed to share a volume with the working
+/// directory, for the mixed relative/absolute tests only.
+///
+/// Those tests build a relative path between the cwd and the scratch, and a
+/// relative path between two locations only exists when they share a volume —
+/// which `std::env::temp_dir()` does not promise, and on Windows routinely
+/// breaks (a repository on `D:` with temp on `C:`). Anchoring under the
+/// workspace `target/` directory keeps the volume shared on every platform.
+fn scratch_on_this_volume(name: &str) -> PathBuf {
+    // Normalised so the `..` components of the workspace-target join are
+    // resolved away — `pathdiff` below deliberately counts only named
+    // components, so a path still carrying literal `..`s would diff wrong.
+    let path = normalise(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/duet-dev-pkg-scratch")
+            .join(format!("{}-{name}", std::process::id())),
+    );
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir_all(&path).expect("a scratch directory should be creatable");
+    path
+}
+
 /// `target` expressed relative to `base`, for the mixed-form tests.
 ///
-/// Only has to handle the shape these tests produce — a temp directory that
-/// shares no prefix with the repository — so it walks up from `base` and then
-/// down, rather than being a general implementation.
+/// Walks up past every *named* component of `base`, then down every named
+/// component of `target`. Prefix and root components carry no relative-path
+/// information — and on Windows, pushing a bare root marker onto a `PathBuf`
+/// would reset it to the root instead of descending — so only
+/// `Component::Normal` counts in either direction. Valid only when the two
+/// share a volume, which [`scratch_on_this_volume`] guarantees for the tests
+/// that call this.
 fn pathdiff(base: &Path, target: &Path) -> PathBuf {
+    use std::path::Component;
     let mut relative = PathBuf::new();
-    for _ in base.components() {
-        relative.push("..");
+    for component in base.components() {
+        if matches!(component, Component::Normal(_)) {
+            relative.push("..");
+        }
     }
-    for component in target.components().skip(1) {
-        relative.push(component);
+    for component in target.components() {
+        if matches!(component, Component::Normal(_)) {
+            relative.push(component);
+        }
     }
     relative
 }

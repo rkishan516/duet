@@ -98,7 +98,7 @@ fn a_project_without_pub_get_says_so_rather_than_failing_obscurely() {
     let flutter = root.join("flutter");
     let dart_bin = flutter.join("bin/cache/dart-sdk/bin");
     std::fs::create_dir_all(dart_bin.join("snapshots")).expect("mkdir");
-    std::fs::write(dart_bin.join("dartaotruntime"), "").expect("write");
+    std::fs::write(dart_bin.join(duet_dev::DART_AOT_RUNTIME), "").expect("write");
     std::fs::write(
         dart_bin.join("snapshots/frontend_server_aot.dart.snapshot"),
         "",
@@ -128,7 +128,7 @@ fn a_host_that_exits_without_announcing_a_vm_service_says_why() {
     let flutter = root.join("flutter");
     let dart_bin = flutter.join("bin/cache/dart-sdk/bin");
     std::fs::create_dir_all(dart_bin.join("snapshots")).expect("mkdir");
-    std::fs::write(dart_bin.join("dartaotruntime"), "").expect("write");
+    std::fs::write(dart_bin.join(duet_dev::DART_AOT_RUNTIME), "").expect("write");
     std::fs::write(
         dart_bin.join("snapshots/frontend_server_aot.dart.snapshot"),
         "",
@@ -176,7 +176,7 @@ fn a_host_command_that_cannot_be_started_is_reported_with_the_command() {
     let flutter = root.join("flutter");
     let dart_bin = flutter.join("bin/cache/dart-sdk/bin");
     std::fs::create_dir_all(dart_bin.join("snapshots")).expect("mkdir");
-    std::fs::write(dart_bin.join("dartaotruntime"), "").expect("write");
+    std::fs::write(dart_bin.join(duet_dev::DART_AOT_RUNTIME), "").expect("write");
     std::fs::write(
         dart_bin.join("snapshots/frontend_server_aot.dart.snapshot"),
         "",

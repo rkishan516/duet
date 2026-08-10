@@ -15,6 +15,23 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{DevError, Stage};
 
+/// The platform's file name for the Dart AOT runtime.
+///
+/// The Dart SDK ships it as `dartaotruntime.exe` on Windows and
+/// `dartaotruntime` everywhere else; looking for the bare name on Windows can
+/// never resolve, which left [`FlutterSdk::locate`] unable to find a real,
+/// fully-populated SDK there (found by the Windows `hot_reload` example).
+///
+/// Public so that anything constructing an SDK-shaped directory — test
+/// fixtures most of all — names the file the way a real checkout does; a fake
+/// built with the bare name on Windows would pass against a resolver that
+/// could never find the real thing.
+pub const DART_AOT_RUNTIME: &str = if cfg!(windows) {
+    "dartaotruntime.exe"
+} else {
+    "dartaotruntime"
+};
+
 /// The Flutter SDK artefacts needed to run an incremental compiler.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FlutterSdk {
@@ -44,7 +61,7 @@ impl FlutterSdk {
 
         let cache = root.join("bin").join("cache");
         let sdk = FlutterSdk {
-            dartaotruntime: cache.join("dart-sdk").join("bin").join("dartaotruntime"),
+            dartaotruntime: cache.join("dart-sdk").join("bin").join(DART_AOT_RUNTIME),
             frontend_server: cache
                 .join("dart-sdk")
                 .join("bin")

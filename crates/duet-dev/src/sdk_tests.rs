@@ -10,11 +10,13 @@ fn scratch(name: &str) -> PathBuf {
     path
 }
 
-/// Builds the directory layout `FlutterSdk::locate` expects.
+/// Builds the directory layout `FlutterSdk::locate` expects. The runtime file
+/// carries the platform's name ([`DART_AOT_RUNTIME`]), exactly as a real SDK
+/// checkout does — `dartaotruntime.exe` on Windows, bare elsewhere.
 fn fake_flutter_root(root: &Path) {
     let dart_bin = root.join("bin/cache/dart-sdk/bin");
     std::fs::create_dir_all(dart_bin.join("snapshots")).expect("mkdir");
-    std::fs::write(dart_bin.join("dartaotruntime"), "").expect("write");
+    std::fs::write(dart_bin.join(DART_AOT_RUNTIME), "").expect("write");
     std::fs::write(
         dart_bin.join("snapshots/frontend_server_aot.dart.snapshot"),
         "",
@@ -35,7 +37,7 @@ fn a_complete_flutter_root_resolves_all_three_artefacts() {
 
     assert!(
         sdk.dartaotruntime
-            .ends_with("bin/cache/dart-sdk/bin/dartaotruntime")
+            .ends_with(Path::new("bin/cache/dart-sdk/bin").join(DART_AOT_RUNTIME))
     );
     assert!(
         sdk.frontend_server
@@ -87,8 +89,9 @@ fn each_missing_artefact_is_named_individually() {
     // A half-populated cache is a real state — an interrupted `flutter
     // precache` leaves exactly this — and the message has to say which piece
     // is absent.
+    let aot_runtime = format!("bin/cache/dart-sdk/bin/{DART_AOT_RUNTIME}");
     let cases: [(&str, &str); 3] = [
-        ("bin/cache/dart-sdk/bin/dartaotruntime", "dartaotruntime"),
+        (aot_runtime.as_str(), "dartaotruntime"),
         (
             "bin/cache/dart-sdk/bin/snapshots/frontend_server_aot.dart.snapshot",
             "frontend_server snapshot",
@@ -101,7 +104,11 @@ fn each_missing_artefact_is_named_individually() {
     for (index, (remove, expected)) in cases.into_iter().enumerate() {
         let root = scratch(&format!("partial{index}"));
         fake_flutter_root(&root);
-        let victim = root.join(remove);
+        // Rebuilt from components so its display uses the platform's own
+        // separators — the error message being checked against was built with
+        // `.join()` chains, and a mixed-separator expectation can never match
+        // it on Windows.
+        let victim: PathBuf = root.join(remove).components().collect();
         if victim.is_dir() {
             std::fs::remove_dir_all(&victim).expect("rmdir");
         } else {

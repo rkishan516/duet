@@ -493,8 +493,21 @@ fn spawn_stderr_reader<R: std::io::Read + Send + 'static>(
 /// Absolute paths only, because a relative one would be resolved against the
 /// *Dart VM's* working directory rather than this process's — a difference
 /// that shows up as a reload that reports success against a stale kernel.
+///
+/// A POSIX absolute path starts with `/`, so gluing it after `file://`
+/// produces the well-formed empty-authority form (`file:///tmp/app.dill`). A
+/// Windows drive path does not — `file://C:\...` puts the drive letter where
+/// a URI host goes, and carries separators a URI may not — so it gets the
+/// missing slash added and its separators flipped (`file:///C:/app.dill`).
+/// Found by the Windows `hot_reload` example: the malformed form made every
+/// `reloadSources` decline with no stated reason.
 pub fn file_uri(path: &Path) -> String {
-    format!("file://{}", path.display())
+    let display = path.display().to_string();
+    if display.starts_with('/') {
+        format!("file://{display}")
+    } else {
+        format!("file:///{}", display.replace('\\', "/"))
+    }
 }
 
 #[cfg(test)]

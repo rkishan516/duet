@@ -348,3 +348,17 @@ fn a_file_uri_is_what_reload_sources_accepts() {
         "file:///tmp/duet-dev/out.dill.incremental.dill"
     );
 }
+
+#[test]
+fn a_windows_drive_path_becomes_a_well_formed_file_uri() {
+    // A drive path has no leading slash and carries backslashes, so the naive
+    // glue produced `file://C:\...` — the drive letter parsed as a URI host —
+    // and every `reloadSources` on Windows was declined with no stated
+    // reason (found by the Windows hot_reload example). The transformation is
+    // pure string logic, so this pins it on every platform, not just the one
+    // where the input shape occurs naturally.
+    assert_eq!(
+        file_uri(Path::new(r"C:\Users\dev\out.dill.incremental.dill")),
+        "file:///C:/Users/dev/out.dill.incremental.dill"
+    );
+}

@@ -87,7 +87,7 @@ pub use frontend_server::{CompileOutcome, CompilerConfig, FrontendServer, file_u
 pub use locate::{Announcement, engine_switches, free_port};
 pub use packages::PackageConfig;
 pub use reload::{DriverConfig, Reload, ReloadDriver, Started, Timeouts, Timings};
-pub use sdk::{FlutterSdk, package_config};
+pub use sdk::{DART_AOT_RUNTIME, FlutterSdk, package_config};
 pub use url::{UrlError, VmServiceUrl};
 pub use vm_service::{IsolateId, ReloadReport, VmServiceClient};
 pub use watch::{WatchConfig, Watcher};
