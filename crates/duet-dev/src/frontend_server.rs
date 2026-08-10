@@ -93,6 +93,9 @@ pub struct FrontendServer {
     lines: Receiver<Result<String, std::io::Error>>,
     /// The tail of the child's stderr, shared with its reader thread.
     stderr: Arc<Mutex<Vec<String>>>,
+    /// The stderr reader thread, joined by [`FrontendServer::exited`] before
+    /// the tail is read — see there for the race this closes.
+    stderr_reader: Option<thread::JoinHandle<()>>,
     output_dill: PathBuf,
     /// Monotonic source of boundary keys.
     boundary: u64,
@@ -167,13 +170,14 @@ impl FrontendServer {
         spawn_reader("duet-dev-fs-stdout", stdout, sender);
 
         let tail = Arc::new(Mutex::new(Vec::new()));
-        spawn_stderr_reader(stderr, Arc::clone(&tail));
+        let stderr_reader = spawn_stderr_reader(stderr, Arc::clone(&tail));
 
         Ok(FrontendServer {
             child,
             stdin,
             lines,
             stderr: tail,
+            stderr_reader,
             output_dill: config.output_dill.clone(),
             boundary: 0,
         })
@@ -373,6 +377,16 @@ impl FrontendServer {
             Ok(status) => status.code(),
             Err(_) => None,
         };
+        // `wait` proves the child flushed its last stderr bytes into the pipe;
+        // it says nothing about whether the reader thread has *read* them yet.
+        // On a loaded machine the error was being built here with an empty
+        // tail while the reason sat unread in the pipe — a third CI run lost
+        // exactly that race. The child is dead, so the pipe is at EOF and the
+        // reader exits after draining it: this join is bounded, and after it
+        // the tail holds everything the child ever said.
+        if let Some(reader) = self.stderr_reader.take() {
+            let _ = reader.join();
+        }
         let mut stderr = match self.stderr.lock() {
             Ok(tail) => tail.join("\n"),
             // A poisoned lock means the stderr reader panicked. Losing the
@@ -469,22 +483,29 @@ fn spawn_reader<R: std::io::Read + Send + 'static>(
 }
 
 /// Keeps the last [`STDERR_TAIL_LINES`] lines of the child's stderr.
+///
+/// Returns the reader's handle so [`FrontendServer::exited`] can join it
+/// before reading the tail; `None` only if the thread could not be spawned at
+/// all, in which case there is nothing to wait for and the tail simply stays
+/// empty.
 fn spawn_stderr_reader<R: std::io::Read + Send + 'static>(
     source: R,
     tail: Arc<Mutex<Vec<String>>>,
-) {
+) -> Option<thread::JoinHandle<()>> {
     let builder = thread::Builder::new().name("duet-dev-fs-stderr".to_string());
-    let _ = builder.spawn(move || {
-        let reader = BufReader::new(source);
-        for line in reader.lines() {
-            let Ok(line) = line else { return };
-            let Ok(mut tail) = tail.lock() else { return };
-            if tail.len() == STDERR_TAIL_LINES {
-                tail.remove(0);
+    builder
+        .spawn(move || {
+            let reader = BufReader::new(source);
+            for line in reader.lines() {
+                let Ok(line) = line else { return };
+                let Ok(mut tail) = tail.lock() else { return };
+                if tail.len() == STDERR_TAIL_LINES {
+                    tail.remove(0);
+                }
+                tail.push(line);
             }
-            tail.push(line);
-        }
-    });
+        })
+        .ok()
 }
 
 /// A `file://` URI for `path`, which is the only form `reloadSources` accepts
