@@ -82,6 +82,28 @@ cargo run -p duet-backend-macos --example two_guests      # alongside a webview 
 Only a debug/JIT build has been exercised; nothing here has been measured
 against a release/AOT build.
 
+## Building the Windows bundle
+
+The Windows examples (`crates/duet-backend-windows/examples/`) boot the same
+drivers from the `data` directory a Windows debug build leaves next to the
+runner exe. From the repository root:
+
+```bash
+cd fixtures/duet_guest && flutter build windows --debug
+```
+
+This produces `fixtures/duet_guest/build/windows/x64/runner/Debug/data`
+(`flutter_assets/` with `kernel_blob.bin`, plus `icudtl.dat`), which the
+Windows examples default to via `DUET_FLUTTER_BUNDLE`:
+
+```bash
+cargo run -p duet-backend-windows --example flutter_state   # this guest alone
+cargo run -p duet-backend-windows --example two_guests      # alongside a webview guest
+```
+
+If `fixtures/duet_guest/windows/` is missing (fresh clone), regenerate the
+scaffolding first — see below.
+
 ## Running the tests
 
 ```bash
@@ -103,4 +125,4 @@ clean`), regenerate it with:
 flutter create --platforms=macos --org com.example --project-name duet_guest fixtures/duet_guest
 ```
 
-then `flutter pub get`.
+(or `--platforms=windows` on Windows), then `flutter pub get`.

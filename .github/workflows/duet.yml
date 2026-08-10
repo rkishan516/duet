@@ -126,23 +126,24 @@ jobs:
             exit 1
           fi
           printf 'default:      %s\nall-features: %s\n' "$default" "$full"
+      # The two platform backends cannot even *compile* on ubuntu-latest.
       # duet-backend-macos links FlutterMacOS.framework and calls into
-      # tao/objc2-app-kit, none of which exist on ubuntu-latest — this
-      # runner has no window server and no Flutter toolchain, so the crate
-      # cannot even *compile* here, let alone run or reach the 90% line
-      # coverage every other crate clears. It is excluded from every step
-      # below that would try to build it (clippy, docs, coverage, test)
-      # rather than silently letting CI stop covering it while looking
-      # green — see crates/duet-backend-macos/FINDINGS.md for what was
-      # verified for it instead, on real macOS hardware.
+      # tao/objc2-app-kit; duet-backend-windows links flutter_windows.dll and
+      # calls Win32 — this runner has neither toolchain and no window server.
+      # Both are excluded from every step below that would try to build them
+      # (clippy, docs, coverage, test) rather than silently letting CI stop
+      # covering them while looking green. The macOS crate's verification is
+      # recorded in crates/duet-backend-macos/FINDINGS.md (real hardware, by
+      # hand); the Windows crate gets the `windows` job below — the first
+      # platform backend under CI.
       - name: Clippy
-        run: cargo clippy --workspace --exclude duet-backend-macos --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --exclude duet-backend-macos --exclude duet-backend-windows --all-targets --locked -- -D warnings
       - name: Docs
-        run: cargo doc --workspace --exclude duet-backend-macos --no-deps --locked
+        run: cargo doc --workspace --exclude duet-backend-macos --exclude duet-backend-windows --no-deps --locked
         env:
           RUSTDOCFLAGS: -D warnings
       - name: Test with coverage gate
-        run: cargo llvm-cov --workspace --exclude duet-backend-macos --locked --fail-under-lines 90
+        run: cargo llvm-cov --workspace --exclude duet-backend-macos --exclude duet-backend-windows --locked --fail-under-lines 90
       # Runs duet-protocol's `corpus_matches_the_committed_file`, which
       # regenerates the corpus in memory and compares bytes against the
       # committed file. Both this step and the coverage step above execute it;
@@ -178,7 +179,7 @@ jobs:
       # the guidance naming the fix stopped reaching the user, so a blind
       # regeneration cannot quietly empty the check.
       - name: Test single-threaded (includes all three staleness checks)
-        run: cargo test --workspace --exclude duet-backend-macos --locked -- --test-threads=1
+        run: cargo test --workspace --exclude duet-backend-macos --exclude duet-backend-windows --locked -- --test-threads=1
       # The fourth staleness check, and the only one a user outside this
       # workspace can reproduce.
       #
@@ -230,6 +231,56 @@ jobs:
             --dart examples/showcase/flutter/lib/src/showcase.duet.dart \
             --ts examples/showcase/web/src/showcase.duet.ts \
             --check
+
+  # The Windows platform backend — the first platform backend under CI, which
+  # macOS never got (no macOS runner in this workflow, and the macOS crate's
+  # proof has always been examples run by hand on real hardware).
+  #
+  # What this job can and cannot verify, stated so nobody reads more into a
+  # green run than it says. It CAN: compile the crate against the real
+  # flutter_windows.dll import surface (`flutter precache --windows` populates
+  # the artifact cache that build.rs discovers from the flutter on PATH), hold
+  # it to the same clippy/doc bar as the rest of the workspace, run its unit
+  # tests (the platform-free handler logic, the size caps, the subscriber
+  # filter, and the closed-loop ProxySink test that macOS has to `#[ignore]` —
+  # tao on Windows can build an event loop off the main thread), and compile
+  # all seven examples. It CANNOT run those examples: they need a real
+  # display session, a built Dart guest fixture, and 30-180 seconds of live
+  # engine each. Their ALL PASS runs are recorded evidence from real
+  # hardware, per docs/10-porting.md §7 — same bar as macOS, now with the
+  # compile half automated.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Populate the Flutter Windows engine artifacts
+        run: flutter precache --windows
+      - name: Build
+        run: cargo build -p duet-backend-windows --locked
+      - name: Clippy
+        run: cargo clippy -p duet-backend-windows --all-targets --locked -- -D warnings
+      - name: Docs
+        run: cargo doc -p duet-backend-windows --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - name: Test
+        run: cargo test -p duet-backend-windows --locked -- --test-threads=1
+      # duet-dev and duet-cli are platform-free and fully tested on ubuntu —
+      # but three real Windows bugs (file:// URI shape, dartaotruntime.exe,
+      # drive-letter rootUris) lived in duet-dev precisely because no CI ever
+      # ran its tests on Windows. This runner is the only place those paths
+      # are exercised; see crates/duet-backend-windows/FINDINGS.md WB4.
+      - name: Test the dev tooling on Windows paths
+        run: cargo test -p duet-dev -p duet-cli --locked -- --test-threads=1
+      - name: Compile the examples
+        run: cargo build -p duet-backend-windows --examples --locked
 
   # The pure-Dart client. This job is the entire reason `packages/duet` and
   # `packages/duet_flutter` are separate packages: `package:flutter/services.dart`

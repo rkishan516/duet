@@ -25,6 +25,9 @@ dist/
 # Phase 0 spike fixture — regenerate with:
 #   flutter create --platforms=macos --project-name spike_app spikes/spike_app
 #   (cd spikes/spike_app && flutter build macos --debug)
+# or, on Windows (spike-b-windows and the Windows lifecycle/hot_reload examples):
+#   flutter create --platforms=windows --org com.example --project-name spike_app spikes/spike_app
+#   (cd spikes/spike_app && flutter build windows --debug)
 spikes/spike_app/
 # ...except the hand-edited entrypoint. Spikes B and C add a platform channel,
 # a post-frame reporter, and the kReloadMarker const that hot reload mutates.
@@ -33,9 +36,11 @@ spikes/spike_app/
 !spikes/spike_app/lib/main.dart
 spikes/*/target/
 
-# Phase 2b-6 Flutter guest fixture — regenerate scaffolding (macos/, .idea/,
-# pubspec.lock, ...) with:
+# Phase 2b-6 Flutter guest fixture — regenerate scaffolding (macos/, windows/,
+# .idea/, pubspec.lock, ...) with:
 #   flutter create --platforms=macos --org com.example --project-name duet_guest fixtures/duet_guest
+# or on Windows:
+#   flutter create --platforms=windows --org com.example --project-name duet_guest fixtures/duet_guest
 #
 # `/*` rather than `/`: git cannot re-include anything inside an excluded
 # *directory*, so `fixtures/duet_guest/` made the `!` lines below dead letters —
