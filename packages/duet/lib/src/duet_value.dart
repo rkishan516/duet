@@ -5,6 +5,7 @@
 library;
 
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'duet_error.dart';
 import 'duet_json.dart';
@@ -408,11 +409,26 @@ int _decodeInt(Object? payload) {
 /// literal `-0` still decodes with its sign. A guest hand-building a value has
 /// no way to force a decimal point — `JSON.stringify(1.0)` is `"1"` — and
 /// should not have to know which spelling this library happens to emit.
+/// The canonical quiet NaN, `0x7ff8000000000000` — the bit pattern Rust's
+/// `f64::NAN` carries and the one the golden corpus pins for the `NaN`
+/// sentinel.
+///
+/// Built from its bits rather than spelled `double.nan`, because `double.nan`
+/// (`0.0 / 0.0`) is materialised with an architecture-dependent sign bit:
+/// positive quiet NaN on arm64, **negative** (`0xfff8000000000000`) on x64,
+/// where SSE division produces the negative form. The corpus compares floats
+/// by their bits — the only comparison that means anything for a NaN — so the
+/// decode must produce one spelling on every machine, not whichever NaN the
+/// local FPU prefers. Found by the first ubuntu-x64 CI run; every earlier run
+/// of this suite was on arm64.
+final double _canonicalNan =
+    (ByteData(8)..setUint64(0, 0x7ff8000000000000)).getFloat64(0);
+
 double _decodeFloat(Object? payload) {
   if (payload is num) return payload.toDouble();
   if (payload is String) {
     return switch (payload) {
-      'NaN' => double.nan,
+      'NaN' => _canonicalNan,
       'Infinity' => double.infinity,
       '-Infinity' => double.negativeInfinity,
       '-0' => -0.0,
