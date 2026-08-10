@@ -33,6 +33,7 @@ rather than rounding up.
 | 07 | [Hot reload](07-hot-reload.md) | What does `duet dev` do on every save, how long does it take, and why does nothing get lost? |
 | 08 | [How this project proves things](08-testing.md) | What is the evidence behind the claims, and what has this codebase learned about tests that cannot fail? |
 | 09 | [Known limitations](09-limitations.md) | What does Duet *not* do yet, what could not be verified, and what was deferred on purpose? |
+| 10 | [Porting to a new platform](10-porting.md) | What does it take to add Windows or Linux, and what will bite you? |
 
 ### Also in this directory
 
