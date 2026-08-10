@@ -7,7 +7,7 @@
 //! state it never saw written.
 //!
 //! ```console
-//! $ (cd examples/showcase/flutter && flutter build macos --debug)
+//! $ (cd examples/showcase/flutter && flutter build macos --debug)   # or: flutter build windows --debug
 //! $ (cd examples/showcase/web && npm install && npm run build)
 //! $ cargo run -p duet-showcase
 //! ```
@@ -16,7 +16,8 @@
 //!
 //! | Variable | Default |
 //! |---|---|
-//! | `DUET_APP_FRAMEWORK_PATH` | `examples/showcase/flutter/build/macos/Build/Products/Debug/App.framework` |
+//! | `DUET_APP_FRAMEWORK_PATH` (macOS) | `examples/showcase/flutter/build/macos/Build/Products/Debug/App.framework` |
+//! | `DUET_FLUTTER_BUNDLE` (Windows) | `examples/showcase/flutter/build/windows/x64/runner/Debug/data` |
 //! | `DUET_WEB_GUEST_PATH` | `examples/showcase/web/build/guest.js` |
 //! | `DUET_SHOWCASE_LINGER_SECS` | `0` — set it to keep both guests alive for hot reload |
 //!
@@ -25,28 +26,39 @@
 
 #![deny(missing_docs)]
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn main() {
     println!(
-        "The Duet showcase's guests are macOS-only: they need a FlutterEngine and a WKWebView.\n\
+        "The Duet showcase's guests need a platform backend: a FlutterEngine plus a WKWebView \
+         on macOS, or flutter_windows.dll plus WebView2 on Windows.\n\
          The definition half of this crate builds everywhere — try:\n\
          \n    cargo run -p duet-showcase --bin schema\n"
     );
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 mod tour;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn main() {
     use std::time::Duration;
 
-    use duet_backend_macos::DuetEvent;
     use tao::event_loop::EventLoopBuilder;
 
+    use crate::tour::backend::DuetEvent;
+
+    #[cfg(target_os = "macos")]
     let framework = env_or(
         "DUET_APP_FRAMEWORK_PATH",
         "examples/showcase/flutter/build/macos/Build/Products/Debug/App.framework",
+    );
+    // The Windows analog of the App.framework: the `data` directory a debug
+    // `flutter build windows` leaves next to the runner exe, holding
+    // `flutter_assets/` and `icudtl.dat`.
+    #[cfg(target_os = "windows")]
+    let framework = env_or(
+        "DUET_FLUTTER_BUNDLE",
+        "examples/showcase/flutter/build/windows/x64/runner/Debug/data",
     );
     let bundle_path = env_or(
         "DUET_WEB_GUEST_PATH",
@@ -59,7 +71,10 @@ fn main() {
             .unwrap_or(0),
     );
 
+    #[cfg(target_os = "macos")]
     println!("[showcase] Flutter App.framework: {framework}");
+    #[cfg(target_os = "windows")]
+    println!("[showcase] Flutter data dir:      {framework}");
     println!("[showcase] webview guest bundle:  {bundle_path}");
 
     // Read before anything boots: a missing bundle is a build step the user
@@ -92,7 +107,7 @@ fn main() {
 }
 
 /// The value of `name`, or `fallback` when it is unset.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn env_or(name: &str, fallback: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| fallback.to_string())
 }

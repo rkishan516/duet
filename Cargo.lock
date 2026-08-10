@@ -589,11 +589,13 @@ version = "0.1.0"
 dependencies = [
  "duet",
  "duet-backend-macos",
+ "duet-backend-windows",
  "duet-core",
  "duet-host",
  "duet-runtime",
  "duet-supervisor",
  "tao",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

@@ -12,10 +12,11 @@
 //!
 //! # One event loop, two renderers
 //!
-//! `wry` needs a `tao` event loop and the Flutter engine needs the main thread's
-//! run loop; they cannot both be the driver, so the `tao` loop is it and the
-//! engine rides alongside. That is the arrangement Spike B measured and
-//! `crates/duet-backend-macos/examples/two_guests.rs` proved.
+//! `wry` needs a `tao` event loop and the Flutter engine needs the main
+//! thread's run loop; they cannot both be the driver, so the `tao` loop is it
+//! and the engine rides alongside. That is the arrangement the two run-loop
+//! spikes measured (`spikes/spike-b-macos`, `spikes/spike-b-windows`) and
+//! each backend's `examples/two_guests.rs` proved.
 //!
 //! # Staged, not slept
 //!
@@ -31,12 +32,34 @@ pub mod guests;
 pub mod report;
 pub mod rss;
 
+/// The platform backend, under one name.
+///
+/// The two backend crates export the same API deliberately — same types, same
+/// signatures, same teardown contract (`crates/duet-backend-windows` was
+/// written to be read side by side with `crates/duet-backend-macos`) — so one
+/// alias is all the tour needs to drive either. What genuinely differs
+/// (detach parks the view on Windows instead of dropping the controller; what
+/// `destroy_renderer` destroys) lives behind the same four `WindowBackend`
+/// methods and never reaches this crate.
+#[cfg(target_os = "macos")]
+pub use duet_backend_macos as backend;
+#[cfg(target_os = "windows")]
+pub use duet_backend_windows as backend;
+
+/// The backend struct itself — the one exported name the two crates spell
+/// differently.
+#[cfg(target_os = "macos")]
+pub type PlatformBackend = backend::MacBackend;
+#[cfg(target_os = "windows")]
+pub type PlatformBackend = backend::WinBackend;
+
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use duet::{Value, install};
-use duet_backend_macos::{DuetEvent, FlutterSurface, MacBackend, ProxySink, WebviewSurface};
 use duet_core::{Notification, SubscriberId};
+
+use crate::tour::backend::{DuetEvent, FlutterSurface, ProxySink, WebviewSurface};
 use duet_runtime::{Runtime, StoreHandle};
 use duet_supervisor::SurfaceId;
 use tao::dpi::LogicalSize;
@@ -99,8 +122,8 @@ pub struct Tour {
     pub store: StoreHandle,
     /// The host's typed view of the store.
     pub fields: Fields,
-    /// The macOS backend: Flutter engines and their windows.
-    pub backend: MacBackend,
+    /// The platform backend: Flutter engines and their windows.
+    pub backend: PlatformBackend,
     /// The surface the Flutter guest is registered under.
     pub flutter_id: SurfaceId,
     /// `None` while the Flutter guest is torn down — which is the point of acts
@@ -247,7 +270,7 @@ pub fn setup(
         store: runtime.handle(),
         runtime: Some(runtime),
         fields,
-        backend: MacBackend::new(framework),
+        backend: PlatformBackend::new(framework),
         flutter_id: SurfaceId::from_raw(1),
         flutter: None,
         flutter_sub,

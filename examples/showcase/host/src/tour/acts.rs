@@ -7,9 +7,10 @@
 use std::time::Instant;
 
 use duet::Reading;
-use duet_backend_macos::DuetEvent;
 use duet_host::WindowBackend;
 use tao::event_loop::EventLoopWindowTarget;
+
+use crate::tour::backend::DuetEvent;
 
 use duet_showcase::state::HostNote;
 

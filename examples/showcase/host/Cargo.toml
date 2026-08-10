@@ -18,14 +18,30 @@ default-run = "duet-showcase"
 # alone, on every platform.
 duet = { path = "../../../crates/duet", features = ["derive", "commands"] }
 
-# The surfaces are macOS-only, and so is the tour that drives them. Declaring
-# them under a target predicate rather than plainly is what keeps this crate a
-# workspace member: `duet-backend-macos` links `FlutterMacOS.framework` and
-# cannot compile on the Linux runner that builds the rest of the workspace, so
-# on any other platform this crate is just the definition plus a `main` that
-# says so.
+# The surfaces are platform backends, and so is the tour that drives them.
+# Declaring them under target predicates rather than plainly is what keeps this
+# crate a workspace member: `duet-backend-macos` links `FlutterMacOS.framework`
+# and `duet-backend-windows` links `flutter_windows.dll`, and neither can
+# compile on the Linux runner that builds the rest of the workspace — so on any
+# other platform this crate is just the definition plus a `main` that says so.
+# The two backends export the same names deliberately (see
+# `crates/duet-backend-windows/src/lib.rs`), which is what lets the tour drive
+# either through one alias.
 [target.'cfg(target_os = "macos")'.dependencies]
 duet-backend-macos = { path = "../../../crates/duet-backend-macos" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+duet-backend-windows = { path = "../../../crates/duet-backend-windows" }
+# The RSS samples: macOS reads them through `ps`, which Windows does not have —
+# the Windows arm asks the OS for its own working-set accounting instead. See
+# `src/tour/rss.rs`.
+windows-sys = { version = "0.60", features = [
+    "Win32_Foundation",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Threading",
+] }
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 duet-core = { path = "../../../crates/duet-core" }
 duet-host = { path = "../../../crates/duet-host" }
 duet-runtime = { path = "../../../crates/duet-runtime" }

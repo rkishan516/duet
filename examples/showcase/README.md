@@ -26,7 +26,7 @@ definition: `host/src/state.rs` and `host/src/commands.rs`.
 ## Run it
 
 Three build steps, then one command. Each guest is a real application and has to
-be built like one.
+be built like one. On macOS:
 
 ```console
 $ (cd examples/showcase/flutter && flutter build macos --debug)
@@ -34,25 +34,33 @@ $ (cd examples/showcase/web && npm install && npm run build)
 $ cargo run -p duet-showcase
 ```
 
+On Windows, the Flutter build step is `flutter build windows --debug`; the other
+two are identical.
+
 Only the hand-written half of the Flutter app is tracked — `lib/`, `pubspec.yaml`
-and `pubspec_overrides.yaml` — exactly as for `fixtures/duet_guest`. The Xcode
-scaffolding is regenerable, so on a fresh clone run this once first:
+and `pubspec_overrides.yaml` — exactly as for `fixtures/duet_guest`. The platform
+scaffolding is regenerable, so on a fresh clone run this once first
+(`--platforms=windows` on Windows):
 
 ```console
 $ flutter create --platforms=macos --org com.example \
     --project-name duet_showcase examples/showcase/flutter
 ```
 
-macOS only: the guests are a `FlutterEngine` and a `WKWebView`. On any other
-platform the binary says so and exits; the definition half of the crate still
-builds, and `cargo run -p duet-showcase --bin schema` still works.
+macOS and Windows only: the guests are a Flutter engine and a webview
+(`FlutterEngine` + `WKWebView` on macOS; `flutter_windows.dll` + WebView2 on
+Windows). On any other platform the binary says so and exits; the definition
+half of the crate still builds, and `cargo run -p duet-showcase --bin schema`
+still works.
 
 | Variable | Default |
 |---|---|
-| `DUET_APP_FRAMEWORK_PATH` | `examples/showcase/flutter/build/macos/Build/Products/Debug/App.framework` |
+| `DUET_APP_FRAMEWORK_PATH` (macOS) | `examples/showcase/flutter/build/macos/Build/Products/Debug/App.framework` |
+| `DUET_FLUTTER_BUNDLE` (Windows) | `examples/showcase/flutter/build/windows/x64/runner/Debug/data` |
 | `DUET_WEB_GUEST_PATH` | `examples/showcase/web/build/guest.js` |
 | `DUET_SHOWCASE_LINGER_SECS` | `0` — set it to pause mid-tour with both guests live, for hot reload |
 | `FLUTTER_MACOS_FRAMEWORK_DIR` | the engine directory `crates/duet-backend-macos/build.rs` defaults to |
+| `FLUTTER_WINDOWS_ENGINE_DIR` | the engine directory `crates/duet-backend-windows/build.rs` discovers from the `flutter` on PATH |
 
 The host exits `0` if every claim held and non-zero otherwise, so it is usable
 as a check and not only as a demo.
@@ -115,6 +123,22 @@ Booting the Flutter guest cost ~155 MB; tearing it down gave ~127 MB of it back 
 81 %, against a floor of 30 %. The floor is a *share* rather than a kilobyte
 count for the reason `crates/duet-backend-macos/examples/lifecycle.rs` sets out:
 an absolute floor silently encodes which guest app was booted.
+
+The same run on the Windows machine this was ported on (real display, both
+windows on screen):
+
+```
+  before either guest exists             16896 kB
+  webview guest live                     32448 kB
+  both guests live                      253100 kB
+  Flutter guest torn down                78216 kB
+  Flutter guest booted again            272088 kB
+```
+
+Booting cost ~220 MB; teardown gave 79 % of it back. On Windows "teardown"
+destroys the view controller, which owns the engine — see
+`spikes/spike-b-windows/FINDINGS.md` W-F1 for why that is the platform's shape
+of the same operation.
 
 ### Act 5 — the store outlives the guest
 
@@ -203,10 +227,13 @@ the Rust definition renders, so the chain cannot rot silently from either end.
 
 This is the honest part.
 
-- **Nothing visual.** There is no reachable on-screen WindowServer for a spawned
-  process on this machine. Both windows are created and both renderers draw into
-  them, but no display shows either one and no human has seen this app. Every
-  claim in the report is a value read back out of the store, never a pixel.
+- **Nothing visual — on the macOS machine.** There is no reachable on-screen
+  WindowServer for a spawned process there. Both windows are created and both
+  renderers draw into them, but no display shows either one. Every claim in the
+  report is a value read back out of the store, never a pixel. (The Windows
+  port ran with a real display session — both windows genuinely appear on
+  screen there — though the claims are still store values, and no human input
+  was exercised in the autonomous runs.)
 - **No mouse or keyboard.** The panels have buttons and they are wired up, but
   real input into a `WKWebView` is unproven here (a Spike B finding). Nothing the
   demo checks depends on a click: both guests run their opening moves on their

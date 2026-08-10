@@ -6,7 +6,6 @@
 //! default: two surfaces over one store could just as easily be given two
 //! different tables.
 
-use duet_backend_macos::{FlutterSurface, MacBackend};
 use duet_core::SubscriberId;
 use duet_host::WindowBackend;
 use duet_runtime::StoreHandle;
@@ -14,20 +13,25 @@ use duet_supervisor::SurfaceId;
 
 use duet_showcase::commands::COMMANDS;
 
+use crate::tour::PlatformBackend;
+use crate::tour::backend::FlutterSurface;
+
 /// Boots a Flutter engine for `surface` and registers the `duet/rpc` handler on
 /// it.
 ///
-/// No window yet: [`MacBackend::open_window`] needs the event loop's window
-/// target, which only exists inside the loop. The engine boots first either way
-/// — `runWithEntrypoint:` is synchronous, so by the time this returns the Dart
-/// `main()` is already running and knocking on the channel.
+/// No window yet: `open_window` needs the event loop's window target, which
+/// only exists inside the loop. The engine boots first either way — the engine
+/// run is synchronous on both platforms (macOS's `runWithEntrypoint:`;
+/// `FlutterDesktopEngineRun` per the Windows spike's W-F4), so by the time
+/// this returns the Dart `main()` is already running and knocking on the
+/// channel.
 ///
 /// # Errors
 ///
 /// Returns a human-readable reason if the engine will not boot or the handler
 /// will not register.
 pub fn boot_flutter(
-    backend: &mut MacBackend,
+    backend: &mut PlatformBackend,
     surface: SurfaceId,
     store: StoreHandle,
     subscriber: SubscriberId,
@@ -45,13 +49,15 @@ pub fn boot_flutter(
 /// Tears the Flutter guest all the way down: handler, engine, window.
 ///
 /// The order is load-bearing. `FlutterSurface`'s `Drop` unregisters the channel
-/// handler, and `shutDownEngine` does not clear the engine's handler map — so
-/// the surface must go first. The window goes last, because destroying the
+/// handler, and destroying the engine does not clear its handler registration
+/// on either platform (macOS's `shutDownEngine` keeps its handler map; the
+/// Windows engine holds the handler's `user_data` pointer past registration) —
+/// so the surface must go first. The window goes last, because destroying the
 /// renderer does not close it.
 ///
 /// `detach_view` is deliberately skipped. It is the documented middle step, but
 /// `crates/duet-backend-macos/FINDINGS.md` F1 describes a real, reproduced
-/// backing-store retry storm in a detached-view engine, and
+/// backing-store retry storm in a detached-view engine, and each backend's
 /// `examples/hot_reload.rs` already establishes that destroying a renderer with
 /// its view still attached is safe. A demo is the wrong place to walk into a
 /// known hazard for the sake of symmetry.
@@ -60,7 +66,7 @@ pub fn boot_flutter(
 ///
 /// Returns a human-readable reason if the renderer will not be destroyed.
 pub fn tear_down_flutter(
-    backend: &mut MacBackend,
+    backend: &mut PlatformBackend,
     surface: SurfaceId,
     handler: Option<FlutterSurface>,
 ) -> Result<(), String> {
