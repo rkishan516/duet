@@ -43,13 +43,20 @@
 //! # Who reclaims the memory
 //!
 //! `FlEngine` is a GObject, and the embedder's shutdown runs in its
-//! *dispose*: dropping the last reference is what stops Dart. This crate's
-//! [`FlutterEngine`] holds one reference and each [`crate::FlutterSurface`]
-//! holds another (so a surface's sends can never dangle), which makes the
-//! documented drop-surfaces-before-`destroy_renderer` order load-bearing for
-//! reclaim on Linux: a surface kept alive past `destroy_renderer` keeps the
-//! engine running until it drops. Every example and the showcase already
-//! honor that order.
+//! *dispose* — but waiting for the last reference to drop does not get
+//! there: one embedder-internal reference outlives even the view's
+//! destruction (measured here: ref_count 2 after `gtk_widget_destroy`, and
+//! a teardown that only dropped its own reference reclaimed 5.4% of the
+//! engine's cost in the lifecycle probe instead of most of it). So
+//! [`FlutterEngine::shutdown`] *forces* the dispose with
+//! `g_object_run_dispose` — the same idiom `gtk_widget_destroy` applies to
+//! widgets — which runs `FlutterEngineShutdown`, stops Dart, and reclaims
+//! the memory on the spot. Surfaces still hold their own references (engine
+//! and messenger objects both), which keeps a surface's send path
+//! memory-safe even past `destroy_renderer` — a send there degrades to a
+//! no-op through the messenger's internal weak engine reference — but the
+//! documented drop-surfaces-first order remains load-bearing for the
+//! channel handler's `user_data` (see [`crate::FlutterSurface`]'s `Drop`).
 //!
 //! Every call here must run on the main thread (the GTK main context).
 //! Callers are responsible for that; this module cannot enforce it itself.
@@ -297,18 +304,20 @@ impl FlutterEngine {
     }
 
     /// Shuts the engine down. **This is what reclaims memory** — the
-    /// embedder's shutdown runs in `FlEngine`'s dispose, reached when the
-    /// last reference drops.
+    /// embedder's shutdown runs in `FlEngine`'s dispose, and this method
+    /// *forces* that dispose rather than waiting for a last-reference drop
+    /// that never comes (see the module docs: one embedder-internal
+    /// reference outlives the view, measured on this machine).
     ///
     /// Detaches first (so the F1 sends run), destroys the view widget (which
     /// logs the embedder's harmless "The implicit view cannot be removed"
     /// warning — the implicit view is not removable, only its engine is
     /// stoppable), destroys the private holding window if this was a
-    /// headless boot, and drops this struct's engine reference. If a
-    /// [`crate::FlutterSurface`] still holds its own reference the engine
-    /// object outlives this call and Dart keeps running until that surface
-    /// drops — which is why the drop-surfaces-first order the other
-    /// platforms document is load-bearing for reclaim here.
+    /// headless boot, then runs `g_object_run_dispose` on the engine and
+    /// drops this struct's reference. A [`crate::FlutterSurface`] that still
+    /// holds its references keeps the engine and messenger *objects* alive —
+    /// its sends degrade to safe no-ops — but Dart is stopped and the memory
+    /// reclaimed here, not at the surface's later drop.
     ///
     /// Idempotent: a second call is a no-op. Infallible for the macOS
     /// crate's reason — there is no different action `shutdown` could take
@@ -335,8 +344,23 @@ impl FlutterEngine {
             // backend's window bookkeeping instead.
             unsafe { self.window.destroy() };
         }
-        // SAFETY: this struct took exactly one reference in `boot`.
+        // Dispose is *forced*, not awaited. Destroying the view does not
+        // bring the engine's reference count to one: measured on this
+        // machine, one embedder-internal reference outlives the view
+        // (ref_count was 2 here after `widget.destroy()`), and an engine
+        // whose dispose never runs never runs `FlutterEngineShutdown` — the
+        // first lifecycle probe measured teardown reclaiming 5.4% of the
+        // engine's cost instead of most of it. `g_object_run_dispose` is the
+        // GObject idiom for exactly this (it is what `gtk_widget_destroy`
+        // does to widgets): run the dispose machinery now, breaking the
+        // internal cycle, and let the remaining holders finalize the husk
+        // whenever they drop.
+        //
+        // SAFETY: the engine object is alive (this struct's reference), and
+        // dispose on a live GObject is memory-safe by contract; this struct
+        // then drops the one reference it took in `boot`.
         unsafe {
+            gobject_sys::g_object_run_dispose(self.engine as *mut gobject_sys::GObject);
             gobject_sys::g_object_unref(self.engine as *mut gobject_sys::GObject);
         }
     }
@@ -375,10 +399,10 @@ impl FlutterEngine {
     /// An accessor rather than a public field, for the macOS crate's reason:
     /// a caller needs the messenger to register a channel handler, and
     /// handing out the raw `FlEngine*` would let it drive the lifecycle this
-    /// type exists to sequence. The returned handle takes its own reference
-    /// on the **engine** (the messenger is engine-owned), so a surface's
-    /// sends can never dangle — at the price described in
-    /// [`FlutterEngine::shutdown`].
+    /// type exists to sequence. The returned handle takes its own references
+    /// on both the engine and the messenger objects, so a surface's sends
+    /// can never dangle — even after [`FlutterEngine::shutdown`] has forced
+    /// the engine's dispose, when they degrade to safe no-ops.
     ///
     /// # Errors
     ///
@@ -400,26 +424,35 @@ impl Drop for FlutterEngine {
     }
 }
 
-/// An engine-referencing messenger handle.
+/// A messenger handle holding its own references.
 ///
-/// The `FlBinaryMessenger` belongs to its engine, so this holds a reference
-/// on the engine object itself: sends through a [`crate::FlutterSurface`]
-/// that outlives `destroy_renderer` stay memory-safe (the GObject lives),
-/// even though the documented order is to drop surfaces first.
+/// Holds a reference on **both** GObjects: the engine and the
+/// `FlBinaryMessenger` itself. The engine reference keeps the engine object
+/// alive; the messenger reference is what makes sends through a
+/// [`crate::FlutterSurface`] that outlives `destroy_renderer` memory-safe —
+/// [`FlutterEngine::shutdown`] forces the engine's dispose, after which the
+/// engine's own messenger pointer is not this handle's to trust, but a
+/// referenced `FlBinaryMessenger` outlives it and holds only a *weak*
+/// engine reference internally, so a send after shutdown degrades to a
+/// no-op instead of a dangling call. The documented order is still to drop
+/// surfaces first.
 pub struct Messenger {
     engine: ffi::FlEngineRef,
     raw: ffi::MessengerRef,
 }
 
 impl Messenger {
-    /// Takes a new engine reference and wraps the messenger.
+    /// Takes new engine and messenger references and wraps the messenger.
     ///
     /// # Safety
     ///
     /// `engine` must be a live `FlEngine*` and `raw` its messenger.
     pub(crate) unsafe fn for_engine(engine: ffi::FlEngineRef, raw: ffi::MessengerRef) -> Self {
         // SAFETY: delegated to this function's contract.
-        unsafe { gobject_sys::g_object_ref(engine as *mut gobject_sys::GObject) };
+        unsafe {
+            gobject_sys::g_object_ref(engine as *mut gobject_sys::GObject);
+            gobject_sys::g_object_ref(raw as *mut gobject_sys::GObject);
+        }
         Messenger { engine, raw }
     }
 
@@ -449,8 +482,11 @@ impl Messenger {
 
 impl Drop for Messenger {
     fn drop(&mut self) {
-        // SAFETY: this handle took exactly one engine reference.
-        unsafe { gobject_sys::g_object_unref(self.engine as *mut gobject_sys::GObject) };
+        // SAFETY: this handle took exactly one reference on each object.
+        unsafe {
+            gobject_sys::g_object_unref(self.raw as *mut gobject_sys::GObject);
+            gobject_sys::g_object_unref(self.engine as *mut gobject_sys::GObject);
+        }
     }
 }
 

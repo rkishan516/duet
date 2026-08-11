@@ -132,11 +132,11 @@ struct HandlerState {
 /// GTK main context; this type is `!Send` (the raw pointers see to that),
 /// and the *creating* thread being the main one stays a caller obligation.
 ///
-/// **Drop before `destroy_renderer`.** On Linux the order is load-bearing
-/// twice over: the handler must unregister while the messenger's channel
-/// table exists, and the engine's memory is only reclaimed once the last
-/// reference — including this surface's — drops. See the shutdown notes on
-/// [`crate::engine::FlutterEngine`].
+/// **Drop before `destroy_renderer`.** The handler must unregister while
+/// the messenger's channel table still belongs to a live engine —
+/// `destroy_renderer` forces the engine's dispose (see the shutdown notes
+/// on [`crate::engine::FlutterEngine`]), after which this surface's own
+/// references keep its send path memory-safe but nothing more.
 pub struct FlutterSurface {
     /// The engine-referencing messenger, so replies and pushes can never
     /// dangle for as long as this surface lives.
@@ -255,10 +255,11 @@ impl Drop for FlutterSurface {
     /// **This is not optional, and the order matters**, exactly as on the
     /// other two platforms: the messenger holds the `user_data` pointer past
     /// registration, so a surface dropped without unregistering would leave
-    /// it dangling. Drop the `FlutterSurface` **before**
-    /// `destroy_renderer` — on Linux doubly so, because this surface's
-    /// engine reference is part of what keeps Dart running (see the shutdown
-    /// notes on [`crate::engine::FlutterEngine`]).
+    /// it dangling. Drop the `FlutterSurface` **before** `destroy_renderer`,
+    /// while the messenger's channel table still belongs to a live engine
+    /// (see the shutdown notes on [`crate::engine::FlutterEngine`] — its
+    /// dispose is forced there, and this surface's own references only keep
+    /// the send path memory-safe, not Dart running).
     ///
     /// Freeing the state immediately after unregistration is sound because
     /// the handler only ever runs on the GTK main context — the same thread
