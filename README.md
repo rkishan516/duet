@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.svg">
-    <img src="assets/banner-light.svg" alt="Duet — two guests, one store" width="480">
+    <img src="assets/banner-light.svg" alt="Duet — two guests, one store" width="330">
   </picture>
 </p>
 

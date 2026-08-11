@@ -1,7 +1,8 @@
-<svg width="560" height="140" viewBox="0 0 560 140" fill="none" xmlns="http://www.w3.org/2000/svg">
+<svg width="380" height="140" viewBox="0 0 380 140" fill="none" xmlns="http://www.w3.org/2000/svg">
   <!--
     The Duet banner, dark-background variant. Differs from banner-light.svg
     only in the wordmark and tagline colors; the mark itself is color-fast.
+    The canvas hugs the artwork for the reason banner-light.svg gives.
   -->
   <!-- the mark, at 100px -->
   <g transform="translate(20 20) scale(0.78125)">
