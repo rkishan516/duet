@@ -14,9 +14,9 @@
 //!
 //! `wry` needs a `tao` event loop and the Flutter engine needs the main
 //! thread's run loop; they cannot both be the driver, so the `tao` loop is it
-//! and the engine rides alongside. That is the arrangement the two run-loop
-//! spikes measured (`spikes/spike-b-macos`, `spikes/spike-b-windows`) and
-//! each backend's `examples/two_guests.rs` proved.
+//! and the engine rides alongside. That is the arrangement the three run-loop
+//! spikes measured (`spikes/spike-b-macos`, `spikes/spike-b-windows`,
+//! `spikes/spike-b-linux`) and each backend's `examples/two_guests.rs` proved.
 //!
 //! # Staged, not slept
 //!
