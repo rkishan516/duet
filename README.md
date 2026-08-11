@@ -1,4 +1,13 @@
-# Duet
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.svg">
+    <img src="assets/banner-light.svg" alt="Duet — two guests, one store" width="480">
+  </picture>
+</p>
+
+<p align="center">
+  <a href="https://github.com/rkishan516/duet/actions/workflows/duet.yml"><img src="https://github.com/rkishan516/duet/actions/workflows/duet.yml/badge.svg" alt="CI"></a>
+</p>
 
 One Rust type definition. Typed clients in Rust, Dart and TypeScript, sharing
 one store over one wire format.
@@ -7,6 +16,19 @@ A Duet host is a Rust process that owns the application state. A Flutter engine
 and a `wry` webview are **guests**: they render, they read and write the store,
 and they see each other's writes. Neither owns state; neither talks to the
 other.
+
+<p align="center">
+  <img src="assets/architecture.svg" alt="One Rust host owns the store; a Flutter guest and a webview guest each speak duet/rpc to it and never to each other" width="760">
+</p>
+
+Two real renderers, one store — the playground
+(`cargo run -p duet-showcase --bin playground`), a Flutter window and a
+WebKit/WebView2 window side by side, each showing its own note as `mine` and
+the other guest's as `the peer's`, both live over the same document:
+
+<p align="center">
+  <img src="assets/playground.png" alt="The Duet playground on Windows: a Flutter guest window and a WebView guest window, both rendering the same shared document, counter and notes" width="880">
+</p>
 
 ```
 #[derive(SharedState)]  ──▶  schema.json  ──▶  duet generate  ──▶  Dart client
@@ -243,7 +265,7 @@ unsplit.
 | `duet-derive` | `#[derive(SharedState)]`. |
 | `duet-codec` / `duet-protocol` | The tagged JSON wire format and the host conversation. |
 | `duet-supervisor` / `duet-host` / `duet-webview` | Surface lifecycle, window backends, the `wry` guest. |
-| `duet-backend-macos` | The macOS backend: a real Flutter engine and a real webview. |
+| `duet-backend-macos` / `-windows` / `-linux` | The three platform backends: a real Flutter engine and a real webview on each OS, written to be read side by side. |
 | `duet-codegen` | Schema in, Dart and TypeScript out. |
 | `duet-dev` | Hot reload: `frontend_server`, the Dart VM service, a file watcher. |
 | `duet-cli` | The `duet` command: `generate` and `dev`. |
@@ -259,13 +281,17 @@ unsplit.
 Phase 5 complete: one derive yields typed clients in three languages, proven
 byte-identical against a hand-written specification and against a live host over
 a real process boundary — and `duet dev` hot-reloads a running Flutter guest
-without losing the store. macOS is the implemented backend.
+without losing the store. **macOS, Windows and Linux** are the implemented
+backends, each with the same seven examples observed passing on real hardware
+— outputs pasted in `crates/duet-backend-*/FINDINGS.md`, per the project's
+never-claim-an-unobserved-pass rule.
 
-Hot reload, measured against a real engine: **median 43 ms** from saving a
-`.dart` file to the change being visible in a rendered frame *and* readable
-back out of the Rust store, over 30 reloads in three runs. The store's contents
-survive every one — that is asserted, not assumed, by
-`cargo run -p duet-backend-macos --example hot_reload`.
+Hot reload, measured against a real engine: **median 43 ms** on macOS from
+saving a `.dart` file to the change being visible in a rendered frame *and*
+readable back out of the Rust store, over 30 reloads in three runs (57 ms
+median on Windows, 60 ms on Linux under WSLg's software renderer). The store's
+contents survive every one — that is asserted, not assumed, by each backend's
+`hot_reload` example.
 
 Not yet: the web half of `duet dev` (Vite HMR), `#[command]` RPC codegen,
 collection handles, and the wider type surface (narrowing integers, tuples,
@@ -274,15 +300,21 @@ data enums).
 ## Building it
 
 ```console
-$ cargo test --workspace --exclude duet-backend-macos
-$ cargo test -p duet-backend-macos               # macOS only
+$ cargo test --workspace --exclude duet-backend-macos --exclude duet-backend-windows --exclude duet-backend-linux --exclude duet-showcase
+$ cargo test -p duet-backend-macos               # macOS, with a Flutter SDK
+$ cargo test -p duet-backend-windows             # Windows, with a Flutter SDK
+$ cargo test -p duet-backend-linux               # Linux, with a Flutter SDK + GTK headers
 $ cd packages/duet      && dart test
 $ cd packages/duet-js   && npm ci && npm test
 ```
 
-`duet-backend-macos` is excluded from CI: it links `FlutterMacOS.framework` and
-needs a window server, so it cannot compile on a Linux runner. It is verified on
-real macOS hardware instead — see `crates/duet-backend-macos/FINDINGS.md`.
+The excludes exist for the platforms you are *not* on: each backend crate
+links its OS's real Flutter engine and webview, so only the one matching the
+current machine builds (the showcase links whichever backend matches, so it
+moves with them). CI covers the platform-free workspace on ubuntu, the Windows
+backend on `windows-latest`, and the Linux backend plus the showcase on a GTK-
+equipped ubuntu job; the examples themselves run on real hardware, with their
+outputs recorded in each `crates/duet-backend-*/FINDINGS.md`.
 
 ## Licence
 
