@@ -120,7 +120,11 @@ impl FlutterEngine {
     /// bundle — `build/linux/x64/debug/bundle/data` — containing
     /// `flutter_assets/` and `icudtl.dat`.
     ///
-    /// Impeller is disabled on the project: under a software rasterizer an
+    /// Impeller is disabled on the project — where the engine offers the
+    /// switch; it is resolved at runtime, and an engine without the symbol
+    /// predates the Impeller-on-GTK default it opts out of, so its absence
+    /// means there is nothing to disable (see
+    /// `ffi::dart_project_disable_impeller`). Under a software rasterizer an
     /// Impeller-built text display list is FATAL ("Impeller DlText cannot be
     /// drawn to a Skia canvas", spike finding L-F4), and the software
     /// renderer is the configuration this port is verified under (WSLg has
@@ -169,7 +173,11 @@ impl FlutterEngine {
             }
             ffi::fl_dart_project_set_assets_path(project, assets_c.as_ptr() as *mut c_char);
             ffi::fl_dart_project_set_icu_data_path(project, icu_c.as_ptr() as *mut c_char);
-            ffi::fl_dart_project_set_enable_impeller(project, 0);
+            // Resolved at runtime, not linked: older engines lack the symbol
+            // — and predate the Impeller-on-GTK default it opts out of, so
+            // "not found" means there is nothing to disable. See
+            // `ffi::dart_project_disable_impeller`.
+            ffi::dart_project_disable_impeller(project);
             let view = ffi::fl_view_new(project);
             if view.is_null() {
                 return Err(BackendError::Unavailable(

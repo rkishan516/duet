@@ -69,10 +69,6 @@ unsafe extern "C" {
     pub(crate) fn fl_dart_project_new() -> FlDartProjectRef;
     pub(crate) fn fl_dart_project_set_assets_path(project: FlDartProjectRef, path: *mut c_char);
     pub(crate) fn fl_dart_project_set_icu_data_path(project: FlDartProjectRef, path: *mut c_char);
-    pub(crate) fn fl_dart_project_set_enable_impeller(
-        project: FlDartProjectRef,
-        enable: glib_sys::gboolean,
-    );
 
     pub(crate) fn fl_view_new(project: FlDartProjectRef) -> FlViewRef;
     pub(crate) fn fl_view_get_engine(view: FlViewRef) -> FlEngineRef;
@@ -100,6 +96,39 @@ unsafe extern "C" {
         callback: AsyncReady,
         user_data: *mut c_void,
     );
+}
+
+/// Disables Impeller on `project`, if this engine has the switch. Returns
+/// whether it did.
+///
+/// `fl_dart_project_set_enable_impeller` is looked up with `dlsym` rather
+/// than linked, deliberately: the symbol only exists in newer engines (the
+/// pinned master toolchain this port was built against has it; the stable
+/// channel's engine — the one CI links — does not, and an eager import made
+/// every test and example binary fail to link there). The fallback is not a
+/// degradation: an engine old enough to lack the opt-out predates the
+/// Impeller-by-default flip on GTK that made the opt-out necessary (L-F4),
+/// so on such engines there is nothing to disable.
+pub(crate) fn dart_project_disable_impeller(project: FlDartProjectRef) -> bool {
+    type SetEnableImpeller =
+        unsafe extern "C" fn(project: FlDartProjectRef, enable: glib_sys::gboolean);
+    // SAFETY: RTLD_DEFAULT searches the already-loaded images —
+    // libflutter_linux_gtk.so is a DT_NEEDED dependency of this binary, so it
+    // is resolved before any Rust code runs. The transmute matches the C
+    // signature declared in fl_dart_project.h, and a null lookup is checked
+    // before the call.
+    unsafe {
+        let symbol = libc::dlsym(
+            libc::RTLD_DEFAULT,
+            c"fl_dart_project_set_enable_impeller".as_ptr(),
+        );
+        if symbol.is_null() {
+            return false;
+        }
+        let set_enable_impeller: SetEnableImpeller = std::mem::transmute(symbol);
+        set_enable_impeller(project, 0);
+        true
+    }
 }
 
 /// A new `GBytes` copying `data`. The caller owns the returned reference.

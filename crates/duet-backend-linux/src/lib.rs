@@ -35,7 +35,9 @@
 //!   `destroy_renderer` (see [`LinuxBackend`]).
 //! - **Impeller must be off under a software rasterizer** (L-F4): one frame
 //!   after boot, Impeller text display lists are FATAL on a Skia canvas.
-//!   The engine boots with Impeller disabled; under WSLg drivers also need
+//!   The engine boots with Impeller disabled wherever the engine offers the
+//!   switch (resolved at runtime — stable-channel engines lack the symbol
+//!   and predate the default it opts out of); under WSLg drivers also need
 //!   `FLUTTER_LINUX_RENDERER=software` in the environment (no usable GL
 //!   there — "Could not determine GL version").
 //! - **`wry` must build into the window's vbox** (L-F7): built against the

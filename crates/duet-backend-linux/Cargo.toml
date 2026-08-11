@@ -35,6 +35,10 @@ gtk = "0.18"
 glib = "0.18"
 glib-sys = "0.18"
 gobject-sys = "0.18"
+# `dlsym`, for the one engine entry point that must be resolved at runtime
+# rather than linked (`fl_dart_project_set_enable_impeller` — absent from
+# stable-channel engines; see src/ffi.rs).
+libc = "0.2"
 
 [dev-dependencies]
 # `examples/webview_commands.rs` writes its commands with `#[command]`, which is

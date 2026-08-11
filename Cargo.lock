@@ -444,6 +444,7 @@ dependencies = [
  "glib-sys",
  "gobject-sys",
  "gtk",
+ "libc",
  "serde_json",
  "tao",
  "wry",
