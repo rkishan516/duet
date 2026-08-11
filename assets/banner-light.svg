@@ -1,10 +1,11 @@
-<svg width="380" height="140" viewBox="0 0 380 140" fill="none" xmlns="http://www.w3.org/2000/svg">
+<svg width="364" height="140" viewBox="0 0 364 140" fill="none" xmlns="http://www.w3.org/2000/svg">
   <!--
     The Duet banner, light-background variant. The dark variant differs only
     in the wordmark and tagline colors; the mark itself is color-fast.
-    The canvas hugs the artwork (mark ends ~x=115, tagline ~x=345) so that
-    centering the rendered image centers the visible content — a wider
-    canvas reads as the logo sitting left of center.
+    The canvas hugs the artwork (mark starts ~x=25, tagline ends ~x=338,
+    so 364 gives equal margins) so that centering the rendered image
+    centers the visible content — a wider canvas reads as the logo sitting
+    left of center.
   -->
   <!-- the mark, at 100px -->
   <g transform="translate(20 20) scale(0.78125)">
