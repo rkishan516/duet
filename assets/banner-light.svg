@@ -5,11 +5,9 @@
   -->
   <!-- the mark, at 100px -->
   <g transform="translate(20 20) scale(0.78125)">
-    <rect x="42" y="30" width="8" height="58" rx="4" fill="#3FB6E8"/>
-    <rect x="96" y="30" width="8" height="58" rx="4" fill="#3178C6"/>
-    <circle cx="35" cy="92" r="15" fill="#3FB6E8"/>
-    <circle cx="89" cy="92" r="15" fill="#3178C6"/>
-    <rect x="38" y="18" width="70" height="16" rx="8" fill="#D34516"/>
+    <rect x="6" y="40" width="50" height="48" rx="11" fill="#3FB6E8"/>
+    <rect x="72" y="40" width="50" height="48" rx="11" fill="#3178C6"/>
+    <circle cx="64" cy="64" r="14" fill="#D34516"/>
   </g>
   <!-- wordmark -->
   <text x="150" y="82" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif"

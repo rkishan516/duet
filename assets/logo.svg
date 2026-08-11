@@ -1,18 +1,16 @@
 <svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
   <!--
-    The Duet mark: two eighth notes on one beam.
-    The two notes are the two guests — Flutter blue and TypeScript blue —
-    and the one beam that holds them together is the Rust host's store.
-    Colors are fixed (no currentColor) so the mark reads identically on
-    light and dark backgrounds.
+    The Duet mark: two windows, one store.
+    The two rounded windows are the two guests — Flutter blue on the left,
+    TypeScript blue on the right — and the Rust-orange dot is the store,
+    drawn overlapping into both because it belongs to both worlds and to
+    neither guest. Colors are fixed (no currentColor) so the mark reads
+    identically on light and dark backgrounds.
   -->
-  <!-- left stem (Flutter guest) -->
-  <rect x="42" y="30" width="8" height="58" rx="4" fill="#3FB6E8"/>
-  <!-- right stem (webview guest) -->
-  <rect x="96" y="30" width="8" height="58" rx="4" fill="#3178C6"/>
-  <!-- note heads -->
-  <circle cx="35" cy="92" r="15" fill="#3FB6E8"/>
-  <circle cx="89" cy="92" r="15" fill="#3178C6"/>
-  <!-- the beam: the host's one store, holding both notes -->
-  <rect x="38" y="18" width="70" height="16" rx="8" fill="#D34516"/>
+  <!-- left window (Flutter guest) -->
+  <rect x="6" y="40" width="50" height="48" rx="11" fill="#3FB6E8"/>
+  <!-- right window (webview guest) -->
+  <rect x="72" y="40" width="50" height="48" rx="11" fill="#3178C6"/>
+  <!-- the store, shared into both -->
+  <circle cx="64" cy="64" r="14" fill="#D34516"/>
 </svg>
