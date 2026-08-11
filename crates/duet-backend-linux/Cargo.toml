@@ -6,6 +6,12 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+# The native library build.rs locates and links. Declaring it is also what
+# lets build.rs export the engine directory as `DEP_FLUTTER_LINUX_GTK_*`
+# metadata, which dependent binaries (the showcase) read to set their own
+# rpath — a `cargo:rustc-link-arg` never propagates past the package that
+# emitted it.
+links = "flutter_linux_gtk"
 
 [dependencies]
 duet-core = { path = "../duet-core" }

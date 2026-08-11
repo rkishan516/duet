@@ -67,6 +67,7 @@ fixtures/duet_guest/*
 
 # Showcase Flutter guest scaffolding — regenerate with:
 #   flutter create --platforms=macos --org com.example --project-name duet_showcase examples/showcase/flutter
+# (or --platforms=windows / --platforms=linux on those hosts)
 #
 # `/*` rather than `/`, for the same reason as fixtures/duet_guest above: git
 # cannot re-include anything inside an excluded *directory*, so excluding the

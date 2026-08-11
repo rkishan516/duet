@@ -9,7 +9,10 @@
 //! working-set size — the number Task Manager shows — queried in-process but
 //! still the OS's own accounting rather than anything this process computed
 //! about itself, and the same source the Windows backend's own lifecycle
-//! example measures with.
+//! example measures with. On Linux the reading is `VmRSS` from
+//! `/proc/self/status` — the number `top` reports — which is the kernel's own
+//! accounting exposed as a file, and the same source the Linux backend's
+//! lifecycle example measures with.
 
 #[cfg(target_os = "macos")]
 use std::process::Command;
@@ -59,6 +62,19 @@ fn rss_kb() -> Option<i64> {
         .output()
         .ok()?;
     String::from_utf8_lossy(&output.stdout).trim().parse().ok()
+}
+
+/// This process's `VmRSS` in kilobytes — what `top` reports.
+///
+/// Returns `None` rather than a sentinel if `/proc/self/status` is unreadable
+/// or the line does not parse, for the reason the macOS arm gives: a demo
+/// that reported `-1 kB` as a measurement would be worse than one that says
+/// it could not measure.
+#[cfg(target_os = "linux")]
+fn rss_kb() -> Option<i64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let line = status.lines().find(|l| l.starts_with("VmRSS:"))?;
+    line.split_whitespace().nth(1)?.parse().ok()
 }
 
 /// This process's working-set size in kilobytes — what Task Manager reports.

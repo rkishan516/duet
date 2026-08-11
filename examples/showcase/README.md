@@ -34,33 +34,38 @@ $ (cd examples/showcase/web && npm install && npm run build)
 $ cargo run -p duet-showcase
 ```
 
-On Windows, the Flutter build step is `flutter build windows --debug`; the other
-two are identical.
+On Windows, the Flutter build step is `flutter build windows --debug`; on Linux
+it is `flutter build linux --debug`; the other two are identical. On Linux under
+WSLg, prefix the run with `FLUTTER_LINUX_RENDERER=software GDK_BACKEND=x11` —
+WSLg has no usable GL (see `crates/duet-backend-linux`); GL-capable desktops may
+omit it.
 
 Only the hand-written half of the Flutter app is tracked — `lib/`, `pubspec.yaml`
 and `pubspec_overrides.yaml` — exactly as for `fixtures/duet_guest`. The platform
 scaffolding is regenerable, so on a fresh clone run this once first
-(`--platforms=windows` on Windows):
+(`--platforms=windows` on Windows, `--platforms=linux` on Linux):
 
 ```console
 $ flutter create --platforms=macos --org com.example \
     --project-name duet_showcase examples/showcase/flutter
 ```
 
-macOS and Windows only: the guests are a Flutter engine and a webview
+macOS, Windows and Linux: the guests are a Flutter engine and a webview
 (`FlutterEngine` + `WKWebView` on macOS; `flutter_windows.dll` + WebView2 on
-Windows). On any other platform the binary says so and exits; the definition
-half of the crate still builds, and `cargo run -p duet-showcase --bin schema`
-still works.
+Windows; `libflutter_linux_gtk.so` + WebKitGTK on Linux). On any other platform
+the binary says so and exits; the definition half of the crate still builds,
+and `cargo run -p duet-showcase --bin schema` still works.
 
 | Variable | Default |
 |---|---|
 | `DUET_APP_FRAMEWORK_PATH` (macOS) | `examples/showcase/flutter/build/macos/Build/Products/Debug/App.framework` |
 | `DUET_FLUTTER_BUNDLE` (Windows) | `examples/showcase/flutter/build/windows/x64/runner/Debug/data` |
+| `DUET_FLUTTER_BUNDLE` (Linux) | `examples/showcase/flutter/build/linux/x64/debug/bundle/data` |
 | `DUET_WEB_GUEST_PATH` | `examples/showcase/web/build/guest.js` |
 | `DUET_SHOWCASE_LINGER_SECS` | `0` — set it to pause mid-tour with both guests live, for hot reload |
 | `FLUTTER_MACOS_FRAMEWORK_DIR` | the engine directory `crates/duet-backend-macos/build.rs` defaults to |
 | `FLUTTER_WINDOWS_ENGINE_DIR` | the engine directory `crates/duet-backend-windows/build.rs` discovers from the `flutter` on PATH |
+| `FLUTTER_LINUX_ENGINE_DIR` | the engine directory `crates/duet-backend-linux/build.rs` discovers from the `flutter` on PATH |
 
 The host exits `0` if every claim held and non-zero otherwise, so it is usable
 as a check and not only as a demo.
@@ -139,6 +144,23 @@ Booting cost ~220 MB; teardown gave 79 % of it back. On Windows "teardown"
 destroys the view controller, which owns the engine — see
 `spikes/spike-b-windows/FINDINGS.md` W-F1 for why that is the platform's shape
 of the same operation.
+
+And the same run on Linux, under WSLg's software renderer (both windows mapped
+on the WSLg desktop):
+
+```
+  before either guest exists            106496 kB
+  webview guest live                    166672 kB
+  both guests live                      350644 kB
+  Flutter guest torn down               211368 kB
+  Flutter guest booted again            382732 kB
+```
+
+Booting cost ~184 MB; teardown gave 76 % of it back. On Linux "teardown"
+*forces* `FlEngine`'s GObject dispose — waiting for a last-reference drop
+never reclaims, a fact this project only learned by measuring — see
+`crates/duet-backend-linux/FINDINGS.md` LB2 for the platform's shape of the
+same operation.
 
 ### Act 5 — the store outlives the guest
 

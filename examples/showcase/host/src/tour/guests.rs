@@ -49,11 +49,14 @@ pub fn boot_flutter(
 /// Tears the Flutter guest all the way down: handler, engine, window.
 ///
 /// The order is load-bearing. `FlutterSurface`'s `Drop` unregisters the channel
-/// handler, and destroying the engine does not clear its handler registration
-/// on either platform (macOS's `shutDownEngine` keeps its handler map; the
-/// Windows engine holds the handler's `user_data` pointer past registration) —
-/// so the surface must go first. The window goes last, because destroying the
-/// renderer does not close it.
+/// handler, and it must do so while the engine still lives (macOS's
+/// `shutDownEngine` keeps its handler map; the Windows engine holds the
+/// handler's `user_data` pointer past registration; Linux's `destroy_renderer`
+/// forces `FlEngine`'s dispose, after which there is no channel table to
+/// unregister from) — so the surface goes first. The window goes last, because
+/// destroying the renderer does not close it (on Linux, closing *before* the
+/// destroy would merely defer the physical drop to it — the order here works
+/// on all three).
 ///
 /// `detach_view` is deliberately skipped. It is the documented middle step, but
 /// `crates/duet-backend-macos/FINDINGS.md` F1 describes a real, reproduced

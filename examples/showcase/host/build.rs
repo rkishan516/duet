@@ -1,37 +1,20 @@
-//! Embeds the rpath the Flutter engine needs, so `cargo run -p duet-showcase`
-//! works with nothing set in the environment.
+//! Gives this crate's binaries an rpath to the Flutter Linux engine.
 //!
-//! # Why an embedder has to do this at all
-//!
-//! `crates/duet-backend-macos/build.rs` already emits
-//! `-Wl,-rpath,<FlutterMacOS.framework's directory>` — but a `cargo:rustc-link-arg`
-//! applies to the package that emitted it and to *its* binaries, examples and
-//! tests. It does not reach a downstream crate's binary. So a real application
-//! that depends on `duet-backend-macos` links fine and then dies at startup with
-//! `Library not loaded: @rpath/FlutterMacOS.framework/...`, which is exactly what
-//! this showcase did on its first run.
-//!
-//! Repeating it here is the workaround, not the design. `duet-backend-macos`
-//! could propagate this by declaring `links = "FlutterMacOS"` and emitting the
-//! directory as build metadata for dependents to read; that is a change to a
-//! library this example is not allowed to make, so it is written up in
-//! `examples/showcase/README.md` under "What the library could not do" instead.
-//!
-//! The default below is the one `crates/duet-backend-macos/build.rs` hard-codes.
-//! The two must move together; `FLUTTER_MACOS_FRAMEWORK_DIR` overrides both.
+//! On Linux the backend links `libflutter_linux_gtk.so` out of the Flutter
+//! SDK's artifact cache, and its own build script sets an rpath so *its*
+//! examples run unaided — but a `cargo:rustc-link-arg` never reaches past the
+//! package that emitted it, so the showcase and playground binaries would
+//! link fine and then fail at startup with "cannot open shared object file".
+//! The backend declares `links = "flutter_linux_gtk"` and exports the engine
+//! directory it discovered; this script reads it back and arms the same
+//! rpath for this package's binaries. macOS needs no analog (the framework
+//! rpath travels differently) and Windows resolves its DLL through PATH, so
+//! everywhere else this script does nothing.
 
 fn main() {
-    println!("cargo:rerun-if-env-changed=FLUTTER_MACOS_FRAMEWORK_DIR");
-    println!("cargo:rerun-if-changed=build.rs");
-
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
-        return;
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
+        let dir = std::env::var("DEP_FLUTTER_LINUX_GTK_ENGINE_DIR")
+            .expect("duet-backend-linux's build script should have exported the engine directory");
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{dir}");
     }
-
-    let framework_dir = std::env::var("FLUTTER_MACOS_FRAMEWORK_DIR").unwrap_or_else(|_| {
-        "/Users/kishan/dev/rkishan516/flutterDC/bin/cache/artifacts/engine/darwin-x64/\
-         FlutterMacOS.xcframework/macos-arm64_x86_64"
-            .to_string()
-    });
-    println!("cargo:rustc-link-arg=-Wl,-rpath,{framework_dir}");
 }

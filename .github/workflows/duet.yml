@@ -126,30 +126,29 @@ jobs:
             exit 1
           fi
           printf 'default:      %s\nall-features: %s\n' "$default" "$full"
-      # The three platform backends cannot build on this runner.
-      # duet-backend-macos links FlutterMacOS.framework and calls into
-      # tao/objc2-app-kit; duet-backend-windows links flutter_windows.dll and
-      # calls Win32 — neither can even *compile* on ubuntu-latest.
-      # duet-backend-linux targets this very OS, but linking it needs the GTK
-      # development headers and a Flutter engine artifact cache
-      # (libflutter_linux_gtk.so) that this runner does not carry, and
-      # installing both belongs in a dedicated job with its own caching — the
-      # analog of the `windows` job below, planned alongside the Linux
-      # examples port. All three are excluded from every step below that
-      # would try to build them (clippy, docs, coverage, test) rather than
-      # silently letting CI stop covering them while looking green. The macOS
-      # crate's verification is recorded in
-      # crates/duet-backend-macos/FINDINGS.md (real hardware, by hand); the
-      # Windows crate gets the `windows` job below — the first platform
-      # backend under CI.
+      # The three platform backends — and now the showcase — cannot build on
+      # this bare runner. duet-backend-macos links FlutterMacOS.framework and
+      # calls into tao/objc2-app-kit; duet-backend-windows links
+      # flutter_windows.dll and calls Win32 — neither can even *compile* on
+      # ubuntu-latest. duet-backend-linux targets this very OS, but linking it
+      # needs the GTK development headers and a Flutter engine artifact cache
+      # (libflutter_linux_gtk.so) that this runner does not carry — and
+      # duet-showcase now depends on it on Linux targets, so it moves with it.
+      # All four are excluded from every step below that would try to build
+      # them (clippy, docs, coverage, test) rather than silently letting CI
+      # stop covering them while looking green. The macOS crate's verification
+      # is recorded in crates/duet-backend-macos/FINDINGS.md (real hardware,
+      # by hand); the Windows crate gets the `windows` job below; the Linux
+      # crate and the showcase (including its schema-staleness test suite)
+      # get the `linux` job, which installs GTK and the engine artifacts.
       - name: Clippy
-        run: cargo clippy --workspace --exclude duet-backend-macos --exclude duet-backend-windows --exclude duet-backend-linux --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --exclude duet-backend-macos --exclude duet-backend-windows --exclude duet-backend-linux --exclude duet-showcase --all-targets --locked -- -D warnings
       - name: Docs
-        run: cargo doc --workspace --exclude duet-backend-macos --exclude duet-backend-windows --exclude duet-backend-linux --no-deps --locked
+        run: cargo doc --workspace --exclude duet-backend-macos --exclude duet-backend-windows --exclude duet-backend-linux --exclude duet-showcase --no-deps --locked
         env:
           RUSTDOCFLAGS: -D warnings
       - name: Test with coverage gate
-        run: cargo llvm-cov --workspace --exclude duet-backend-macos --exclude duet-backend-windows --exclude duet-backend-linux --locked --fail-under-lines 90
+        run: cargo llvm-cov --workspace --exclude duet-backend-macos --exclude duet-backend-windows --exclude duet-backend-linux --exclude duet-showcase --locked --fail-under-lines 90
       # Runs duet-protocol's `corpus_matches_the_committed_file`, which
       # regenerates the corpus in memory and compares bytes against the
       # committed file. Both this step and the coverage step above execute it;
@@ -185,7 +184,7 @@ jobs:
       # the guidance naming the fix stopped reaching the user, so a blind
       # regeneration cannot quietly empty the check.
       - name: Test single-threaded (includes all three staleness checks)
-        run: cargo test --workspace --exclude duet-backend-macos --exclude duet-backend-windows --exclude duet-backend-linux --locked -- --test-threads=1
+        run: cargo test --workspace --exclude duet-backend-macos --exclude duet-backend-windows --exclude duet-backend-linux --exclude duet-showcase --locked -- --test-threads=1
       # The fourth staleness check, and the only one a user outside this
       # workspace can reproduce.
       #
@@ -287,6 +286,56 @@ jobs:
         run: cargo test -p duet-dev -p duet-cli --locked -- --test-threads=1
       - name: Compile the examples
         run: cargo build -p duet-backend-windows --examples --locked
+
+  # The Linux platform backend and the showcase, on the one runner shape that
+  # can build them: ubuntu with the GTK development headers installed and the
+  # Flutter Linux engine artifacts populated (`flutter precache --linux` fills
+  # the cache duet-backend-linux's build.rs discovers from the flutter on
+  # PATH).
+  #
+  # What this job can and cannot verify, same honesty as the `windows` job: it
+  # CAN compile the crate against the real libflutter_linux_gtk.so import
+  # surface, hold it and the showcase to the workspace clippy/doc bar, run the
+  # unit tests (under xvfb — building a tao event loop initializes GTK, which
+  # needs an X display even for the closed-loop ProxySink test), run the
+  # showcase's schema-staleness suite (excluded from the `rust` job now that
+  # the crate links this backend on Linux targets), and compile all seven
+  # examples plus the showcase and playground binaries. It CANNOT run the
+  # examples: they need a real display session, built Flutter/web guest
+  # fixtures, and a live engine each. Their ALL PASS runs are recorded
+  # evidence from real hardware (WSLg), per docs/10-porting.md §7 — see
+  # crates/duet-backend-linux/FINDINGS.md.
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Install the GTK and WebKitGTK toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev xvfb
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Populate the Flutter Linux engine artifacts
+        run: flutter precache --linux
+      - name: Build
+        run: cargo build -p duet-backend-linux --locked
+      - name: Clippy
+        run: cargo clippy -p duet-backend-linux -p duet-showcase --all-targets --locked -- -D warnings
+      - name: Docs
+        run: cargo doc -p duet-backend-linux --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - name: Test
+        run: xvfb-run -a cargo test -p duet-backend-linux -p duet-showcase --locked -- --test-threads=1
+      - name: Compile the examples
+        run: cargo build -p duet-backend-linux --examples --locked
+      - name: Compile the showcase and playground
+        run: cargo build -p duet-showcase --bins --locked
 
   # The pure-Dart client. This job is the entire reason `packages/duet` and
   # `packages/duet_flutter` are separate packages: `package:flutter/services.dart`

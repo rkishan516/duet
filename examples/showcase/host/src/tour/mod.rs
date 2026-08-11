@@ -32,26 +32,31 @@ pub mod guests;
 pub mod report;
 pub mod rss;
 
+#[cfg(target_os = "linux")]
+pub use duet_backend_linux as backend;
 /// The platform backend, under one name.
 ///
-/// The two backend crates export the same API deliberately — same types, same
-/// signatures, same teardown contract (`crates/duet-backend-windows` was
-/// written to be read side by side with `crates/duet-backend-macos`) — so one
-/// alias is all the tour needs to drive either. What genuinely differs
-/// (detach parks the view on Windows instead of dropping the controller; what
-/// `destroy_renderer` destroys) lives behind the same four `WindowBackend`
-/// methods and never reaches this crate.
+/// The three backend crates export the same API deliberately — same types,
+/// same signatures, same teardown contract (each was written to be read side
+/// by side with `crates/duet-backend-macos`) — so one alias is all the tour
+/// needs to drive any of them. What genuinely differs (detach parks the view
+/// on Windows and hides the whole window on Linux, where the realized view
+/// can never move; what `destroy_renderer` destroys; Linux deferring a
+/// close-under-live-renderer until the destroy) lives behind the same four
+/// `WindowBackend` methods and never reaches this crate.
 #[cfg(target_os = "macos")]
 pub use duet_backend_macos as backend;
 #[cfg(target_os = "windows")]
 pub use duet_backend_windows as backend;
 
-/// The backend struct itself — the one exported name the two crates spell
+/// The backend struct itself — the one exported name the three crates spell
 /// differently.
 #[cfg(target_os = "macos")]
 pub type PlatformBackend = backend::MacBackend;
 #[cfg(target_os = "windows")]
 pub type PlatformBackend = backend::WinBackend;
+#[cfg(target_os = "linux")]
+pub type PlatformBackend = backend::LinuxBackend;
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};

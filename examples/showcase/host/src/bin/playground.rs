@@ -7,14 +7,15 @@
 //! identity, all sharing the one store.
 //!
 //! ```console
-//! $ (cd examples/showcase/flutter && flutter build windows --debug)   # or macos
+//! $ (cd examples/showcase/flutter && flutter build windows --debug)   # or macos / linux
 //! $ (cd examples/showcase/web && npm install && npm run build)
 //! $ cargo run -p duet-showcase --bin playground
 //! ```
 //!
 //! Same environment variables as the showcase itself (`DUET_APP_FRAMEWORK_PATH`
-//! on macOS, `DUET_FLUTTER_BUNDLE` on Windows, `DUET_WEB_GUEST_PATH` for the
-//! web bundle).
+//! on macOS, `DUET_FLUTTER_BUNDLE` on Windows and Linux, `DUET_WEB_GUEST_PATH`
+//! for the web bundle); on Linux under WSLg prefix the run with
+//! `FLUTTER_LINUX_RENDERER=software GDK_BACKEND=x11`.
 //!
 //! # The controls
 //!
@@ -40,17 +41,20 @@
 //!   panels redraw.
 //! - Suspend the newest Flutter window, click `+` a few times, resume it —
 //!   it comes back already current, because a parked engine's watchers never
-//!   stopped.
+//!   stopped. (On Linux the *window itself* disappears while suspended: the
+//!   realized view can never leave it, so detach hides the window — see
+//!   `crates/duet-backend-linux`. Resume brings it back.)
 //! - Tear the newest Flutter window down, keep clicking, boot a new one — it
 //!   rediscovers everything from the store alone.
 
 #![deny(missing_docs)]
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 fn main() {
     println!(
         "The Duet playground's guests need a platform backend: a FlutterEngine plus a WKWebView \
-         on macOS, or flutter_windows.dll plus WebView2 on Windows.\n"
+         on macOS, flutter_windows.dll plus WebView2 on Windows, or libflutter_linux_gtk.so \
+         plus WebKitGTK on Linux.\n"
     );
 }
 
@@ -58,16 +62,16 @@ fn main() {
 // as-is: both files are deliberately free of `crate::`-relative imports so the
 // two binaries can share them without this crate growing a platform-gated
 // library surface.
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 #[path = "../tour/fields.rs"]
 #[allow(dead_code)] // the tour uses all of this; the playground a subset
 mod fields;
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 #[path = "../tour/rss.rs"]
 #[allow(dead_code)] // likewise
 mod rss;
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod app {
     use std::collections::VecDeque;
     use std::io::BufRead;
@@ -91,6 +95,8 @@ mod app {
     use crate::fields::{Fields, lines};
     use crate::rss::Sample;
 
+    #[cfg(target_os = "linux")]
+    use duet_backend_linux as backend;
     /// The platform backend, under one name — the same arrangement the tour
     /// uses, for the same reason: the two backend crates export the same API.
     #[cfg(target_os = "macos")]
@@ -102,6 +108,8 @@ mod app {
     type PlatformBackend = backend::MacBackend;
     #[cfg(target_os = "windows")]
     type PlatformBackend = backend::WinBackend;
+    #[cfg(target_os = "linux")]
+    type PlatformBackend = backend::LinuxBackend;
 
     use backend::{DuetEvent, FlutterSurface, ProxySink, WebviewSurface};
 
@@ -236,6 +244,13 @@ mod app {
             "DUET_FLUTTER_BUNDLE",
             "examples/showcase/flutter/build/windows/x64/runner/Debug/data",
         );
+        // Same shape on Linux: the `data` directory inside the bundle a
+        // debug `flutter build linux` produces.
+        #[cfg(target_os = "linux")]
+        let flutter_bundle = env_or(
+            "DUET_FLUTTER_BUNDLE",
+            "examples/showcase/flutter/build/linux/x64/debug/bundle/data",
+        );
         let bundle_path = env_or(
             "DUET_WEB_GUEST_PATH",
             "examples/showcase/web/build/guest.js",
@@ -256,6 +271,24 @@ mod app {
         };
 
         let event_loop = EventLoopBuilder::<DuetEvent>::with_user_event().build();
+        // The metronome, Linux only. tao's GTK loop parks a pending
+        // `WaitUntil` inside a fully blocking `gtk_main_iteration` with no
+        // timer source armed for the deadline, so a quiet session stalls
+        // 50 ms turns for 10+ seconds until a stray X11 event wakes the
+        // context — measured in `crates/duet-backend-linux/FINDINGS.md` LB1.
+        // A proxy send is a glib channel source and *does* wake it, so a
+        // thread posting `DuetEvent::Tick` at turn cadence is what keeps a
+        // typed terminal command being picked up promptly; the Ticks are
+        // no-ops.
+        #[cfg(target_os = "linux")]
+        {
+            let metronome = event_loop.create_proxy();
+            std::thread::spawn(move || {
+                while metronome.send_event(DuetEvent::Tick).is_ok() {
+                    std::thread::sleep(Duration::from_millis(TURN_MS));
+                }
+            });
+        }
         let proxy = event_loop.create_proxy();
         let runtime = Runtime::spawn(duet::Value::Null, ProxySink::new(event_loop.create_proxy()));
 
@@ -913,7 +946,7 @@ mod app {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 fn main() {
     app::run();
 }

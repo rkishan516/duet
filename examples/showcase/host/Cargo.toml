@@ -19,14 +19,16 @@ default-run = "duet-showcase"
 duet = { path = "../../../crates/duet", features = ["derive", "commands"] }
 
 # The surfaces are platform backends, and so is the tour that drives them.
-# Declaring them under target predicates rather than plainly is what keeps this
-# crate a workspace member: `duet-backend-macos` links `FlutterMacOS.framework`
-# and `duet-backend-windows` links `flutter_windows.dll`, and neither can
-# compile on the Linux runner that builds the rest of the workspace — so on any
-# other platform this crate is just the definition plus a `main` that says so.
-# The two backends export the same names deliberately (see
-# `crates/duet-backend-windows/src/lib.rs`), which is what lets the tour drive
-# either through one alias.
+# Declaring them under target predicates rather than plainly is what keeps the
+# heavy linkage per-platform: `duet-backend-macos` links
+# `FlutterMacOS.framework`, `duet-backend-windows` links `flutter_windows.dll`,
+# and `duet-backend-linux` links `libflutter_linux_gtk.so` plus the GTK stack.
+# The Linux one *would* compile on a Linux CI runner in principle, but only
+# with GTK headers and a Flutter engine artifact cache installed — which is why
+# the ubuntu `rust` job excludes this crate and the dedicated `linux` job (the
+# one with both) covers it instead. The three backends export the same names
+# deliberately (see `crates/duet-backend-windows/src/lib.rs`), which is what
+# lets the tour drive any of them through one alias.
 [target.'cfg(target_os = "macos")'.dependencies]
 duet-backend-macos = { path = "../../../crates/duet-backend-macos" }
 
@@ -41,7 +43,10 @@ windows-sys = { version = "0.60", features = [
     "Win32_System_Threading",
 ] }
 
-[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+[target.'cfg(target_os = "linux")'.dependencies]
+duet-backend-linux = { path = "../../../crates/duet-backend-linux" }
+
+[target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 duet-core = { path = "../../../crates/duet-core" }
 duet-host = { path = "../../../crates/duet-host" }
 duet-runtime = { path = "../../../crates/duet-runtime" }

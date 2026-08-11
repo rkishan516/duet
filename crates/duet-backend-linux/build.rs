@@ -54,4 +54,10 @@ fn main() {
     // exported — the same convenience the macOS build.rs buys with its
     // framework rpath, and the thing Windows had to fake with DLL copies.
     println!("cargo:rustc-link-arg=-Wl,-rpath,{}", dir.display());
+    // A link-arg only reaches this package's own targets, so dependent
+    // *binaries* (the showcase, the playground) cannot inherit the rpath
+    // above. The `links = "flutter_linux_gtk"` declaration turns this line
+    // into `DEP_FLUTTER_LINUX_GTK_ENGINE_DIR` in every direct dependent's
+    // build script, which is where they emit their own.
+    println!("cargo:engine_dir={}", dir.display());
 }

@@ -610,6 +610,7 @@ name = "duet-showcase"
 version = "0.1.0"
 dependencies = [
  "duet",
+ "duet-backend-linux",
  "duet-backend-macos",
  "duet-backend-windows",
  "duet-core",
